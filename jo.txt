@@ -1,0 +1,22 @@
+
+Here's the start:
+
+
+# From inside agentic_app_template/
+npm install
+npm run setup        # creates .env.local and api/.env with generated secrets
+npm run dev          # frontend at http://localhost:3000
+In a second terminal:
+
+
+cd api
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+alembic upgrade head
+uvicorn app:app --reload     # backend at http://localhost:8000
+Login with any non-empty username/password (dev stub). Browse the Demo pages to see the component patterns, then:
+
+
+npm run new-module <your-first-feature-name>
+The agent will handle architecture and quality gates. Just tell it what you want to build.
