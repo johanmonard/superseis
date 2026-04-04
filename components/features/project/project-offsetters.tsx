@@ -1,0 +1,582 @@
+"use client";
+
+import * as React from "react";
+import { appIcons } from "@/components/ui/icon";
+
+import { Button } from "@/components/ui/button";
+import { Field } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
+
+const { check: Check, chevronLeft: ChevronLeft, chevronRight: ChevronRight, gripVertical: GripVertical, minus: Minus, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
+
+/* ------------------------------------------------------------------
+   Types
+   ------------------------------------------------------------------ */
+
+interface OffsetRule {
+  id: string;
+  ruleType: string;
+  value: string;
+}
+
+interface LayerRule {
+  layer: string;
+  offset: boolean;
+  skip: boolean;
+}
+
+interface ParamSet {
+  id: string;
+  partitioning: string;
+  region: string;
+  layerRules: LayerRule[];
+  offsetRules: OffsetRule[];
+}
+
+interface PointTypeConfig {
+  params: ParamSet[];
+  activeParamIdx: number;
+}
+
+interface OffsetterConfig {
+  id: string;
+  name: string;
+  designOption: string;
+  map: string;
+  snapperMaxDist: string;
+  sources: PointTypeConfig;
+  receivers: PointTypeConfig;
+}
+
+/* ------------------------------------------------------------------
+   Dummy data
+   ------------------------------------------------------------------ */
+
+const DUMMY_DESIGN_OPTIONS = ["Design 1"];
+const DUMMY_MAPS = ["Map 1"];
+const DUMMY_PARTITIONINGS = ["Design", "Zipper"];
+const DUMMY_REGIONS: Record<string, string[]> = {
+  Design: ["design_reg"],
+  Zipper: ["zipper_reg_a", "zipper_reg_b"],
+};
+const DUMMY_MAP_LAYERS = ["roads", "railways", "waterways", "water_a", "buildings", "landuse", "transport_a"];
+
+const RULE_TYPE_OPTIONS = ["Max crossline", "Shifted inline", "Max radius"];
+const OFFSET_TEMPLATES: Record<string, OffsetRule[]> = {
+  "Template 1": [
+    { id: "", ruleType: "Max crossline", value: "500" },
+    { id: "", ruleType: "Max radius", value: "1000" },
+  ],
+  "Template 2": [
+    { id: "", ruleType: "Shifted inline", value: "200" },
+    { id: "", ruleType: "Max crossline", value: "800" },
+    { id: "", ruleType: "Max radius", value: "1500" },
+  ],
+  "Template 3": [
+    { id: "", ruleType: "Max crossline", value: "300" },
+    { id: "", ruleType: "Shifted inline", value: "150" },
+  ],
+};
+
+function createLayerRules(): LayerRule[] {
+  return DUMMY_MAP_LAYERS.map((l) => ({ layer: l, offset: true, skip: false }));
+}
+
+function createParamSet(): ParamSet {
+  return {
+    id: crypto.randomUUID(),
+    partitioning: "Design",
+    region: "",
+    layerRules: createLayerRules(),
+    offsetRules: [],
+  };
+}
+
+function createPointTypeConfig(): PointTypeConfig {
+  return { params: [createParamSet()], activeParamIdx: 0 };
+}
+
+let configCounter = 0;
+
+function createConfig(): OffsetterConfig {
+  configCounter++;
+  return {
+    id: crypto.randomUUID(),
+    name: `Option ${configCounter}`,
+    designOption: "",
+    map: "",
+    snapperMaxDist: "10",
+    sources: createPointTypeConfig(),
+    receivers: createPointTypeConfig(),
+  };
+}
+
+/* ------------------------------------------------------------------
+   Group selector
+   ------------------------------------------------------------------ */
+
+function GroupSelector({
+  items, activeId, onSelect, onAdd, onRename, onDelete,
+}: {
+  items: { id: string; name: string }[];
+  activeId: string;
+  onSelect: (id: string) => void;
+  onAdd: () => void;
+  onRename: (id: string, name: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [editValue, setEditValue] = React.useState("");
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  React.useEffect(() => { if (editingId) setTimeout(() => inputRef.current?.focus(), 0); }, [editingId]);
+  const commitEdit = () => { if (editingId && editValue.trim()) onRename(editingId, editValue.trim()); setEditingId(null); };
+
+  return (
+    <div className="flex flex-col gap-[var(--space-2)]">
+      <div className="flex flex-wrap items-center gap-[var(--space-1)]">
+        {items.map((g) => {
+          if (g.id === editingId) {
+            return (
+              <div key={g.id} className="flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] border border-[var(--color-accent)] bg-[var(--color-bg-surface)] px-[var(--space-1)]">
+                <input ref={inputRef} value={editValue} onChange={(e) => setEditValue(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") setEditingId(null); }}
+                  className="h-6 w-24 bg-transparent px-[var(--space-1)] text-xs text-[var(--color-text-primary)] outline-none" />
+                <button type="button" onClick={commitEdit} className="flex h-5 w-5 items-center justify-center text-[var(--color-status-success)]"><Check size={10} /></button>
+                <button type="button" onClick={() => setEditingId(null)} className="flex h-5 w-5 items-center justify-center text-[var(--color-text-muted)]"><X size={10} /></button>
+              </div>
+            );
+          }
+          return (
+            <button key={g.id} type="button" onClick={() => onSelect(g.id)}
+              className={cn("rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-1)] text-xs font-medium transition-colors",
+                g.id === activeId ? "bg-[var(--color-accent)] text-[var(--color-accent-foreground)]" : "bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]")}>
+              {g.name}
+            </button>
+          );
+        })}
+        <button type="button" onClick={onAdd} className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]" aria-label="Add"><Plus size={12} /></button>
+      </div>
+      <div className="flex items-center gap-[var(--space-1)]">
+        <button type="button" onClick={() => { const a = items.find((i) => i.id === activeId); if (a) { setEditingId(a.id); setEditValue(a.name); } }}
+          className="flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] px-[var(--space-2)] py-[var(--space-1)] text-xs text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]">
+          <Pencil size={10} /> Rename
+        </button>
+        {items.length > 1 && (
+          <button type="button" onClick={() => onDelete(activeId)}
+            className="flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] px-[var(--space-2)] py-[var(--space-1)] text-xs text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-status-danger)]">
+            <Trash2 size={10} /> Delete
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------
+   Preset button (dropdown styled as ghost button)
+   ------------------------------------------------------------------ */
+
+function PresetButton({ onSelect }: { onSelect: (name: string) => void }) {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <Button variant="ghost" size="sm" onClick={() => setOpen(!open)} className="!h-6 !text-[11px]">
+        <Plus size={10} className="mr-1" /> Preset
+      </Button>
+      {open && (
+        <div className="absolute left-0 top-full z-20 mt-1 min-w-[8rem] overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] p-[var(--space-1)] shadow-[0_4px_12px_var(--color-shadow-alpha)]">
+          {Object.keys(OFFSET_TEMPLATES).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => { onSelect(t); setOpen(false); }}
+              className="flex w-full items-center rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-2)] text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------
+   Sortable layer rules
+   ------------------------------------------------------------------ */
+
+function SortableLayerRules({
+  rules,
+  onUpdate,
+  onReorder,
+}: {
+  rules: LayerRule[];
+  onUpdate: (index: number, patch: Partial<LayerRule>) => void;
+  onReorder: (from: number, to: number) => void;
+}) {
+  const [dragIdx, setDragIdx] = React.useState<number | null>(null);
+  const [previewRules, setPreviewRules] = React.useState<LayerRule[] | null>(null);
+
+  const getPreview = React.useCallback(
+    (from: number, to: number): LayerRule[] => {
+      let target = to;
+      if (target > from) target--;
+      if (target === from) return rules;
+      const next = [...rules];
+      const [moved] = next.splice(from, 1);
+      next.splice(target, 0, moved);
+      return next;
+    },
+    [rules]
+  );
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    setDragIdx(index);
+    setPreviewRules(null);
+    e.dataTransfer.effectAllowed = "move";
+    const ghost = document.createElement("div");
+    ghost.style.opacity = "0";
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 0, 0);
+    requestAnimationFrame(() => document.body.removeChild(ghost));
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragIdx === null) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+    const insertAt = e.clientY < midY ? index : index + 1;
+    setPreviewRules(getPreview(dragIdx, insertAt));
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (dragIdx !== null && previewRules) {
+      // Find where the dragged item ended up
+      const draggedLayer = rules[dragIdx].layer;
+      const newIdx = previewRules.findIndex((r) => r.layer === draggedLayer);
+      if (newIdx !== -1 && newIdx !== dragIdx) {
+        onReorder(dragIdx, newIdx > dragIdx ? newIdx + 1 : newIdx);
+      }
+    }
+    setDragIdx(null);
+    setPreviewRules(null);
+  };
+
+  const handleDragEnd = () => {
+    setDragIdx(null);
+    setPreviewRules(null);
+  };
+
+  const display = previewRules ?? rules;
+  const draggedLayer = dragIdx !== null ? rules[dragIdx].layer : null;
+
+  return (
+    <div className="flex flex-col gap-[var(--space-2)]">
+      <div className="flex items-center gap-[var(--space-3)]">
+        <span className="flex-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+          Layer Rules
+        </span>
+        <span className="w-9 text-center text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+          Offset
+        </span>
+        <span className="w-9 text-center text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+          Skip
+        </span>
+      </div>
+      <div
+        className="flex flex-col gap-[var(--space-1)]"
+        onDrop={handleDrop}
+        onDragOver={(e) => e.preventDefault()}
+      >
+        {display.map((rule, i) => {
+          const isDragged = rule.layer === draggedLayer;
+          const realIdx = rules.findIndex((r) => r.layer === rule.layer);
+          return (
+            <div
+              key={rule.layer}
+              draggable
+              onDragStart={(e) => handleDragStart(e, realIdx)}
+              onDragOver={(e) => handleDragOver(e, i)}
+              onDragEnd={handleDragEnd}
+              className={cn(
+                "flex items-center gap-[var(--space-2)] rounded-[var(--radius-sm)] border bg-[var(--color-bg-elevated)] px-[var(--space-2)] py-[var(--space-1)] transition-all duration-200 ease-out",
+                isDragged
+                  ? "border-[var(--color-accent)] opacity-40 scale-[0.97]"
+                  : "border-[var(--color-border-subtle)] cursor-grab active:cursor-grabbing"
+              )}
+            >
+              <GripVertical size={10} className="shrink-0 text-[var(--color-text-muted)]" />
+              <span className="flex-1 truncate text-xs text-[var(--color-text-secondary)]">
+                {rule.layer}
+              </span>
+              <div className="flex w-9 justify-center">
+                <Switch
+                  checked={rule.offset}
+                  onCheckedChange={(v) => onUpdate(realIdx, { offset: v === true })}
+                  className="!h-4 !w-7 [&>span]:!h-3 [&>span]:!w-3 [&>span]:data-[state=checked]:!translate-x-3"
+                />
+              </div>
+              <div className="flex w-9 justify-center">
+                <Switch
+                  checked={rule.skip}
+                  onCheckedChange={(v) => onUpdate(realIdx, { skip: v === true })}
+                  className="!h-4 !w-7 [&>span]:!h-3 [&>span]:!w-3 [&>span]:data-[state=checked]:!translate-x-3"
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------
+   Point-type parameter panel
+   ------------------------------------------------------------------ */
+
+function PointTypePanel({
+  label,
+  config,
+  onChange,
+}: {
+  label: string;
+  config: PointTypeConfig;
+  onChange: (config: PointTypeConfig) => void;
+}) {
+  const param = config.params[config.activeParamIdx] ?? config.params[0];
+  const regions = DUMMY_REGIONS[param.partitioning] ?? [];
+
+  const setIdx = (idx: number) => onChange({ ...config, activeParamIdx: idx });
+
+  const addParam = () => {
+    onChange({
+      params: [...config.params, createParamSet()],
+      activeParamIdx: config.params.length,
+    });
+  };
+
+  const removeParam = () => {
+    if (config.params.length <= 1) return;
+    const next = config.params.filter((_, i) => i !== config.activeParamIdx);
+    onChange({ params: next, activeParamIdx: Math.min(config.activeParamIdx, next.length - 1) });
+  };
+
+  const updateParam = (patch: Partial<ParamSet>) => {
+    onChange({
+      ...config,
+      params: config.params.map((p, i) => i === config.activeParamIdx ? { ...p, ...patch } : p),
+    });
+  };
+
+  const updateLayerRule = (layerIdx: number, patch: Partial<LayerRule>) => {
+    updateParam({ layerRules: param.layerRules.map((r, i) => i === layerIdx ? { ...r, ...patch } : r) });
+  };
+
+  const reorderLayerRules = (from: number, to: number) => {
+    const next = [...param.layerRules];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    updateParam({ layerRules: next });
+  };
+
+  const addOffsetRule = () => {
+    updateParam({ offsetRules: [...param.offsetRules, { id: crypto.randomUUID(), ruleType: "", value: "" }] });
+  };
+
+  const removeOffsetRule = (id: string) => {
+    updateParam({ offsetRules: param.offsetRules.filter((r) => r.id !== id) });
+  };
+
+  const updateOffsetRule = (id: string, patch: Partial<OffsetRule>) => {
+    updateParam({ offsetRules: param.offsetRules.map((r) => r.id === id ? { ...r, ...patch } : r) });
+  };
+
+  const applyTemplate = (name: string) => {
+    const tpl = OFFSET_TEMPLATES[name];
+    if (!tpl) return;
+    updateParam({ offsetRules: [...param.offsetRules, ...tpl.map((r) => ({ ...r, id: crypto.randomUUID() }))] });
+  };
+
+  return (
+    <div className="flex flex-col gap-[var(--space-3)] rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] p-[var(--space-3)]">
+      {/* Panel header */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-accent)]">
+          {label}
+        </span>
+      </div>
+
+      {/* Param stepper */}
+      <div className="flex items-center justify-between rounded-[var(--radius-sm)] bg-[var(--color-bg-elevated)] px-[var(--space-3)] py-[var(--space-2)]">
+        <span className="text-xs font-medium text-[var(--color-text-secondary)]">
+          Parameter set
+        </span>
+        <div className="flex items-center gap-[var(--space-1)]">
+          <button type="button" onClick={() => setIdx(Math.max(0, config.activeParamIdx - 1))} disabled={config.activeParamIdx <= 0}
+            className="flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-surface)] disabled:opacity-30">
+            <ChevronLeft size={12} />
+          </button>
+          <span className="min-w-[2.5rem] text-center text-xs tabular-nums font-medium text-[var(--color-text-primary)]">
+            {config.activeParamIdx + 1} / {config.params.length}
+          </span>
+          <button type="button" onClick={() => setIdx(Math.min(config.params.length - 1, config.activeParamIdx + 1))} disabled={config.activeParamIdx >= config.params.length - 1}
+            className="flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-surface)] disabled:opacity-30">
+            <ChevronRight size={12} />
+          </button>
+          <div className="ml-1 h-3 w-px bg-[var(--color-border-subtle)]" />
+          <button type="button" onClick={addParam}
+            className="flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-surface)] hover:text-[var(--color-text-primary)]">
+            <Plus size={10} />
+          </button>
+          {config.params.length > 1 && (
+            <button type="button" onClick={removeParam}
+              className="flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-surface)] hover:text-[var(--color-status-danger)]">
+              <Minus size={10} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Partitioning + Region */}
+      <div className="flex flex-col gap-[var(--space-3)]">
+        <Field label="Partitioning" layout="horizontal" labelWidth="5.5rem">
+          <Select value={param.partitioning} onChange={(e) => updateParam({ partitioning: e.target.value })}>
+            {DUMMY_PARTITIONINGS.map((r) => <option key={r} value={r}>{r}</option>)}
+          </Select>
+        </Field>
+        <Field label="Region" layout="horizontal" labelWidth="5.5rem">
+          <Select value={param.region} onChange={(e) => updateParam({ region: e.target.value })}>
+            <option value="">Select…</option>
+            {regions.map((r) => <option key={r} value={r}>{r}</option>)}
+          </Select>
+        </Field>
+      </div>
+
+      {/* Layer Rules */}
+      <div className="mt-[var(--space-3)]" />
+      <SortableLayerRules
+        rules={param.layerRules}
+        onUpdate={updateLayerRule}
+        onReorder={reorderLayerRules}
+      />
+
+      {/* Offset Rules */}
+      <div className="mt-[var(--space-3)]" />
+      <div className="flex flex-col gap-[var(--space-2)]">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+          Offset Rules
+        </span>
+        {param.offsetRules.length > 0 && (
+          <div className="flex flex-col gap-[var(--space-1)]">
+            {param.offsetRules.map((rule) => (
+              <div key={rule.id} className="flex items-center gap-[var(--space-1)]">
+                <div className="w-2/3 shrink-0">
+                  <Select value={rule.ruleType} onChange={(e) => updateOffsetRule(rule.id, { ruleType: e.target.value })} className="!h-6 !text-[11px]">
+                    <option value="">Rule…</option>
+                    {RULE_TYPE_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+                  </Select>
+                </div>
+                <div className="flex-1">
+                  <Input type="number" value={rule.value} onChange={(e) => updateOffsetRule(rule.id, { value: e.target.value })} className="!h-6 !text-[11px] text-right" placeholder="Val" />
+                </div>
+                <button type="button" onClick={() => removeOffsetRule(rule.id)}
+                  className="flex h-5 w-5 shrink-0 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-danger)]">
+                  <X size={10} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center gap-[var(--space-1)]">
+          <Button variant="ghost" size="sm" onClick={addOffsetRule} className="!h-6 !text-[11px]">
+            <Plus size={10} className="mr-1" /> Rule
+          </Button>
+          <PresetButton onSelect={applyTemplate} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------
+   Main component
+   ------------------------------------------------------------------ */
+
+export function ProjectOffsetters() {
+  const [configs, setConfigs] = React.useState<OffsetterConfig[]>([createConfig()]);
+  const [activeId, setActiveId] = React.useState(configs[0].id);
+  const active = configs.find((c) => c.id === activeId) ?? configs[0];
+
+  const update = React.useCallback(
+    (id: string, patch: Partial<OffsetterConfig>) => {
+      setConfigs((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+    }, []
+  );
+
+  return (
+    <div className="flex flex-col gap-[var(--space-4)]">
+      {/* Config selector */}
+      <GroupSelector
+        items={configs}
+        activeId={activeId}
+        onSelect={setActiveId}
+        onAdd={() => { const c = createConfig(); setConfigs((p) => [...p, c]); setActiveId(c.id); }}
+        onRename={(id, name) => update(id, { name })}
+        onDelete={(id) => { setConfigs((p) => { const n = p.filter((c) => c.id !== id); if (activeId === id && n.length > 0) setActiveId(n[0].id); return n; }); }}
+      />
+
+      <div className="h-px bg-[var(--color-border-subtle)]" />
+
+      {/* Fixed config */}
+      <Field label="Design Option" layout="horizontal">
+        <Select value={active.designOption} onChange={(e) => update(activeId, { designOption: e.target.value })}>
+          <option value="">Select…</option>
+          {DUMMY_DESIGN_OPTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
+        </Select>
+      </Field>
+
+      <Field label="Map" layout="horizontal">
+        <Select value={active.map} onChange={(e) => update(activeId, { map: e.target.value })}>
+          <option value="">Select…</option>
+          {DUMMY_MAPS.map((m) => <option key={m} value={m}>{m}</option>)}
+        </Select>
+      </Field>
+
+      <Field label="Snapper Max Dist." layout="horizontal">
+        <Input type="number" value={active.snapperMaxDist} onChange={(e) => update(activeId, { snapperMaxDist: e.target.value })} />
+      </Field>
+
+      {/* SP and RP panels side by side */}
+      <div className="grid grid-cols-1 gap-[var(--space-3)] xl:grid-cols-2">
+        <PointTypePanel
+          label="Sources"
+          config={active.sources}
+          onChange={(sources) => update(activeId, { sources })}
+        />
+        <PointTypePanel
+          label="Receivers"
+          config={active.receivers}
+          onChange={(receivers) => update(activeId, { receivers })}
+        />
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "skills": {
+    "contrast-checker": {
+      "source": "accesslint/claude-marketplace",
+      "sourceType": "github",
+      "computedHash": "f5ba48ad7a240bac904a6e680876250ef796f442c1111346896cab5420e131c6"
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "computedHash": "063a0e6448123cd359ad0044cc46b0e490cc7964d45ef4bb9fd842bd2ffbca67"
+    },
+    "refactor": {
+      "source": "accesslint/claude-marketplace",
+      "sourceType": "github",
+      "computedHash": "81eeca3468db825682b9f9e1f110483b3486b5c0a134c110fd5c10c6c8ebcde0"
+    },
+    "vercel-composition-patterns": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "computedHash": "f98931159fa9c7fed043bcd18a891a46dcf89ababa38df13a4c5b7b30dc0ce07"
+    },
+    "web-design-guidelines": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "computedHash": "a6a44d5498f7e8f68289902f3dedfc6f38ae0cee1e96527c80724cf27f727c2a"
+    }
+  }
+}
