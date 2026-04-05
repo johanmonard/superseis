@@ -34,7 +34,8 @@ export function Section({
         isSecondary
           ? "rounded-[var(--radius-sm)] border-l-2 border-[var(--color-border-subtle)]"
           : cn(
-              "rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] pb-[var(--space-3)] transition-colors duration-200",
+              "rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] transition-colors duration-200",
+              open && "pb-[var(--space-3)]",
               open && "bg-[var(--color-bg-elevated)]",
             ),
         className,
@@ -80,7 +81,7 @@ export function Section({
           open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
         )}
       >
-        <div className="overflow-hidden">
+        <div className={open ? "overflow-visible" : "overflow-hidden"}>
           <div className={cn(
             "space-y-[var(--space-3)]",
             isSecondary ? "px-[var(--space-3)] pb-[var(--space-3)]" : "px-[var(--space-3)] pl-[calc(12px+var(--space-1)+var(--space-3))] pt-[var(--space-2)]",

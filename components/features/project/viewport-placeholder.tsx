@@ -1,66 +1,99 @@
+"use client";
+
+import * as React from "react";
+
+/**
+ * Rotating wireframe sphere shown when no country is selected
+ * on the definition viewport.
+ *
+ * Longitude lines animate around the Y-axis (horizontal rotation).
+ * Pure SVG + rAF — no external dependencies.
+ */
 export function ViewportPlaceholder() {
+  const R = 80;
+  const CX = 100;
+  const CY = 100;
+  const SIZE = 200;
+  const DURATION = 20_000; // full revolution in ms
+
+  const lats = [-60, -30, 0, 30, 60];
+  const lonOffsets = [0, 30, 60, 90, 120, 150]; // base angles
+
+  const [angle, setAngle] = React.useState(0);
+
+  React.useEffect(() => {
+    let start: number | null = null;
+    let id: number;
+    const tick = (ts: number) => {
+      if (start === null) start = ts;
+      setAngle(((ts - start) / DURATION) * 360);
+      id = requestAnimationFrame(tick);
+    };
+    id = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(id);
+  }, []);
+
   return (
-    <div className="flex flex-col items-center gap-[var(--space-4)]">
+    <div className="flex flex-col items-center gap-[var(--space-6)]">
       <svg
-        width="48"
-        height="48"
-        viewBox="0 0 48 48"
+        width={SIZE}
+        height={SIZE}
+        viewBox={`0 0 ${SIZE} ${SIZE}`}
         fill="none"
         className="text-[var(--color-border-subtle)]"
       >
+        {/* outer circle */}
         <circle
-          cx="24"
-          cy="24"
-          r="20"
+          cx={CX}
+          cy={CY}
+          r={R}
           stroke="currentColor"
-          strokeWidth="1"
-          strokeDasharray="6 4"
+          strokeWidth="0.75"
           opacity="0.5"
-        >
-          <animateTransform
-            attributeName="transform"
-            type="rotate"
-            from="0 24 24"
-            to="360 24 24"
-            dur="20s"
-            repeatCount="indefinite"
-          />
-        </circle>
-        <circle
-          cx="24"
-          cy="24"
-          r="12"
-          stroke="currentColor"
-          strokeWidth="1"
-          strokeDasharray="4 3"
-          opacity="0.3"
-        >
-          <animateTransform
-            attributeName="transform"
-            type="rotate"
-            from="360 24 24"
-            to="0 24 24"
-            dur="14s"
-            repeatCount="indefinite"
-          />
-        </circle>
-        <circle cx="24" cy="24" r="2" fill="currentColor" opacity="0.4">
-          <animate
-            attributeName="r"
-            values="2;3;2"
-            dur="3s"
-            repeatCount="indefinite"
-          />
-          <animate
-            attributeName="opacity"
-            values="0.4;0.2;0.4"
-            dur="3s"
-            repeatCount="indefinite"
-          />
-        </circle>
+        />
+
+        {/* latitude lines — static horizontal ellipses */}
+        {lats.map((lat) => {
+          const rad = (lat * Math.PI) / 180;
+          const cy = CY - R * Math.sin(rad);
+          const rx = R * Math.cos(rad);
+          return (
+            <ellipse
+              key={`lat-${lat}`}
+              cx={CX}
+              cy={cy}
+              rx={rx}
+              ry={1}
+              stroke="currentColor"
+              strokeWidth="0.5"
+              opacity="0.3"
+            />
+          );
+        })}
+
+        {/* longitude lines — vertical ellipses rotating around Y-axis */}
+        {lonOffsets.map((base) => {
+          const lon = ((base + angle) % 180) * (Math.PI / 180);
+          const rx = Math.abs(R * Math.cos(lon));
+          // opacity fades as the line approaches the edge
+          const op = 0.15 + 0.35 * (1 - rx / R);
+          return (
+            <ellipse
+              key={`lon-${base}`}
+              cx={CX}
+              cy={CY}
+              rx={rx}
+              ry={R}
+              stroke="currentColor"
+              strokeWidth="0.5"
+              opacity={op}
+            />
+          );
+        })}
       </svg>
-      <span className="text-xs text-[var(--color-text-muted)]">
-        No viewport data
+
+      <span className="text-sm text-[var(--color-text-muted)]">
+        Select a country
       </span>
     </div>
   );

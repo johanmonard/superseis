@@ -174,7 +174,13 @@ function GroupSelector({
    Main component
    ------------------------------------------------------------------ */
 
-export function ProjectDesign() {
+export type { DesignGroup };
+
+export function ProjectDesign({
+  onActiveChange,
+}: {
+  onActiveChange?: (group: DesignGroup) => void;
+} = {}) {
   const [groups, setGroups] = React.useState<DesignGroup[]>([
     createGroup("Design 1", {
       rpi: "40",
@@ -190,6 +196,11 @@ export function ProjectDesign() {
   const [activeId, setActiveId] = React.useState(groups[0].id);
 
   const activeGroup = groups.find((g) => g.id === activeId) ?? groups[0];
+
+  // Notify parent when active group values change
+  React.useEffect(() => {
+    onActiveChange?.(activeGroup);
+  }, [activeGroup, onActiveChange]);
 
   const updateGroup = React.useCallback(
     (id: string, patch: Partial<DesignGroup>) => {
