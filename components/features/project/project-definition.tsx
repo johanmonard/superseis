@@ -10,6 +10,7 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { CountryMap } from "@/components/features/project/country-map";
 import { ViewportPlaceholder } from "@/components/features/project/viewport-placeholder";
 import { useActiveProject } from "@/lib/use-active-project";
 import { useDefinitionForm } from "@/lib/use-definition-form";
@@ -455,9 +456,9 @@ export function ProjectDefinition() {
       )}
 
       {/* Viewport panel */}
-      <div className="min-w-0 flex-1 overflow-auto border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
+      <div className="min-w-0 flex-1 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
         <div className="flex h-full flex-col items-center justify-center p-[var(--space-4)]">
-          <ViewportPlaceholder />
+          {country ? <CountryMap country={country} /> : <ViewportPlaceholder />}
         </div>
       </div>
     </div>
