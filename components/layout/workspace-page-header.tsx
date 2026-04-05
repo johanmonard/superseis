@@ -97,7 +97,7 @@ export function WorkspacePageHeader({
           ) : null}
         </div>
         {/* Center: project toolbar or badge — absolutely centered on the bar */}
-        <div className="pointer-events-none absolute inset-0 hidden items-center justify-center sm:flex">
+        <div className="pointer-events-none absolute inset-0 hidden items-start justify-center sm:flex">
           {activeProject && isProjectPage ? (
             <TooltipProvider delayDuration={200}>
               <div className="pointer-events-auto flex items-center gap-[var(--space-1)] rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] px-[var(--space-3)] py-[var(--space-1)] shadow-[0_1px_2px_var(--color-shadow-alpha)]">

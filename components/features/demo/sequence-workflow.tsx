@@ -305,7 +305,10 @@ function VLineFill({ minHeight = 16 }: { minHeight?: number }) {
 /* eslint-disable template/no-jsx-style-prop -- runtime sizing for connectors */
 function HRailSegment({ isFirst, isLast }: { isFirst: boolean; isLast: boolean }) {
   return (
-    <div className="relative w-full" style={{ height: 1 }}>
+    <div
+      className="relative w-[calc(100%+2*var(--space-4))] -mx-[var(--space-4)]"
+      style={{ height: 1 }}
+    >
       <div
         className="absolute top-0 h-px bg-[var(--color-border-strong)]"
         style={{

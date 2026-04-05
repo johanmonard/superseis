@@ -293,175 +293,175 @@ export function ActivityParameters({ activityName }: { activityName: string }) {
             ))}
           </Select>
         </Field>
-      </Section>
 
-      {/* ── Base Strips Definition ────────────────────────────────────── */}
-      <Section title="Base Strips Definition" defaultOpen={false}>
-        <TabbedPanel
-          items={strips}
-          activeId={activeStripId}
-          onSelect={setActiveStripId}
-          onAdd={() => {
-            const id = crypto.randomUUID();
-            setStrips((prev) => [
-              ...prev,
-              { id, label: `Strip ${prev.length + 1}`, regions: [], design: "", stripType: "inline", grouping: "", start: "highest" },
-            ]);
-            setActiveStripId(id);
-          }}
-          onRemove={(id) => {
-            setStrips((prev) => prev.filter((s) => s.id !== id));
-            setActiveStripId((prev) => (prev === id ? strips[0]?.id ?? null : prev));
-          }}
-        >
-          {(strip) => (
-            <div className="space-y-[var(--space-3)]">
-              <Field label="Regions" layout="horizontal">
-                <InlineTagSelect
-                  options={DUMMY_POLYGONS}
-                  value={strip.regions}
-                  onChange={(v) => updateStrip(strip.id, { regions: v })}
-                />
-              </Field>
-              <Field label="Design" htmlFor={`strip-design-${strip.id}`} layout="horizontal">
-                <Select
-                  id={`strip-design-${strip.id}`}
-                  value={strip.design}
-                  onChange={(e) => updateStrip(strip.id, { design: e.target.value })}
-                >
-                  <option value="">Select...</option>
-                  {DUMMY_MASTER_DESIGNS.map((d) => (
-                    <option key={d} value={d}>{d}</option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="Strip-type" layout="horizontal">
-                <Select
-                  value={strip.stripType}
-                  onChange={(e) => updateStrip(strip.id, { stripType: e.target.value })}
-                >
-                  <option value="inline">inline</option>
-                  <option value="crossline">crossline</option>
-                </Select>
-              </Field>
-              <Field label="Grouping" htmlFor={`strip-group-${strip.id}`} layout="horizontal">
-                <Input
-                  id={`strip-group-${strip.id}`}
-                  type="number"
-                  value={strip.grouping}
-                  onChange={(e) => updateStrip(strip.id, { grouping: e.target.value })}
-                />
-              </Field>
-              <Field label="Start" layout="horizontal">
-                <Select
-                  value={strip.start}
-                  onChange={(e) => updateStrip(strip.id, { start: e.target.value })}
-                >
-                  <option value="highest">highest</option>
-                  <option value="lowest">lowest</option>
-                </Select>
-              </Field>
-            </div>
-          )}
-        </TabbedPanel>
-      </Section>
+        {/* ── Base Strips Definition ──────────────────────────────────── */}
+        <Section title="Base Strips Definition" defaultOpen={false} variant="secondary" className="mt-[var(--space-6)]">
+          <TabbedPanel
+            items={strips}
+            activeId={activeStripId}
+            onSelect={setActiveStripId}
+            onAdd={() => {
+              const id = crypto.randomUUID();
+              setStrips((prev) => [
+                ...prev,
+                { id, label: `Strip ${prev.length + 1}`, regions: [], design: "", stripType: "inline", grouping: "", start: "highest" },
+              ]);
+              setActiveStripId(id);
+            }}
+            onRemove={(id) => {
+              setStrips((prev) => prev.filter((s) => s.id !== id));
+              setActiveStripId((prev) => (prev === id ? strips[0]?.id ?? null : prev));
+            }}
+          >
+            {(strip) => (
+              <div className="space-y-[var(--space-3)]">
+                <Field label="Regions" layout="horizontal">
+                  <InlineTagSelect
+                    options={DUMMY_POLYGONS}
+                    value={strip.regions}
+                    onChange={(v) => updateStrip(strip.id, { regions: v })}
+                  />
+                </Field>
+                <Field label="Design" htmlFor={`strip-design-${strip.id}`} layout="horizontal">
+                  <Select
+                    id={`strip-design-${strip.id}`}
+                    value={strip.design}
+                    onChange={(e) => updateStrip(strip.id, { design: e.target.value })}
+                  >
+                    <option value="">Select...</option>
+                    {DUMMY_MASTER_DESIGNS.map((d) => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Strip-type" layout="horizontal">
+                  <Select
+                    value={strip.stripType}
+                    onChange={(e) => updateStrip(strip.id, { stripType: e.target.value })}
+                  >
+                    <option value="inline">inline</option>
+                    <option value="crossline">crossline</option>
+                  </Select>
+                </Field>
+                <Field label="Grouping" htmlFor={`strip-group-${strip.id}`} layout="horizontal">
+                  <Input
+                    id={`strip-group-${strip.id}`}
+                    type="number"
+                    value={strip.grouping}
+                    onChange={(e) => updateStrip(strip.id, { grouping: e.target.value })}
+                  />
+                </Field>
+                <Field label="Start" layout="horizontal">
+                  <Select
+                    value={strip.start}
+                    onChange={(e) => updateStrip(strip.id, { start: e.target.value })}
+                  >
+                    <option value="highest">highest</option>
+                    <option value="lowest">lowest</option>
+                  </Select>
+                </Field>
+              </div>
+            )}
+          </TabbedPanel>
+        </Section>
 
-      {/* ── Sequences Definition ──────────────────────────────────────── */}
-      <Section title="Sequences Definition" defaultOpen={false}>
-        <TabbedPanel
-          items={sequences}
-          activeId={activeSeqId}
-          onSelect={setActiveSeqId}
-          onAdd={() => {
-            const id = crypto.randomUUID();
-            setSequences((prev) => [
-              ...prev,
-              { id, label: `Seq ${prev.length + 1}`, regions: [], design: "", stripType: "inline", grouping: "", start: "highest", clusterType: "weight", target: "", startCluster: "highest" },
-            ]);
-            setActiveSeqId(id);
-          }}
-          onRemove={(id) => {
-            setSequences((prev) => prev.filter((s) => s.id !== id));
-            setActiveSeqId((prev) => (prev === id ? sequences[0]?.id ?? null : prev));
-          }}
-        >
-          {(seq) => (
-            <div className="space-y-[var(--space-3)]">
-              <Field label="Regions" layout="horizontal">
-                <InlineTagSelect
-                  options={DUMMY_POLYGONS}
-                  value={seq.regions}
-                  onChange={(v) => updateSequence(seq.id, { regions: v })}
-                />
-              </Field>
-              <Field label="Design" htmlFor={`seq-design-${seq.id}`} layout="horizontal">
-                <Select
-                  id={`seq-design-${seq.id}`}
-                  value={seq.design}
-                  onChange={(e) => updateSequence(seq.id, { design: e.target.value })}
-                >
-                  <option value="">Select...</option>
-                  {DUMMY_MASTER_DESIGNS.map((d) => (
-                    <option key={d} value={d}>{d}</option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="Strip-type" layout="horizontal">
-                <Select
-                  value={seq.stripType}
-                  onChange={(e) => updateSequence(seq.id, { stripType: e.target.value })}
-                >
-                  <option value="inline">inline</option>
-                  <option value="crossline">crossline</option>
-                </Select>
-              </Field>
-              <Field label="Grouping" htmlFor={`seq-group-${seq.id}`} layout="horizontal">
-                <Input
-                  id={`seq-group-${seq.id}`}
-                  type="number"
-                  value={seq.grouping}
-                  onChange={(e) => updateSequence(seq.id, { grouping: e.target.value })}
-                />
-              </Field>
-              <Field label="Start" layout="horizontal">
-                <Select
-                  value={seq.start}
-                  onChange={(e) => updateSequence(seq.id, { start: e.target.value })}
-                >
-                  <option value="highest">highest</option>
-                  <option value="lowest">lowest</option>
-                </Select>
-              </Field>
-              <Field label="Cluster-type" layout="horizontal">
-                <Select
-                  value={seq.clusterType}
-                  onChange={(e) => updateSequence(seq.id, { clusterType: e.target.value })}
-                >
-                  <option value="weight">weight</option>
-                  <option value="number">number</option>
-                  <option value="size">size</option>
-                </Select>
-              </Field>
-              <Field label="Target" htmlFor={`seq-target-${seq.id}`} layout="horizontal">
-                <Input
-                  id={`seq-target-${seq.id}`}
-                  type="number"
-                  value={seq.target}
-                  onChange={(e) => updateSequence(seq.id, { target: e.target.value })}
-                />
-              </Field>
-              <Field label="Start (cluster)" layout="horizontal">
-                <Select
-                  value={seq.startCluster}
-                  onChange={(e) => updateSequence(seq.id, { startCluster: e.target.value })}
-                >
-                  <option value="highest">highest</option>
-                  <option value="lowest">lowest</option>
-                </Select>
-              </Field>
-            </div>
-          )}
-        </TabbedPanel>
+        {/* ── Sequences Definition ────────────────────────────────────── */}
+        <Section title="Sequences Definition" defaultOpen={false} variant="secondary" className="mt-[var(--space-6)]">
+          <TabbedPanel
+            items={sequences}
+            activeId={activeSeqId}
+            onSelect={setActiveSeqId}
+            onAdd={() => {
+              const id = crypto.randomUUID();
+              setSequences((prev) => [
+                ...prev,
+                { id, label: `Seq ${prev.length + 1}`, regions: [], design: "", stripType: "inline", grouping: "", start: "highest", clusterType: "weight", target: "", startCluster: "highest" },
+              ]);
+              setActiveSeqId(id);
+            }}
+            onRemove={(id) => {
+              setSequences((prev) => prev.filter((s) => s.id !== id));
+              setActiveSeqId((prev) => (prev === id ? sequences[0]?.id ?? null : prev));
+            }}
+          >
+            {(seq) => (
+              <div className="space-y-[var(--space-3)]">
+                <Field label="Regions" layout="horizontal">
+                  <InlineTagSelect
+                    options={DUMMY_POLYGONS}
+                    value={seq.regions}
+                    onChange={(v) => updateSequence(seq.id, { regions: v })}
+                  />
+                </Field>
+                <Field label="Design" htmlFor={`seq-design-${seq.id}`} layout="horizontal">
+                  <Select
+                    id={`seq-design-${seq.id}`}
+                    value={seq.design}
+                    onChange={(e) => updateSequence(seq.id, { design: e.target.value })}
+                  >
+                    <option value="">Select...</option>
+                    {DUMMY_MASTER_DESIGNS.map((d) => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Strip-type" layout="horizontal">
+                  <Select
+                    value={seq.stripType}
+                    onChange={(e) => updateSequence(seq.id, { stripType: e.target.value })}
+                  >
+                    <option value="inline">inline</option>
+                    <option value="crossline">crossline</option>
+                  </Select>
+                </Field>
+                <Field label="Grouping" htmlFor={`seq-group-${seq.id}`} layout="horizontal">
+                  <Input
+                    id={`seq-group-${seq.id}`}
+                    type="number"
+                    value={seq.grouping}
+                    onChange={(e) => updateSequence(seq.id, { grouping: e.target.value })}
+                  />
+                </Field>
+                <Field label="Start" layout="horizontal">
+                  <Select
+                    value={seq.start}
+                    onChange={(e) => updateSequence(seq.id, { start: e.target.value })}
+                  >
+                    <option value="highest">highest</option>
+                    <option value="lowest">lowest</option>
+                  </Select>
+                </Field>
+                <Field label="Cluster-type" layout="horizontal">
+                  <Select
+                    value={seq.clusterType}
+                    onChange={(e) => updateSequence(seq.id, { clusterType: e.target.value })}
+                  >
+                    <option value="weight">weight</option>
+                    <option value="number">number</option>
+                    <option value="size">size</option>
+                  </Select>
+                </Field>
+                <Field label="Target" htmlFor={`seq-target-${seq.id}`} layout="horizontal">
+                  <Input
+                    id={`seq-target-${seq.id}`}
+                    type="number"
+                    value={seq.target}
+                    onChange={(e) => updateSequence(seq.id, { target: e.target.value })}
+                  />
+                </Field>
+                <Field label="Start (cluster)" layout="horizontal">
+                  <Select
+                    value={seq.startCluster}
+                    onChange={(e) => updateSequence(seq.id, { startCluster: e.target.value })}
+                  >
+                    <option value="highest">highest</option>
+                    <option value="lowest">lowest</option>
+                  </Select>
+                </Field>
+              </div>
+            )}
+          </TabbedPanel>
+        </Section>
       </Section>
 
       {/* ── Motion ────────────────────────────────────────────────────── */}

@@ -213,6 +213,28 @@ body {
   font-weight: 700;
 }
 
+/* React Flow controls — dark mode overrides */
+[data-theme="dark"] .react-flow__controls {
+  background: var(--color-bg-surface);
+  border-color: var(--color-border-subtle);
+  box-shadow: 0 1px 4px var(--color-shadow-alpha);
+}
+
+[data-theme="dark"] .react-flow__controls-button {
+  background: var(--color-bg-surface);
+  border-color: var(--color-border-subtle);
+  fill: var(--color-text-secondary);
+  color: var(--color-text-secondary);
+}
+
+[data-theme="dark"] .react-flow__controls-button:hover {
+  background: var(--color-bg-elevated);
+}
+
+[data-theme="dark"] .react-flow__controls-button svg {
+  fill: var(--color-text-secondary);
+}
+
 @keyframes toast-in {
   from {
     opacity: 0;

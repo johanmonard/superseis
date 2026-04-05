@@ -33,6 +33,7 @@ export const navigation: NavigationItem[] = [
       { label: "Items", href: "/demo/items", icon: "projectManagement" },
       { label: "Primitives", href: "/demo/primitives", icon: "dashboards" },
       { label: "Sequence", href: "/demo/sequence", icon: "listChecks" },
+      { label: "React Flow", href: "/demo/reactflow", icon: "blocks" },
     ],
   },
   {
@@ -54,6 +55,11 @@ export const navigation: NavigationItem[] = [
           { label: "Maps", href: "/project/maps", icon: "mapPin" },
           { label: "Offsetters", href: "/project/offsetters", icon: "sliders" },
         ],
+      },
+      {
+        label: "Crew",
+        href: "/project/crew",
+        icon: "users",
       },
       {
         label: "Activities",

@@ -39,6 +39,7 @@ import {
   Trash2,
   Upload,
   User,
+  Users,
   Wrench,
   X,
   type LucideIcon,
@@ -113,6 +114,7 @@ export const appIcons = {
   travel: Plane,
   upload: Upload,
   user: User,
+  users: Users,
   workshop: Wrench,
   x: X,
 } as const;

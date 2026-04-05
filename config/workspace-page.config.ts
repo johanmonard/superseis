@@ -36,6 +36,11 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
     subtitle: "Workflow visualization with sequential steps, parallel branches, and merge gates.",
   },
   {
+    href: "/demo/reactflow",
+    title: "React Flow",
+    subtitle: "React Flow library test — drag-and-drop workflow with fork/merge topology.",
+  },
+  {
     href: "/project",
     title: "Settings",
     subtitle: "Project settings and configuration.",
@@ -79,6 +84,11 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
     href: "/project/offsetters",
     title: "Offsetters",
     subtitle: "Offset relocation parameters.",
+  },
+  {
+    href: "/project/crew",
+    title: "Crew",
+    subtitle: "Define crew options, activities, and resources.",
   },
   {
     href: "/project/activities",

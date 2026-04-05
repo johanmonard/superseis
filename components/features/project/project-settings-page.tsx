@@ -17,10 +17,12 @@ export function ProjectSettingsPage({
   title,
   panelTitle = "Parameters",
   children,
+  viewport,
 }: {
   title: string;
   panelTitle?: string;
   children?: React.ReactNode;
+  viewport?: React.ReactNode;
 }) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [leftFraction, setLeftFraction] = React.useState(DEFAULT_LEFT_FRACTION);
@@ -52,9 +54,9 @@ export function ProjectSettingsPage({
       {/* Parameters panel */}
       <div
         className={cn(
-          "overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]",
+          "border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]",
           !isResizing && "transition-all duration-300 ease-in-out",
-          collapsed ? "min-w-0" : "min-w-0 overflow-auto"
+          collapsed ? "min-w-0 overflow-hidden" : "min-w-0 overflow-y-auto"
         )}
         // eslint-disable-next-line template/no-jsx-style-prop -- runtime sizing
         style={
@@ -125,10 +127,12 @@ export function ProjectSettingsPage({
       )}
 
       {/* Viewport panel */}
-      <div className="min-w-0 flex-1 overflow-auto border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
-        <div className="flex h-full flex-col items-center justify-center p-[var(--space-4)]">
-          <ViewportPlaceholder />
-        </div>
+      <div className="min-w-0 flex-1 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
+        {viewport ?? (
+          <div className="flex h-full flex-col items-center justify-center p-[var(--space-4)]">
+            <ViewportPlaceholder />
+          </div>
+        )}
       </div>
     </div>
   );
