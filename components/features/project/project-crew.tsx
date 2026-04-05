@@ -95,6 +95,7 @@ function TagSelect({
 interface Resource {
   id: string;
   name: string;
+  max: number;
 }
 
 interface Activity {
@@ -116,7 +117,7 @@ interface CrewOption {
    ------------------------------------------------------------------ */
 
 function createResource(name: string): Resource {
-  return { id: crypto.randomUUID(), name };
+  return { id: crypto.randomUUID(), name, max: 1 };
 }
 
 function createActivity(name: string): Activity {
@@ -264,12 +265,17 @@ function OptionSelector({
    Main component
    ------------------------------------------------------------------ */
 
+export interface CrewResourceInfo {
+  name: string;
+  max: number;
+}
+
 export interface CrewActivityInfo {
   id: string;
   name: string;
   pointType: string;
   predecessors: string[];
-  resources: string[];
+  resources: CrewResourceInfo[];
 }
 
 export function ProjectCrew({
@@ -283,7 +289,28 @@ export function ProjectCrew({
   const [activeId, setActiveId] = React.useState<string>(options[0].id);
 
   const active = options.find((o) => o.id === activeId) ?? options[0];
-  const [newActivityIds] = React.useState(() => new Set<string>());
+  const [expandedActivityId, setExpandedActivityId] = React.useState<string | null>(null);
+  const pendingExpandRef = React.useRef<string | null>(null);
+
+  const toggleActivity = React.useCallback((id: string, isOpen: boolean) => {
+    if (!isOpen) {
+      // Closing the current one
+      setExpandedActivityId(null);
+      return;
+    }
+    if (expandedActivityId === null) {
+      // Nothing open, just open directly
+      setExpandedActivityId(id);
+    } else {
+      // Collapse current first, then expand new after animation
+      pendingExpandRef.current = id;
+      setExpandedActivityId(null);
+      setTimeout(() => {
+        setExpandedActivityId(pendingExpandRef.current);
+        pendingExpandRef.current = null;
+      }, 220);
+    }
+  }, [expandedActivityId]);
 
   // Notify parent of activity changes for the graph
   React.useEffect(() => {
@@ -293,7 +320,7 @@ export function ProjectCrew({
         name: a.name,
         pointType: a.pointType,
         predecessors: a.predecessors,
-        resources: a.resources.map((r) => r.name),
+        resources: a.resources.map((r) => ({ name: r.name, max: r.max })),
       }))
     );
   }, [active.activities, onActivitiesChange]);
@@ -330,7 +357,7 @@ export function ProjectCrew({
 
   const addActivity = (optionId: string) => {
     const act = createActivity(`Activity ${(options.find((o) => o.id === optionId)?.activities.length ?? 0) + 1}`);
-    newActivityIds.add(act.id);
+    setExpandedActivityId(act.id);
     setOptions((prev) =>
       prev.map((o) =>
         o.id === optionId
@@ -387,7 +414,7 @@ export function ProjectCrew({
     );
   };
 
-  const updateResource = (optionId: string, actId: string, resId: string, name: string) => {
+  const updateResource = (optionId: string, actId: string, resId: string, patch: Partial<Omit<Resource, "id">>) => {
     setOptions((prev) =>
       prev.map((o) =>
         o.id === optionId
@@ -395,7 +422,7 @@ export function ProjectCrew({
               ...o,
               activities: o.activities.map((a) =>
                 a.id === actId
-                  ? { ...a, resources: a.resources.map((r) => (r.id === resId ? { ...r, name } : r)) }
+                  ? { ...a, resources: a.resources.map((r) => (r.id === resId ? { ...r, ...patch } : r)) }
                   : a
               ),
             }
@@ -444,7 +471,8 @@ export function ProjectCrew({
           <Section
             key={act.id}
             title={`${act.name} (${act.pointType})`}
-            defaultOpen={newActivityIds.has(act.id)}
+            open={expandedActivityId === act.id}
+            onToggle={(isOpen) => toggleActivity(act.id, isOpen)}
             action={
               <button
                 type="button"
@@ -496,7 +524,7 @@ export function ProjectCrew({
                     predecessors: act.predecessors.filter((_, idx) => idx !== i),
                   })
                 }
-                label="Predecessor"
+                label="Add"
               />
             </Field>
 
@@ -506,8 +534,21 @@ export function ProjectCrew({
                   <div key={res.id} className="flex items-center gap-[var(--space-2)]">
                     <Input
                       value={res.name}
-                      onChange={(e) => updateResource(active.id, act.id, res.id, e.target.value)}
-                      className="text-xs"
+                      onChange={(e) => updateResource(active.id, act.id, res.id, { name: e.target.value })}
+                      className="basis-2/3 text-xs"
+                    />
+                    <Input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      value={res.max}
+                      onChange={(e) => {
+                        const v = e.target.value.replace(/\D/g, "");
+                        const n = Math.max(1, parseInt(v, 10) || 1);
+                        updateResource(active.id, act.id, res.id, { max: n });
+                      }}
+                      className="basis-1/3 text-right text-xs [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                      title="Max resources"
                     />
                     <button
                       type="button"
@@ -525,7 +566,7 @@ export function ProjectCrew({
                   className="self-start"
                 >
                   <Plus size={12} className="mr-[var(--space-1)]" />
-                  Resource
+                  Add
                 </Button>
               </div>
             </Field>

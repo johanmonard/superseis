@@ -21,18 +21,23 @@ import "@xyflow/react/dist/style.css";
 // Types
 // ---------------------------------------------------------------------------
 
+export interface ActivityResourceItem {
+  name: string;
+  max: number;
+}
+
 export interface ActivityGraphItem {
   id: string;
   name: string;
   pointType: string;
   predecessors: string[];
-  resources: string[];
+  resources: ActivityResourceItem[];
 }
 
 type ActivityNodeData = {
   label: string;
   pointType: string;
-  resources: string[];
+  resources: ActivityResourceItem[];
   minHeight?: number;
 };
 
@@ -65,9 +70,9 @@ function ActivityNode({ data, sourcePosition, targetPosition }: NodeProps<Node<A
       </div>
       {data.resources.length > 0 && (
         <div className="mt-[var(--space-1)] flex flex-col gap-px pl-[calc(1.25rem+var(--space-2))]">
-          {data.resources.map((name) => (
-            <span key={name} className="text-[10px] text-[var(--color-text-muted)] truncate">
-              {name}
+          {data.resources.map((res) => (
+            <span key={res.name} className="text-[10px] text-[var(--color-text-muted)] truncate">
+              {res.name} | Max {String(res.max).padStart(2, "0")}
             </span>
           ))}
         </div>
