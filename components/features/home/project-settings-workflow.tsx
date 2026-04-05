@@ -1,7 +1,35 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useCallback, useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import {
+  ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
+  useNodesState,
+  useEdgesState,
+  Controls,
+  Panel,
+  Background,
+  BackgroundVariant,
+  MarkerType,
+  Handle,
+  Position,
+  type Node,
+  type Edge,
+  type NodeProps,
+} from "@xyflow/react";
+import Dagre from "@dagrejs/dagre";
+import "@xyflow/react/dist/style.css";
+
+import { Field } from "@/components/ui/field";
+import { Select } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { appIcons } from "@/components/ui/icon";
+import { useDefinitionForm, getDefinitionStatus } from "@/lib/use-definition-form";
+
+const { settings: Settings, x: X } = appIcons;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -9,95 +37,290 @@ import { useRouter } from "next/navigation";
 
 type StepStatus = "todo" | "ongoing" | "completed";
 
-type SettingsStep = {
-  id: string;
-  number: number;
-  title: string;
+type StepData = {
+  label: string;
   description: string;
   href: string;
   status: StepStatus;
+  number: number;
+  onCycleStatus: (id: string) => void;
+  onNavigate: (href: string) => void;
+};
+
+type EdgeType = "smoothstep" | "default" | "straight" | "step";
+
+interface WorkflowConfig {
+  edgeType: EdgeType;
+  nodeSpacing: number;
+  rankSpacing: number;
+  animated: boolean;
+}
+
+const DEFAULT_CONFIG: WorkflowConfig = {
+  edgeType: "smoothstep",
+  nodeSpacing: 40,
+  rankSpacing: 60,
+  animated: false,
 };
 
 // ---------------------------------------------------------------------------
-// Project settings pages — one step per page
+// Custom step node
 // ---------------------------------------------------------------------------
 
-function createInitialSteps(): SettingsStep[] {
-  return [
-    { id: "definition", number: 1, title: "Definition", description: "Project base information.", href: "/project/definition", status: "todo" },
-    { id: "partitioning", number: 2, title: "Partitioning", description: "Partition the project area in regions.", href: "/project/partitioning", status: "todo" },
-    { id: "design", number: 3, title: "Design", description: "Survey design parameters & region assignment.", href: "/project/design", status: "todo" },
-    { id: "terrain", number: 4, title: "Terrain", description: "Define project extents and boundaries.", href: "/project/terrain", status: "todo" },
-    { id: "osm", number: 5, title: "OSM", description: "OpenStreetMap data configuration.", href: "/project/osm", status: "todo" },
-    { id: "layers", number: 6, title: "Layers", description: "Layer management and configuration.", href: "/project/layers", status: "todo" },
-    { id: "maps", number: 7, title: "Maps", description: "Map layer composition and sorting.", href: "/project/maps", status: "todo" },
-    { id: "offsetters", number: 8, title: "Offsetters", description: "Offset relocation parameters.", href: "/project/offsetters", status: "todo" },
-  ];
-}
+function StepNode({ id, data, selected }: NodeProps<Node<StepData>>) {
+  const statusClasses =
+    data.status === "completed"
+      ? "bg-[var(--color-status-success)] text-white"
+      : data.status === "ongoing"
+        ? "bg-[var(--color-status-info)] text-white"
+        : "bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)]";
 
-// ---------------------------------------------------------------------------
-// Step card
-// ---------------------------------------------------------------------------
-
-function SettingsStepCard({
-  step,
-  onCycleStatus,
-  onNavigate,
-}: {
-  step: SettingsStep;
-  onCycleStatus: (id: string) => void;
-  onNavigate: (href: string) => void;
-}) {
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={() => onNavigate(step.href)}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onNavigate(step.href); }}
-      className="group w-52 cursor-pointer rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] p-[var(--space-3)] text-left shadow-[0_1px_2px_var(--color-shadow-alpha)] transition-colors hover:border-[var(--color-accent)]"
+      onClick={() => data.onNavigate(data.href)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") data.onNavigate(data.href);
+      }}
+      className={
+        "w-52 cursor-pointer rounded-[var(--radius-md)] border bg-[var(--color-bg-surface)] p-[var(--space-3)] shadow-[0_1px_2px_var(--color-shadow-alpha)] transition-colors hover:border-[var(--color-accent)] " +
+        (selected
+          ? "border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]"
+          : "border-[var(--color-border-subtle)]")
+      }
     >
+      <Handle type="target" position={Position.Top} className="!bg-[var(--color-border-strong)]" />
       <div className="flex items-center gap-[var(--space-2)]">
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            onCycleStatus(step.id);
+            data.onCycleStatus(id);
           }}
           className="cursor-pointer"
         >
           <span
             className={
               "flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold transition-opacity hover:opacity-80 " +
-              (step.status === "completed"
-                ? "bg-[var(--color-status-success)] text-white"
-                : step.status === "ongoing"
-                  ? "bg-[var(--color-status-info)] text-white"
-                  : "bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)]")
+              statusClasses
             }
           >
-            {step.status === "completed" ? "\u2713" : step.number}
+            {data.status === "completed" ? "\u2713" : data.number}
           </span>
         </button>
         <span className="text-sm font-medium text-[var(--color-text-primary)] truncate">
-          {step.title}
+          {data.label}
         </span>
       </div>
       <p className="mt-[var(--space-1)] text-xs text-[var(--color-text-secondary)] line-clamp-2">
-        {step.description}
+        {data.description}
       </p>
+      <Handle type="source" position={Position.Bottom} className="!bg-[var(--color-border-strong)]" />
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Vertical connector
+// Title node
 // ---------------------------------------------------------------------------
 
-function VLine({ height = 24 }: { height?: number }) {
+function TitleNode(_props: NodeProps) {
   return (
-    // eslint-disable-next-line template/no-jsx-style-prop -- runtime sizing
-    <div className="flex justify-center" style={{ height }}>
-      <div className="w-px bg-[var(--color-border-strong)] h-full" />
+    <div className="flex w-52 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-accent)] bg-[var(--color-accent)] px-[var(--space-4)] py-[var(--space-3)] shadow-[0_2px_8px_var(--color-shadow-alpha)]">
+      <span className="text-sm font-bold tracking-wide text-[var(--color-accent-foreground)]">
+        Project Settings
+      </span>
+      <Handle type="source" position={Position.Bottom} className="!bg-[var(--color-accent-foreground)]" />
+    </div>
+  );
+}
+
+const nodeTypes = { step: StepNode, title: TitleNode };
+
+// ---------------------------------------------------------------------------
+// Steps definition
+// ---------------------------------------------------------------------------
+
+const STEPS = [
+  { id: "definition", number: 1, label: "Definition", description: "Project base information.", href: "/project/definition" },
+  { id: "partitioning", number: 2, label: "Partitioning", description: "Partition the project area in regions.", href: "/project/partitioning" },
+  { id: "design", number: 3, label: "Design", description: "Survey design parameters & region assignment.", href: "/project/design" },
+  { id: "terrain", number: 4, label: "Terrain", description: "Define project extents and boundaries.", href: "/project/terrain" },
+  { id: "osm", number: 5, label: "OSM", description: "OpenStreetMap data configuration.", href: "/project/osm" },
+  { id: "layers", number: 6, label: "Layers", description: "Layer management and configuration.", href: "/project/layers" },
+  { id: "maps", number: 7, label: "Maps", description: "Map layer composition and sorting.", href: "/project/maps" },
+  { id: "offsetters", number: 8, label: "Offsetters", description: "Offset relocation parameters.", href: "/project/offsetters" },
+] as const;
+
+// ---------------------------------------------------------------------------
+// Dagre layout
+// ---------------------------------------------------------------------------
+
+const NODE_WIDTH = 208;
+const NODE_HEIGHT = 72;
+const TITLE_HEIGHT = 40;
+
+function layoutElements(nodes: Node[], edges: Edge[], config: WorkflowConfig) {
+  const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
+  g.setGraph({ rankdir: "TB", nodesep: config.nodeSpacing, ranksep: config.rankSpacing });
+
+  for (const node of nodes) {
+    const isTitle = node.type === "title";
+    g.setNode(node.id, { width: NODE_WIDTH, height: isTitle ? TITLE_HEIGHT : NODE_HEIGHT });
+  }
+  for (const edge of edges) {
+    g.setEdge(edge.source, edge.target);
+  }
+
+  Dagre.layout(g);
+
+  return nodes.map((node) => {
+    const pos = g.node(node.id);
+    const h = node.type === "title" ? TITLE_HEIGHT : NODE_HEIGHT;
+    return { ...node, position: { x: pos.x - NODE_WIDTH / 2, y: pos.y - h / 2 } };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Build initial nodes & edges
+// ---------------------------------------------------------------------------
+
+const noop = () => {};
+
+const TITLE_NODE_ID = "title";
+
+function createInitialNodes(): Node[] {
+  const titleNode: Node = {
+    id: TITLE_NODE_ID,
+    type: "title",
+    position: { x: 0, y: 0 },
+    data: {},
+  };
+
+  const stepNodes: Node[] = STEPS.map((step) => ({
+    id: step.id,
+    type: "step" as const,
+    position: { x: 0, y: 0 },
+    data: {
+      label: step.label,
+      description: step.description,
+      href: step.href,
+      status: "todo" as StepStatus,
+      number: step.number,
+      onCycleStatus: noop,
+      onNavigate: noop,
+    },
+  }));
+
+  return [titleNode, ...stepNodes];
+}
+
+function createInitialEdges(config: WorkflowConfig): Edge[] {
+  const edgeStyle = {
+    type: config.edgeType,
+    animated: config.animated,
+    markerEnd: { type: MarkerType.ArrowClosed, color: "var(--color-border-strong)" },
+  } as const;
+
+  const titleEdge: Edge = {
+    id: `e-${TITLE_NODE_ID}-${STEPS[0].id}`,
+    source: TITLE_NODE_ID,
+    target: STEPS[0].id,
+    ...edgeStyle,
+  };
+
+  const stepEdges: Edge[] = STEPS.slice(0, -1).map((step, i) => ({
+    id: `e-${step.id}-${STEPS[i + 1].id}`,
+    source: step.id,
+    target: STEPS[i + 1].id,
+    ...edgeStyle,
+  }));
+
+  return [titleEdge, ...stepEdges];
+}
+
+// ---------------------------------------------------------------------------
+// Settings panel
+// ---------------------------------------------------------------------------
+
+function WorkflowSettingsPanel({
+  config,
+  onUpdate,
+}: {
+  config: WorkflowConfig;
+  onUpdate: <K extends keyof WorkflowConfig>(key: K, value: WorkflowConfig[K]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="flex h-[26px] w-[26px] items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] text-[var(--color-text-muted)] shadow-[0_1px_2px_var(--color-shadow-alpha)] transition-colors hover:text-[var(--color-text-primary)]"
+        aria-label="Workflow settings"
+      >
+        <Settings size={13} />
+      </button>
+    );
+  }
+
+  return (
+    <div className="w-64 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] shadow-[0_4px_12px_var(--color-shadow-alpha)]">
+      <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] px-[var(--space-3)] py-[var(--space-2)]">
+        <span className="text-xs font-semibold text-[var(--color-text-primary)]">Workflow Settings</span>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="flex h-5 w-5 items-center justify-center text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-primary)]"
+        >
+          <X size={12} />
+        </button>
+      </div>
+      <div className="space-y-[var(--space-3)] p-[var(--space-3)]">
+        <Field label="Edge Type" layout="horizontal">
+          <Select
+            value={config.edgeType}
+            onChange={(e) => onUpdate("edgeType", e.target.value as EdgeType)}
+          >
+            <option value="smoothstep">Smooth Step</option>
+            <option value="default">Bezier</option>
+            <option value="straight">Straight</option>
+            <option value="step">Step</option>
+          </Select>
+        </Field>
+
+        <Field label="Node Spacing" layout="horizontal">
+          <Input
+            type="number"
+            min={10}
+            max={200}
+            value={config.nodeSpacing}
+            onChange={(e) => onUpdate("nodeSpacing", Number(e.target.value))}
+          />
+        </Field>
+
+        <Field label="Rank Spacing" layout="horizontal">
+          <Input
+            type="number"
+            min={10}
+            max={200}
+            value={config.rankSpacing}
+            onChange={(e) => onUpdate("rankSpacing", Number(e.target.value))}
+          />
+        </Field>
+
+        <Field label="Animated" layout="horizontal">
+          <label className="flex items-center gap-[var(--space-2)] text-xs text-[var(--color-text-primary)]">
+            <Checkbox
+              checked={config.animated}
+              onCheckedChange={(checked) => onUpdate("animated", Boolean(checked))}
+            />
+            Enable
+          </label>
+        </Field>
+      </div>
     </div>
   );
 }
@@ -106,38 +329,133 @@ function VLine({ height = 24 }: { height?: number }) {
 // Main component
 // ---------------------------------------------------------------------------
 
-export function ProjectSettingsWorkflow() {
+const STATUS_CYCLE: Record<StepStatus, StepStatus> = {
+  todo: "ongoing",
+  ongoing: "completed",
+  completed: "todo",
+};
+
+function ProjectSettingsWorkflowInner() {
   const router = useRouter();
-  const [steps, setSteps] = useState<SettingsStep[]>(createInitialSteps);
+  const { fitView } = useReactFlow();
+  const { definition } = useDefinitionForm();
+  const [config, setConfig] = useState<WorkflowConfig>(DEFAULT_CONFIG);
 
-  const cycleStatus = useCallback((id: string) => {
-    const cycle: Record<StepStatus, StepStatus> = { todo: "ongoing", ongoing: "completed", completed: "todo" };
-    setSteps((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, status: cycle[s.status] } : s))
+  const updateConfig = useCallback(
+    <K extends keyof WorkflowConfig>(key: K, value: WorkflowConfig[K]) =>
+      setConfig((prev) => ({ ...prev, [key]: value })),
+    [],
+  );
+
+  // Derive step statuses from shared form state
+  const definitionStatus = getDefinitionStatus(definition);
+
+  // Compute layout from config
+  const rawNodes = useMemo(() => createInitialNodes(), []);
+  const initialEdges = useMemo(() => createInitialEdges(config), [config]);
+  const initialLayoutedNodes = useMemo(
+    () => layoutElements(rawNodes, initialEdges, config),
+    [rawNodes, initialEdges, config],
+  );
+
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialLayoutedNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  // Sync definition status into the "definition" node
+  useEffect(() => {
+    setNodes((nds) =>
+      nds.map((n) =>
+        n.id === "definition" && n.type === "step"
+          ? { ...n, data: { ...n.data, status: definitionStatus } }
+          : n,
+      ),
     );
-  }, []);
+  }, [definitionStatus, setNodes]);
 
-  const navigate = useCallback((href: string) => {
-    router.push(href);
-  }, [router]);
+  // Re-layout when config changes
+  useEffect(() => {
+    const newEdges = createInitialEdges(config);
+    setNodes((nds) => {
+      // Preserve step statuses
+      const statusMap = new Map<string, StepStatus>();
+      for (const n of nds) {
+        if (n.type === "step") statusMap.set(n.id, (n.data as StepData).status);
+      }
+      const fresh = createInitialNodes().map((n) => {
+        if (n.type === "step" && statusMap.has(n.id)) {
+          return { ...n, data: { ...n.data, status: statusMap.get(n.id) } };
+        }
+        return n;
+      });
+      return layoutElements(fresh, newEdges, config);
+    });
+    setEdges(newEdges);
+    setTimeout(() => fitView(), 50);
+  }, [config, setNodes, setEdges, fitView]);
+
+  const cycleStatus = useCallback(
+    (nodeId: string) => {
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (n.id !== nodeId) return n;
+          const cur = (n.data as StepData).status;
+          return { ...n, data: { ...n.data, status: STATUS_CYCLE[cur] } };
+        }),
+      );
+    },
+    [setNodes],
+  );
+
+  const navigate = useCallback(
+    (href: string) => router.push(href),
+    [router],
+  );
+
+  const nodesWithCallbacks = useMemo(
+    () =>
+      nodes.map((n) =>
+        n.type === "step"
+          ? { ...n, data: { ...n.data, onCycleStatus: cycleStatus, onNavigate: navigate } }
+          : n,
+      ),
+    [nodes, cycleStatus, navigate],
+  );
 
   return (
-    <div className="flex flex-col items-center">
-      <h2 className="mb-[var(--space-4)] text-sm font-semibold text-[var(--color-text-primary)]">
-        Project Settings
-      </h2>
-      {steps.map((step, i) => (
-        <div key={step.id}>
-          {i > 0 && <VLine />}
-          <div className="flex justify-center">
-            <SettingsStepCard
-              step={step}
-              onCycleStatus={cycleStatus}
-              onNavigate={navigate}
-            />
-          </div>
-        </div>
-      ))}
+    <div className="h-full w-full">
+      <ReactFlow
+        nodes={nodesWithCallbacks}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        nodeTypes={nodeTypes}
+        defaultEdgeOptions={{
+          style: { stroke: "var(--color-border-strong)", strokeWidth: 1 },
+        }}
+        fitView
+        nodesDraggable={false}
+        nodesConnectable={false}
+        elementsSelectable
+        proOptions={{ hideAttribution: true }}
+      >
+        <Controls showInteractive={false} />
+        <Panel position="top-right">
+          <WorkflowSettingsPanel config={config} onUpdate={updateConfig} />
+        </Panel>
+        <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="var(--color-border-subtle)" />
+      </ReactFlow>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Exported wrapper
+// ---------------------------------------------------------------------------
+
+export function ProjectSettingsWorkflow() {
+  return (
+    <ReactFlowProvider>
+      <ProjectSettingsWorkflowInner />
+    </ReactFlowProvider>
   );
 }

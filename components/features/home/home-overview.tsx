@@ -275,7 +275,7 @@ export function HomeOverview() {
   /* ---- Active project view — settings workflow ---- */
   return (
     <>
-      <div className="flex h-full flex-col items-center overflow-y-auto py-[var(--space-6)]">
+      <div className="h-full w-full">
         <ProjectSettingsWorkflow />
       </div>
 

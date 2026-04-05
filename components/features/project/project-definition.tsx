@@ -12,6 +12,7 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ViewportPlaceholder } from "@/components/features/project/viewport-placeholder";
 import { useActiveProject } from "@/lib/use-active-project";
+import { useDefinitionForm } from "@/lib/use-definition-form";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------
@@ -219,6 +220,7 @@ const COLLAPSED_WIDTH = 36;
 
 export function ProjectDefinition() {
   const { activeProject } = useActiveProject();
+  const { definition, setDefinitionField } = useDefinitionForm();
 
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [leftFraction, setLeftFraction] = React.useState(DEFAULT_LEFT_FRACTION);
@@ -226,13 +228,19 @@ export function ProjectDefinition() {
   const isDragging = React.useRef(false);
   const [isResizing, setIsResizing] = React.useState(false);
 
-  // Form state
-  const [client, setClient] = React.useState("");
-  const [country, setCountry] = React.useState("");
+  // Form state — tracked fields come from shared context
+  const client = definition.client;
+  const country = definition.country;
+  const epsg = definition.epsg;
+  const second = definition.second;
+  const setClient = React.useCallback((v: string) => setDefinitionField("client", v), [setDefinitionField]);
+  const setCountry = React.useCallback((v: string) => setDefinitionField("country", v), [setDefinitionField]);
+  const setEpsg = React.useCallback((v: string) => setDefinitionField("epsg", v), [setDefinitionField]);
+  const setSecond = React.useCallback((v: string) => setDefinitionField("second", v), [setDefinitionField]);
+
+  // Local-only fields
   const [region, setRegion] = React.useState("");
-  const [epsg, setEpsg] = React.useState("");
   const [crsName, setCrsName] = React.useState("");
-  const [second, setSecond] = React.useState("");
   const [overlapGrid, setOverlapGrid] = React.useState("");
   const [overlapStrip, setOverlapStrip] = React.useState("");
   const [notes, setNotes] = React.useState("");
@@ -320,7 +328,7 @@ export function ProjectDefinition() {
               <Input
                 id="def-client"
                 value={client}
-                onChange={(e) => setClient(e.target.value)}
+                onChange={(e) => setClient(e.target.value as string)}
                 placeholder="Client name"
               />
             </Field>
