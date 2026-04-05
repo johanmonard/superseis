@@ -13,23 +13,65 @@ const R = 80;
 const STROKE = "currentColor";
 
 /* ===================================================================
-   Hook — continuous angle driven by rAF
+   Hover-driven animation — only runs rAF while hovered
    =================================================================== */
 
-function useAnimationAngle(durationMs: number) {
-  const [angle, setAngle] = React.useState(0);
-  React.useEffect(() => {
-    let start: number | null = null;
-    let id: number;
+const HoverContext = React.createContext(0);
+
+function HoverAnimationCard({
+  children,
+  label,
+  description,
+}: {
+  children: React.ReactNode;
+  label: string;
+  description: string;
+}) {
+  const [elapsed, setElapsed] = React.useState(0);
+  const hovering = React.useRef(false);
+  const lastTs = React.useRef<number | null>(null);
+
+  const startLoop = React.useCallback(() => {
+    hovering.current = true;
+    lastTs.current = null;
     const tick = (ts: number) => {
-      if (start === null) start = ts;
-      setAngle(((ts - start) / durationMs) * 360);
-      id = requestAnimationFrame(tick);
+      if (!hovering.current) return;
+      if (lastTs.current !== null) {
+        setElapsed((prev) => prev + (ts - lastTs.current!));
+      }
+      lastTs.current = ts;
+      requestAnimationFrame(tick);
     };
-    id = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(id);
-  }, [durationMs]);
-  return angle;
+    requestAnimationFrame(tick);
+  }, []);
+
+  const stopLoop = React.useCallback(() => {
+    hovering.current = false;
+    lastTs.current = null;
+  }, []);
+
+  return (
+    <div
+      onMouseEnter={startLoop}
+      onMouseLeave={stopLoop}
+      className="flex flex-col items-center gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] p-[var(--space-4)]"
+    >
+      <div className="flex h-[200px] w-[200px] items-center justify-center">
+        <HoverContext.Provider value={elapsed}>
+          {children}
+        </HoverContext.Provider>
+      </div>
+      <div className="text-center">
+        <p className="text-sm font-medium text-[var(--color-text-primary)]">{label}</p>
+        <p className="text-xs text-[var(--color-text-muted)]">{description}</p>
+      </div>
+    </div>
+  );
+}
+
+function useAnimationAngle(durationMs: number) {
+  const elapsed = React.useContext(HoverContext);
+  return (elapsed / durationMs) * 360;
 }
 
 /* ===================================================================
@@ -833,23 +875,14 @@ export function WireframesShowcase() {
         Wireframe Viewport Placeholders
       </h1>
       <p className="mb-[var(--space-6)] text-sm text-[var(--color-text-secondary)]">
-        Animated SVG placeholders for empty viewports. Pure SVG + requestAnimationFrame — no dependencies.
+        Animated SVG placeholders for empty viewports. Hover a card to animate.
       </p>
 
       <div className="grid grid-cols-1 gap-[var(--space-6)] sm:grid-cols-2 lg:grid-cols-3">
         {ITEMS.map(({ label, description, Component }) => (
-          <div
-            key={label}
-            className="flex flex-col items-center gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] p-[var(--space-4)]"
-          >
-            <div className="flex h-[200px] w-[200px] items-center justify-center">
-              <Component />
-            </div>
-            <div className="text-center">
-              <p className="text-sm font-medium text-[var(--color-text-primary)]">{label}</p>
-              <p className="text-xs text-[var(--color-text-muted)]">{description}</p>
-            </div>
-          </div>
+          <HoverAnimationCard key={label} label={label} description={description}>
+            <Component />
+          </HoverAnimationCard>
         ))}
       </div>
     </div>

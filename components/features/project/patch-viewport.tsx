@@ -73,7 +73,13 @@ function buildPatch(
     srcPoints.push({ x: sx, y: syStart + k * p.spi });
   }
 
-  return { recLines, recPoints, srcLine, srcPoints };
+  // Bounding rect for the patch area
+  const bx = offsetX;
+  const by = offsetY;
+  const bw = recLineLength;
+  const bh = geo.recPatchHeight;
+
+  return { recLines, recPoints, srcLine, srcPoints, bounds: { x: bx, y: by, w: bw, h: bh } };
 }
 
 /* ------------------------------------------------------------------ */
@@ -82,64 +88,52 @@ function buildPatch(
 
 function PatchGroup({
   patch,
-  recSize,
-  srcRadius,
+  rpRadius,
+  spRadius,
   opacity,
-  recColor,
-  srcColor,
+  rpColor,
+  spColor,
   lineColor,
+  lineWidth,
 }: {
   patch: ReturnType<typeof buildPatch>;
-  recSize: number;
-  srcRadius: number;
+  rpRadius: number;
+  spRadius: number;
   opacity: number;
-  recColor: string;
-  srcColor: string;
+  rpColor: string;
+  spColor: string;
   lineColor: string;
+  lineWidth: number;
 }) {
   return (
     <g opacity={opacity}>
+      {/* Patch area fill */}
+      <rect
+        x={patch.bounds.x} y={patch.bounds.y}
+        width={patch.bounds.w} height={patch.bounds.h}
+        fill={rpColor} opacity={0.06}
+      />
+
       {/* Receiver lines */}
       {patch.recLines.map((l, i) => (
-        <line
-          key={`rl-${i}`}
-          x1={l.x1}
-          y1={l.y1}
-          x2={l.x2}
-          y2={l.y2}
-          stroke={lineColor}
-          strokeWidth={0.5}
-        />
+        <line key={`rl-${i}`} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke={lineColor} strokeWidth={lineWidth} />
       ))}
+
       {/* Source line */}
       <line
-        x1={patch.srcLine.x}
-        y1={patch.srcLine.y1}
-        x2={patch.srcLine.x}
-        y2={patch.srcLine.y2}
-        stroke={srcColor}
-        strokeWidth={0.8}
+        x1={patch.srcLine.x} y1={patch.srcLine.y1}
+        x2={patch.srcLine.x} y2={patch.srcLine.y2}
+        stroke={lineColor} strokeWidth={lineWidth}
       />
-      {/* Receiver points (squares) */}
+
+      {/* Receiver points */}
       {patch.recPoints.map((pt, i) => (
-        <rect
-          key={`rp-${i}`}
-          x={pt.x - recSize / 2}
-          y={pt.y - recSize / 2}
-          width={recSize}
-          height={recSize}
-          fill={recColor}
-        />
+        <rect key={`rp-${i}`} x={pt.x - rpRadius} y={pt.y - rpRadius} width={rpRadius * 2} height={rpRadius * 2} fill={rpColor} />
       ))}
-      {/* Source points (circles) */}
+
+      {/* Source points */}
       {patch.srcPoints.map((pt, i) => (
-        <circle
-          key={`sp-${i}`}
-          cx={pt.x}
-          cy={pt.y}
-          r={srcRadius}
-          fill={srcColor}
-        />
+        <rect key={`sp-${i}`} x={pt.x - spRadius} y={pt.y - spRadius} width={spRadius * 2} height={spRadius * 2} fill={spColor} />
       ))}
     </g>
   );
@@ -204,7 +198,7 @@ export function PatchViewport({ params }: { params: PatchParams }) {
   const contentH = maxY - minY || 1;
 
   // Base viewBox (fit-all with padding)
-  const padding = 0.1;
+  const padding = 0.15;
   const padW = contentW * padding;
   const padH = contentH * padding;
   const baseVbX = minX - padW;
@@ -220,41 +214,13 @@ export function PatchViewport({ params }: { params: PatchParams }) {
   const vbX = baseCx - vbW / 2 + pan.x;
   const vbY = baseCy - vbH / 2 + pan.y;
 
-  // Scale marker sizes relative to base (not zoomed) viewport
+  // Scale marker sizes — capped so dots never overlap
   const baseScale = Math.min(baseVbW, baseVbH);
-  const baseRecSize = baseScale * 0.008;
-  const baseSrcRadius = baseScale * 0.005;
+  const minInterval = Math.min(p.rpi, p.rli, p.spi);
+  const maxDotR = minInterval * 0.35;
+  const baseRecSize = Math.min(baseScale * 0.012, maxDotR);
+  const baseSrcRadius = Math.min(baseScale * 0.007, maxDotR);
 
-  // Grid lines extending across current viewBox
-  const gridLines: React.ReactNode[] = [];
-  if (p.sli > 0) {
-    const startX = Math.floor(vbX / p.sli) * p.sli;
-    for (let x = startX; x <= vbX + vbW; x += p.sli) {
-      gridLines.push(
-        <line
-          key={`gv-${x}`}
-          x1={x} y1={vbY} x2={x} y2={vbY + vbH}
-          stroke="var(--color-border-subtle)"
-          strokeWidth={0.3}
-          strokeDasharray={`${baseScale * 0.003} ${baseScale * 0.006}`}
-        />
-      );
-    }
-  }
-  if (p.rli > 0) {
-    const startY = Math.floor(vbY / p.rli) * p.rli;
-    for (let y = startY; y <= vbY + vbH; y += p.rli) {
-      gridLines.push(
-        <line
-          key={`gh-${y}`}
-          x1={vbX} y1={y} x2={vbX + vbW} y2={y}
-          stroke="var(--color-border-subtle)"
-          strokeWidth={0.3}
-          strokeDasharray={`${baseScale * 0.003} ${baseScale * 0.006}`}
-        />
-      );
-    }
-  }
 
   // Zoom via mouse wheel
   const handleWheel = React.useCallback(
@@ -281,7 +247,6 @@ export function PatchViewport({ params }: { params: PatchParams }) {
     const dx = e.clientX - lastPos.current.x;
     const dy = e.clientY - lastPos.current.y;
     lastPos.current = { x: e.clientX, y: e.clientY };
-    // Convert screen px to SVG units
     const svgDx = -(dx / size.w) * vbW;
     const svgDy = -(dy / size.h) * vbH;
     setPan((prev) => ({ x: prev.x + svgDx, y: prev.y + svgDy }));
@@ -326,29 +291,28 @@ export function PatchViewport({ params }: { params: PatchParams }) {
         onPointerUp={handlePointerUp}
         onPointerLeave={handlePointerUp}
       >
-        {/* Background grid */}
-        {gridLines}
-
-        {/* Patch 2 (behind) — slightly larger markers */}
+        {/* Patch 2 (behind) — accent/highlight color */}
         <PatchGroup
           patch={patch2}
-          recSize={baseRecSize * 1.35}
-          srcRadius={baseSrcRadius * 1.15}
+          rpRadius={baseRecSize * 0.55}
+          spRadius={baseSrcRadius * 0.6}
           opacity={0.5}
-          recColor="var(--color-accent)"
-          srcColor="var(--color-status-warning)"
-          lineColor="var(--color-border-strong)"
+          rpColor="var(--color-accent)"
+          spColor="var(--color-accent)"
+          lineColor="var(--color-accent)"
+          lineWidth={baseRecSize * 0.15}
         />
 
-        {/* Patch 1 (on top) */}
+        {/* Patch 1 (on top) — muted/base color */}
         <PatchGroup
           patch={patch1}
-          recSize={baseRecSize}
-          srcRadius={baseSrcRadius}
-          opacity={1}
-          recColor="var(--color-accent)"
-          srcColor="var(--color-status-warning)"
-          lineColor="var(--color-border-strong)"
+          rpRadius={baseRecSize * 0.5}
+          spRadius={baseSrcRadius * 0.55}
+          opacity={0.7}
+          rpColor="var(--color-text-muted)"
+          spColor="var(--color-text-muted)"
+          lineColor="var(--color-text-muted)"
+          lineWidth={baseRecSize * 0.15}
         />
       </svg>
     </div>

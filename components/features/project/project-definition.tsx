@@ -458,7 +458,7 @@ export function ProjectDefinition() {
       {/* Viewport panel */}
       <div className="min-w-0 flex-1 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
         <div className="flex h-full flex-col items-center justify-center p-[var(--space-4)]">
-          {country ? <CountryMap country={country} /> : <ViewportPlaceholder />}
+          {country ? <CountryMap country={country} /> : <ViewportPlaceholder variant="globe" message="Select a country" />}
         </div>
       </div>
     </div>

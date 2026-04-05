@@ -210,17 +210,25 @@ export function WorkspaceSidebarNav({
                 </span>
                 <span className="flex items-center gap-[var(--space-1)]">
                   {isActivities ? (
-                    <button
-                      type="button"
+                    <span
+                      role="button"
+                      tabIndex={0}
                       aria-label="New activity"
                       onClick={(e) => {
                         e.stopPropagation();
                         setCreateActivityOpen(true);
                       }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setCreateActivityOpen(true);
+                        }
+                      }}
                       className="flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
                     >
                       <Icon icon={appIcons.plus} size={12} />
-                    </button>
+                    </span>
                   ) : null}
                   <Icon
                     icon={isSubExpanded ? appIcons.chevronDown : appIcons.chevronRight}
