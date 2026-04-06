@@ -7,6 +7,7 @@ import { Field } from "@/components/ui/field";
 
 const { check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
 import { Input } from "@/components/ui/input";
+import { SliderInput } from "@/components/ui/slider-input";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------
@@ -187,7 +188,7 @@ export function ProjectDesign({
       rli: "360",
       spi: "40",
       sli: "360",
-      activeRl: "13",
+      activeRl: "12",
       activeRp: "110",
       spSalvo: "9",
       roll: "1",
@@ -240,75 +241,83 @@ export function ProjectDesign({
       <div className="h-px bg-[var(--color-border-subtle)]" />
 
       <div className="flex flex-col gap-[var(--space-4)]">
-        <Field label="RPI" htmlFor="des-rpi" layout="horizontal">
-          <Input
-            id="des-rpi"
-            type="number"
-            value={activeGroup.rpi}
-            onChange={(e) => updateGroup(activeGroup.id, { rpi: e.target.value })}
+        <Field label="RPI" layout="horizontal">
+          <SliderInput
+            value={Number(activeGroup.rpi) || 0}
+            onChange={(v) => updateGroup(activeGroup.id, { rpi: String(v) })}
+            min={0}
+            max={100}
+            step={5}
           />
         </Field>
 
-        <Field label="RLI" htmlFor="des-rli" layout="horizontal">
-          <Input
-            id="des-rli"
-            type="number"
-            value={activeGroup.rli}
-            onChange={(e) => updateGroup(activeGroup.id, { rli: e.target.value })}
+        <Field label="RLI" layout="horizontal">
+          <SliderInput
+            value={Number(activeGroup.rli) || 0}
+            onChange={(v) => updateGroup(activeGroup.id, { rli: String(v) })}
+            min={0}
+            max={500}
+            step={10}
           />
         </Field>
 
-        <Field label="SPI" htmlFor="des-spi" layout="horizontal">
-          <Input
-            id="des-spi"
-            type="number"
-            value={activeGroup.spi}
-            onChange={(e) => updateGroup(activeGroup.id, { spi: e.target.value })}
+        <Field label="SPI" layout="horizontal">
+          <SliderInput
+            value={Number(activeGroup.spi) || 0}
+            onChange={(v) => updateGroup(activeGroup.id, { spi: String(v) })}
+            min={0}
+            max={100}
+            step={5}
           />
         </Field>
 
-        <Field label="SLI" htmlFor="des-sli" layout="horizontal">
-          <Input
-            id="des-sli"
-            type="number"
-            value={activeGroup.sli}
-            onChange={(e) => updateGroup(activeGroup.id, { sli: e.target.value })}
+        <Field label="SLI" layout="horizontal">
+          <SliderInput
+            value={Number(activeGroup.sli) || 0}
+            onChange={(v) => updateGroup(activeGroup.id, { sli: String(v) })}
+            min={0}
+            max={500}
+            step={10}
           />
         </Field>
 
-        <Field label="Active RL" htmlFor="des-active-rl" layout="horizontal">
-          <Input
-            id="des-active-rl"
-            type="number"
-            value={activeGroup.activeRl}
-            onChange={(e) => updateGroup(activeGroup.id, { activeRl: e.target.value })}
+        <Field label="Active RL" layout="horizontal">
+          <SliderInput
+            value={Number(activeGroup.activeRl) || 0}
+            onChange={(v) => updateGroup(activeGroup.id, { activeRl: String(v) })}
+            min={1}
+            max={20}
+            step={1}
           />
         </Field>
 
-        <Field label="Active RP" htmlFor="des-active-rp" layout="horizontal">
-          <Input
-            id="des-active-rp"
-            type="number"
-            value={activeGroup.activeRp}
-            onChange={(e) => updateGroup(activeGroup.id, { activeRp: e.target.value })}
+        <Field label="Active RP" layout="horizontal">
+          <SliderInput
+            value={Number(activeGroup.activeRp) || 0}
+            onChange={(v) => updateGroup(activeGroup.id, { activeRp: String(v) })}
+            min={1}
+            max={500}
+            step={10}
           />
         </Field>
 
-        <Field label="SP/salvo" htmlFor="des-sp-salvo" layout="horizontal">
-          <Input
-            id="des-sp-salvo"
-            type="number"
-            value={activeGroup.spSalvo}
-            onChange={(e) => updateGroup(activeGroup.id, { spSalvo: e.target.value })}
+        <Field label="SP/salvo" layout="horizontal">
+          <SliderInput
+            value={Number(activeGroup.spSalvo) || 0}
+            onChange={(v) => updateGroup(activeGroup.id, { spSalvo: String(v) })}
+            min={1}
+            max={500}
+            step={1}
           />
         </Field>
 
-        <Field label="Roll" htmlFor="des-roll" layout="horizontal">
-          <Input
-            id="des-roll"
-            type="number"
-            value={activeGroup.roll}
-            onChange={(e) => updateGroup(activeGroup.id, { roll: e.target.value })}
+        <Field label="Roll" layout="horizontal">
+          <SliderInput
+            value={Number(activeGroup.roll) || 0}
+            onChange={(v) => updateGroup(activeGroup.id, { roll: String(v) })}
+            min={1}
+            max={10}
+            step={1}
           />
         </Field>
       </div>

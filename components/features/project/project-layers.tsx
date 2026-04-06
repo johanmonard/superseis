@@ -27,17 +27,15 @@ interface LayerConfig {
   sourceValues: string[];
 }
 
-let layerCounter = 0;
-
-function createLayer(): LayerConfig {
-  layerCounter++;
-  const code = `layer_${String(layerCounter).padStart(2, "0")}`;
+function createLayer(index: number): LayerConfig {
+  const n = index + 1;
+  const code = `layer_${String(n).padStart(2, "0")}`;
   return {
     id: crypto.randomUUID(),
-    name: `Layer ${layerCounter}`,
+    name: `Layer ${n}`,
     code,
     buffer: "0",
-    color: PALETTE[layerCounter % PALETTE.length],
+    color: PALETTE[n % PALETTE.length],
     from: "gis",
     sourceFiles: [],
     sourceField: "fclass",
@@ -186,7 +184,7 @@ function ColorPicker({
    ------------------------------------------------------------------ */
 
 export function ProjectLayers() {
-  const [layers, setLayers] = React.useState<LayerConfig[]>([createLayer()]);
+  const [layers, setLayers] = React.useState<LayerConfig[]>([createLayer(0)]);
   const [activeId, setActiveId] = React.useState(layers[0].id);
 
   const activeLayer = layers.find((l) => l.id === activeId) ?? layers[0];
@@ -199,9 +197,11 @@ export function ProjectLayers() {
   );
 
   const addLayer = React.useCallback(() => {
-    const l = createLayer();
-    setLayers((prev) => [...prev, l]);
-    setActiveId(l.id);
+    setLayers((prev) => {
+      const l = createLayer(prev.length);
+      setActiveId(l.id);
+      return [...prev, l];
+    });
   }, []);
 
   const deleteLayer = React.useCallback(

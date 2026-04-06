@@ -128,6 +128,73 @@ function createCrewOption(name: string): CrewOption {
   return { id: crypto.randomUUID(), name, activities: [] };
 }
 
+function res(name: string, max: number): Resource {
+  return { id: crypto.randomUUID(), name, max };
+}
+
+function buildDummyOption(): CrewOption {
+  const ids = {
+    permSP: crypto.randomUUID(),
+    permRP: crypto.randomUUID(),
+    survSP: crypto.randomUUID(),
+    survRP: crypto.randomUUID(),
+    dozing: crypto.randomUUID(),
+    drilling: crypto.randomUUID(),
+    layout: crypto.randomUUID(),
+    recording: crypto.randomUUID(),
+    pickup: crypto.randomUUID(),
+    green: crypto.randomUUID(),
+  };
+
+  return {
+    id: crypto.randomUUID(),
+    name: "Option 1",
+    activities: [
+      {
+        id: ids.permSP, name: "Permitting SP", pointType: "SP", predecessors: [],
+        resources: [res("Permit", 5)],
+      },
+      {
+        id: ids.permRP, name: "Permitting RP", pointType: "RP", predecessors: [],
+        resources: [res("Permit", 5)],
+      },
+      {
+        id: ids.survSP, name: "Survey SP", pointType: "SP", predecessors: [ids.permSP],
+        resources: [res("RTK", 10), res("TC", 5), res("Inertial Station", 1)],
+      },
+      {
+        id: ids.survRP, name: "Survey RP", pointType: "RP", predecessors: [ids.permRP],
+        resources: [res("RTK", 10), res("TC", 5), res("Inertial Station", 1)],
+      },
+      {
+        id: ids.dozing, name: "Dozing", pointType: "SP", predecessors: [ids.survSP],
+        resources: [res("D8", 4), res("D9", 2)],
+      },
+      {
+        id: ids.drilling, name: "Drilling", pointType: "SP", predecessors: [ids.survSP],
+        resources: [res("B200P", 8), res("TD40", 6), res("B500T", 4)],
+      },
+      {
+        id: ids.layout, name: "Layout", pointType: "RP",
+        predecessors: [ids.dozing, ids.drilling, ids.survRP],
+        resources: [res("Land Nodes", 10), res("SW Nodes", 10)],
+      },
+      {
+        id: ids.recording, name: "Recording", pointType: "SP", predecessors: [ids.layout],
+        resources: [res("Vibrator M26", 10), res("Mini-vibe", 2), res("Shooters", 6), res("Gun boat", 2), res("Mini-gun", 1)],
+      },
+      {
+        id: ids.pickup, name: "Pickup", pointType: "RP", predecessors: [ids.recording],
+        resources: [res("Land Nodes", 10), res("SW Nodes", 10)],
+      },
+      {
+        id: ids.green, name: "Green Team", pointType: "SP", predecessors: [ids.pickup],
+        resources: [res("Cleaner", 10)],
+      },
+    ],
+  };
+}
+
 /* ------------------------------------------------------------------
    Option selector (pill-style, matches Partitioning GroupSelector)
    ------------------------------------------------------------------ */
@@ -284,7 +351,7 @@ export function ProjectCrew({
   onActivitiesChange?: (activities: CrewActivityInfo[]) => void;
 } = {}) {
   const [options, setOptions] = React.useState<CrewOption[]>([
-    createCrewOption("Option 1"),
+    buildDummyOption(),
   ]);
   const [activeId, setActiveId] = React.useState<string>(options[0].id);
 
@@ -470,7 +537,7 @@ export function ProjectCrew({
         {active.activities.map((act) => (
           <Section
             key={act.id}
-            title={`${act.name} (${act.pointType})`}
+            title={act.name}
             open={expandedActivityId === act.id}
             onToggle={(isOpen) => toggleActivity(act.id, isOpen)}
             action={

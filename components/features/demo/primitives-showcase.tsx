@@ -35,6 +35,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
+import { SliderInput } from "@/components/ui/slider-input";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -68,6 +69,7 @@ export function PrimitivesShowcase() {
   const [checkboxChecked, setCheckboxChecked] = useState(true);
   const [switchChecked, setSwitchChecked] = useState(true);
   const [sliderValue, setSliderValue] = useState([50]);
+  const [sliderInputValue, setSliderInputValue] = useState(25);
 
   return (
     <div className="space-y-[var(--space-4)]">
@@ -189,6 +191,19 @@ export function PrimitivesShowcase() {
           <p className="text-xs text-[var(--color-text-muted)]">
             Value: {sliderValue[0]}
           </p>
+        </div>
+      </Section>
+
+      {/* Slider + Input */}
+      <Section title="Slider + Input" primitive="SliderInput">
+        <div className="max-w-sm space-y-[var(--space-2)]">
+          <SliderInput
+            value={sliderInputValue}
+            onChange={setSliderInputValue}
+            min={0}
+            max={100}
+            step={1}
+          />
         </div>
       </Section>
 

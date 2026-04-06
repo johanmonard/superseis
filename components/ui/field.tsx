@@ -33,7 +33,7 @@ export function Field({
   hint,
   error,
   layout = "vertical",
-  labelWidth = "8rem",
+  labelWidth = "6rem",
   className,
   children,
 }: FieldProps) {

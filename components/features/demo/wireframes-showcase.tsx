@@ -436,18 +436,20 @@ function WireTorus() {
 function GridWave() {
   const angle = useAnimationAngle(5_000);
   const t = (angle * Math.PI) / 180;
-  const cols = 12;
-  const rows = 12;
-  const gap = 14;
+  const cols = 13;
+  const rows = 13;
+  const gap = 13;
   const ox = CX - ((cols - 1) * gap) / 2;
   const oy = CY - ((rows - 1) * gap) / 2;
+  const midC = (cols - 1) / 2;
+  const midR = (rows - 1) / 2;
 
   const dots: React.ReactNode[] = [];
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const x = ox + c * gap;
       const y = oy + r * gap;
-      const dist = Math.sqrt((c - cols / 2) ** 2 + (r - rows / 2) ** 2);
+      const dist = Math.sqrt((c - midC) ** 2 + (r - midR) ** 2);
       const wave = Math.sin(dist * 0.8 - t) * 0.5 + 0.5;
       const radius = 1.5 + wave * 3;
       const opacity = 0.25 + wave * 0.5;
@@ -844,6 +846,361 @@ function FractalTree() {
 }
 
 /* ===================================================================
+   19. Stone Drop — concentric ripples expanding from impact point
+   =================================================================== */
+
+function StoneDrop() {
+  const angle = useAnimationAngle(4_000);
+  const t = (angle % 360) / 360;
+  const IMPACT_X = CX;
+  const IMPACT_Y = CY - 10;
+  const MAX_R = R;
+  const RING_COUNT = 6;
+
+  return (
+    <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} fill="none" className="text-[var(--color-text-muted)]">
+      {/* water surface line */}
+      <line x1={10} y1={IMPACT_Y} x2={190} y2={IMPACT_Y} stroke={STROKE} strokeWidth="0.5" opacity="0.15" />
+      {/* ripples */}
+      {Array.from({ length: RING_COUNT }, (_, i) => {
+        const phase = (t + i / RING_COUNT) % 1;
+        const r = phase * MAX_R;
+        const op = 0.6 * (1 - phase);
+        // flatten vertically to simulate perspective on water surface
+        return (
+          <ellipse key={i} cx={IMPACT_X} cy={IMPACT_Y} rx={r} ry={r * 0.35} stroke={STROKE} strokeWidth="1" opacity={op} />
+        );
+      })}
+      {/* impact dot */}
+      <circle cx={IMPACT_X} cy={IMPACT_Y} r={2} fill={STROKE} opacity="0.5" />
+    </svg>
+  );
+}
+
+/* ===================================================================
+   20. Seismic P-Wave — compression wavefront radiating from source
+   =================================================================== */
+
+function SeismicPWave() {
+  const angle = useAnimationAngle(3_000);
+  const t = (angle % 360) / 360;
+  const SRC_X = 30;
+  const SRC_Y = CY;
+  const WAVES = 5;
+
+  return (
+    <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} fill="none" className="text-[var(--color-text-muted)]">
+      {/* source marker */}
+      <circle cx={SRC_X} cy={SRC_Y} r={4} fill={STROKE} opacity="0.5" />
+      <line x1={SRC_X - 6} y1={SRC_Y - 6} x2={SRC_X + 6} y2={SRC_Y + 6} stroke={STROKE} strokeWidth="1.5" opacity="0.4" />
+      <line x1={SRC_X + 6} y1={SRC_Y - 6} x2={SRC_X - 6} y2={SRC_Y + 6} stroke={STROKE} strokeWidth="1.5" opacity="0.4" />
+      {/* wavefronts — arcs expanding rightward */}
+      {Array.from({ length: WAVES }, (_, i) => {
+        const phase = (t + i / WAVES) % 1;
+        const r = phase * 160;
+        const op = 0.55 * (1 - phase);
+        return (
+          <path
+            key={i}
+            d={`M ${SRC_X + r * Math.cos(Math.PI / 3)} ${SRC_Y - r * Math.sin(Math.PI / 3)} A ${r} ${r} 0 0 1 ${SRC_X + r * Math.cos(Math.PI / 3)} ${SRC_Y + r * Math.sin(Math.PI / 3)}`}
+            stroke={STROKE} strokeWidth="1" opacity={op} fill="none"
+          />
+        );
+      })}
+      {/* ground line */}
+      <line x1={10} y1={185} x2={190} y2={185} stroke={STROKE} strokeWidth="0.6" opacity="0.2" />
+    </svg>
+  );
+}
+
+/* ===================================================================
+   21. Pond Interference — two stones creating overlapping ripples
+   =================================================================== */
+
+function PondInterference() {
+  const angle = useAnimationAngle(5_000);
+  const t = (angle % 360) / 360;
+  const sources = [{ x: 65, y: CY }, { x: 135, y: CY }];
+  const RINGS = 8;
+  const MAX_R = 90;
+
+  return (
+    <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} fill="none" className="text-[var(--color-text-muted)]">
+      {sources.map((src, si) => (
+        <React.Fragment key={si}>
+          <circle cx={src.x} cy={src.y} r={2.5} fill={STROKE} opacity="0.5" />
+          {Array.from({ length: RINGS }, (_, i) => {
+            const phase = (t + i / RINGS) % 1;
+            const r = phase * MAX_R;
+            const op = 0.45 * (1 - phase);
+            return (
+              <ellipse key={`${si}-${i}`} cx={src.x} cy={src.y} rx={r} ry={r * 0.4} stroke={STROKE} strokeWidth="0.8" opacity={op} />
+            );
+          })}
+        </React.Fragment>
+      ))}
+    </svg>
+  );
+}
+
+/* ===================================================================
+   22. Seismogram — live seismic trace wiggle
+   =================================================================== */
+
+function Seismogram() {
+  const angle = useAnimationAngle(3_000);
+  const offset = (angle / 360) * Math.PI * 2;
+  const TRACES = 5;
+  const TRACE_W = 30;
+  const STEPS = 80;
+  const TOP = 15;
+  const H = 170;
+
+  return (
+    <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} fill="none" className="text-[var(--color-text-muted)]">
+      {Array.from({ length: TRACES }, (_, tr) => {
+        const baseX = 25 + tr * TRACE_W;
+        // baseline
+        const pts = Array.from({ length: STEPS + 1 }, (_, i) => {
+          const t = i / STEPS;
+          const y = TOP + t * H;
+          // decaying burst pattern
+          const burst = Math.exp(-((t - 0.35) ** 2) * 30) + Math.exp(-((t - 0.6) ** 2) * 20) * 0.6;
+          const wiggle = Math.sin(t * 25 + offset + tr * 0.8) * burst * TRACE_W * 0.4;
+          return `${baseX + wiggle},${y}`;
+        }).join(" ");
+        return (
+          <React.Fragment key={tr}>
+            <line x1={baseX} y1={TOP} x2={baseX} y2={TOP + H} stroke={STROKE} strokeWidth="0.3" opacity="0.15" />
+            <polyline points={pts} stroke={STROKE} strokeWidth="1" opacity="0.5" fill="none" />
+          </React.Fragment>
+        );
+      })}
+    </svg>
+  );
+}
+
+/* ===================================================================
+   23. Raindrop Pool — random drops creating staggered ripples
+   =================================================================== */
+
+const RAINDROP_SEEDS = Array.from({ length: 6 }, (_, i) => {
+  const a = Math.sin(i * 197.1 + 73.7) * 43758.5453;
+  const b = Math.sin(i * 281.3 + 41.1) * 43758.5453;
+  const c = Math.sin(i * 113.5 + 197.3) * 43758.5453;
+  return {
+    x: 25 + (a - Math.floor(a)) * 150,
+    y: 30 + (b - Math.floor(b)) * 140,
+    phaseOffset: (c - Math.floor(c)),
+    maxR: 25 + (a - Math.floor(a)) * 35,
+  };
+});
+
+function RaindropPool() {
+  const angle = useAnimationAngle(6_000);
+  const t = (angle % 360) / 360;
+
+  return (
+    <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} fill="none" className="text-[var(--color-text-muted)]">
+      {RAINDROP_SEEDS.map((drop, di) => {
+        const RINGS = 4;
+        return Array.from({ length: RINGS }, (_, i) => {
+          const phase = (t + drop.phaseOffset + i / RINGS) % 1;
+          const r = phase * drop.maxR;
+          const op = 0.5 * (1 - phase);
+          return (
+            <ellipse key={`${di}-${i}`} cx={drop.x} cy={drop.y} rx={r} ry={r * 0.35} stroke={STROKE} strokeWidth="0.7" opacity={op} />
+          );
+        });
+      })}
+      {RAINDROP_SEEDS.map((drop, i) => (
+        <circle key={`d-${i}`} cx={drop.x} cy={drop.y} r={1.5} fill={STROKE} opacity="0.4" />
+      ))}
+    </svg>
+  );
+}
+
+/* ===================================================================
+   24. Cross-Section — seismic wave refracting through earth layers
+   =================================================================== */
+
+function CrossSection() {
+  const angle = useAnimationAngle(6_000);
+  const t = (angle % 360) / 360;
+  const LAYERS = [40, 80, 130, 175]; // y positions of layer boundaries
+  const SRC_X = 30;
+
+  return (
+    <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} fill="none" className="text-[var(--color-text-muted)]">
+      {/* layer boundaries */}
+      {LAYERS.map((y, i) => (
+        <line key={`l-${i}`} x1={10} y1={y} x2={190} y2={y} stroke={STROKE} strokeWidth="0.5" opacity={0.15 + i * 0.05} />
+      ))}
+      {/* surface */}
+      <line x1={10} y1={20} x2={190} y2={20} stroke={STROKE} strokeWidth="0.8" opacity="0.3" />
+      {/* source */}
+      <circle cx={SRC_X} cy={20} r={3} fill={STROKE} opacity="0.5" />
+      {/* wavefronts propagating downward with increasing velocity (wider spacing) */}
+      {Array.from({ length: 5 }, (_, i) => {
+        const phase = (t + i / 5) % 1;
+        const depth = phase * 170;
+        const spread = 20 + depth * 0.9;
+        const op = 0.5 * (1 - phase);
+        return (
+          <ellipse key={i} cx={SRC_X + depth * 0.5} cy={20 + depth} rx={spread} ry={depth * 0.15 + 5} stroke={STROKE} strokeWidth="0.8" opacity={op} />
+        );
+      })}
+      {/* receivers on surface */}
+      {Array.from({ length: 8 }, (_, i) => (
+        <rect key={`r-${i}`} x={55 + i * 16} y={17} width={3} height={6} fill={STROKE} opacity="0.35" />
+      ))}
+    </svg>
+  );
+}
+
+/* ===================================================================
+   25. Standing Wave — two opposing waves creating nodes & antinodes
+   =================================================================== */
+
+function StandingWave() {
+  const angle = useAnimationAngle(3_000);
+  const t = (angle * Math.PI) / 180;
+  const STEPS = 120;
+  const AMP = 40;
+  const FREQ = 4;
+
+  const wave1 = Array.from({ length: STEPS + 1 }, (_, i) => {
+    const x = 10 + (i / STEPS) * 180;
+    const pos = (i / STEPS) * Math.PI * FREQ;
+    const y = CY + AMP * Math.sin(pos + t) * Math.sin(pos);
+    return `${x},${y}`;
+  }).join(" ");
+
+  const envelope1 = Array.from({ length: STEPS + 1 }, (_, i) => {
+    const x = 10 + (i / STEPS) * 180;
+    const pos = (i / STEPS) * Math.PI * FREQ;
+    const y = CY + AMP * Math.abs(Math.sin(pos));
+    return `${x},${y}`;
+  }).join(" ");
+
+  const envelope2 = Array.from({ length: STEPS + 1 }, (_, i) => {
+    const x = 10 + (i / STEPS) * 180;
+    const pos = (i / STEPS) * Math.PI * FREQ;
+    const y = CY - AMP * Math.abs(Math.sin(pos));
+    return `${x},${y}`;
+  }).join(" ");
+
+  // nodes (zero displacement points)
+  const nodes: number[] = [];
+  for (let n = 0; n <= FREQ; n++) {
+    nodes.push(10 + (n / FREQ) * 180);
+  }
+
+  return (
+    <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} fill="none" className="text-[var(--color-text-muted)]">
+      {/* center line */}
+      <line x1={10} y1={CY} x2={190} y2={CY} stroke={STROKE} strokeWidth="0.4" opacity="0.15" />
+      {/* envelope */}
+      <polyline points={envelope1} stroke={STROKE} strokeWidth="0.5" opacity="0.2" fill="none" strokeDasharray="3 3" />
+      <polyline points={envelope2} stroke={STROKE} strokeWidth="0.5" opacity="0.2" fill="none" strokeDasharray="3 3" />
+      {/* wave */}
+      <polyline points={wave1} stroke={STROKE} strokeWidth="1.5" opacity="0.55" fill="none" />
+      {/* node dots */}
+      {nodes.map((x, i) => (
+        <circle key={i} cx={x} cy={CY} r={3} fill={STROKE} opacity="0.4" />
+      ))}
+    </svg>
+  );
+}
+
+/* ===================================================================
+   26. Ripple Echo — single ripple bouncing off container walls
+   =================================================================== */
+
+function RippleEcho() {
+  const angle = useAnimationAngle(5_000);
+  const t = (angle % 360) / 360;
+  const MARGIN = 15;
+  const BOX = SIZE - MARGIN * 2;
+
+  // primary ripple from center
+  const PRIMARY_RINGS = 5;
+  // reflected ripples from corners
+  const corners = [
+    { x: MARGIN, y: MARGIN },
+    { x: SIZE - MARGIN, y: MARGIN },
+    { x: MARGIN, y: SIZE - MARGIN },
+    { x: SIZE - MARGIN, y: SIZE - MARGIN },
+  ];
+
+  return (
+    <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} fill="none" className="text-[var(--color-text-muted)]">
+      {/* container */}
+      <rect x={MARGIN} y={MARGIN} width={BOX} height={BOX} stroke={STROKE} strokeWidth="0.5" opacity="0.2" rx={2} />
+      {/* primary ripples */}
+      {Array.from({ length: PRIMARY_RINGS }, (_, i) => {
+        const phase = (t + i / PRIMARY_RINGS) % 1;
+        const r = phase * 85;
+        return <circle key={`p-${i}`} cx={CX} cy={CY} r={r} stroke={STROKE} strokeWidth="0.8" opacity={0.5 * (1 - phase)} />;
+      })}
+      {/* reflected ripples from walls — delayed */}
+      {corners.map((c, ci) =>
+        Array.from({ length: 3 }, (_, i) => {
+          const phase = (t + 0.4 + i / 3) % 1;
+          const r = phase * 60;
+          return <circle key={`c-${ci}-${i}`} cx={c.x} cy={c.y} r={r} stroke={STROKE} strokeWidth="0.5" opacity={0.25 * (1 - phase)} />;
+        })
+      )}
+      {/* center dot */}
+      <circle cx={CX} cy={CY} r={2.5} fill={STROKE} opacity="0.5" />
+    </svg>
+  );
+}
+
+/* ===================================================================
+   27. Surface Wave — Rayleigh wave with retrograde particle motion
+   =================================================================== */
+
+function SurfaceWave() {
+  const angle = useAnimationAngle(4_000);
+  const t = (angle * Math.PI) / 180;
+  const COLS = 20;
+  const ROWS = 6;
+  const GAP_X = 9;
+  const GAP_Y = 14;
+  const AMP_X = 3;
+  const AMP_Y = 8;
+  const SURFACE_Y = 55;
+  const OX = 10;
+
+  return (
+    <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} fill="none" className="text-[var(--color-text-muted)]">
+      {/* surface line */}
+      <line x1={5} y1={SURFACE_Y} x2={195} y2={SURFACE_Y} stroke={STROKE} strokeWidth="0.5" opacity="0.2" />
+      {/* particle grid — retrograde elliptical motion decaying with depth */}
+      {Array.from({ length: ROWS }, (_, r) =>
+        Array.from({ length: COLS }, (_, c) => {
+          const baseX = OX + c * GAP_X;
+          const baseY = SURFACE_Y + r * GAP_Y + 10;
+          const decay = Math.exp(-r * 0.5);
+          const phase = t - c * 0.5;
+          // retrograde: x leads y by π/2
+          const dx = AMP_X * decay * Math.cos(phase);
+          const dy = AMP_Y * decay * Math.sin(phase);
+          const x = baseX + dx;
+          const y = baseY + dy;
+          return (
+            <circle key={`${r}-${c}`} cx={x} cy={y} r={1.5 + decay * 1.5} fill={STROKE} opacity={0.25 + decay * 0.35} />
+          );
+        })
+      )}
+      {/* source indicator */}
+      <polygon points={`${OX},${SURFACE_Y - 12} ${OX - 4},${SURFACE_Y - 4} ${OX + 4},${SURFACE_Y - 4}`} fill={STROKE} opacity="0.4" />
+    </svg>
+  );
+}
+
+/* ===================================================================
    Showcase layout
    =================================================================== */
 
@@ -866,6 +1223,15 @@ const ITEMS: { label: string; description: string; Component: React.FC }[] = [
   { label: "Octahedron", description: "Dual pyramid wireframe rotating in 3D", Component: SpinningOctahedron },
   { label: "Sound Bars", description: "Randomized equalizer bars", Component: SoundBars },
   { label: "Fractal Tree", description: "Recursive branches swaying in wind", Component: FractalTree },
+  { label: "Stone Drop", description: "Concentric ripples from a stone impact", Component: StoneDrop },
+  { label: "P-Wave Front", description: "Seismic compression wave radiating from source", Component: SeismicPWave },
+  { label: "Pond Interference", description: "Two stones creating overlapping ripples", Component: PondInterference },
+  { label: "Seismogram", description: "Live seismic trace wiggles", Component: Seismogram },
+  { label: "Raindrop Pool", description: "Staggered ripples from random drops", Component: RaindropPool },
+  { label: "Cross-Section", description: "Wavefront refracting through earth layers", Component: CrossSection },
+  { label: "Standing Wave", description: "Nodes and antinodes from opposing waves", Component: StandingWave },
+  { label: "Ripple Echo", description: "Ripple bouncing off container walls", Component: RippleEcho },
+  { label: "Surface Wave", description: "Rayleigh wave with retrograde particle motion", Component: SurfaceWave },
 ];
 
 export function WireframesShowcase() {

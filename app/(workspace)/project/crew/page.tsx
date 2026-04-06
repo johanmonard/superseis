@@ -9,6 +9,7 @@ import {
   type GraphConfig,
   type EdgeType,
   type RankDirection,
+  type ConnectorEnd,
 } from "@/components/features/project/crew-activity-graph";
 import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
@@ -39,7 +40,7 @@ function GraphSettingsPanel({
           <Settings size={14} />
         </button>
       ) : (
-        <div className="w-64 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] shadow-[0_4px_12px_var(--color-shadow-alpha)]">
+        <div className="w-66 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] shadow-[0_4px_12px_var(--color-shadow-alpha)]">
           <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] px-[var(--space-3)] py-[var(--space-2)]">
             <span className="text-xs font-semibold text-[var(--color-text-primary)]">Graph Settings</span>
             <button
@@ -60,6 +61,17 @@ function GraphSettingsPanel({
                 <option value="default">Bezier</option>
                 <option value="straight">Straight</option>
                 <option value="step">Step</option>
+              </Select>
+            </Field>
+
+            <Field label="Connector End" layout="horizontal">
+              <Select
+                value={config.connectorEnd}
+                onChange={(e) => onUpdate("connectorEnd", e.target.value as ConnectorEnd)}
+              >
+                <option value="none">None</option>
+                <option value="arrow">Arrow</option>
+                <option value="arrowclosed">Arrow (filled)</option>
               </Select>
             </Field>
 
@@ -102,6 +114,16 @@ function GraphSettingsPanel({
                   onCheckedChange={(checked) => onUpdate("animated", Boolean(checked))}
                 />
                 Enable
+              </label>
+            </Field>
+
+            <Field label="Handles" layout="horizontal">
+              <label className="flex items-center gap-[var(--space-2)] text-xs text-[var(--color-text-primary)]">
+                <Checkbox
+                  checked={config.showHandles}
+                  onCheckedChange={(checked) => onUpdate("showHandles", Boolean(checked))}
+                />
+                Show
               </label>
             </Field>
           </div>

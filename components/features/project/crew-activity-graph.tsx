@@ -11,6 +11,7 @@ import {
   type Node,
   type Edge,
   type NodeProps,
+  MarkerType,
   Handle,
   Position,
 } from "@xyflow/react";
@@ -39,6 +40,7 @@ type ActivityNodeData = {
   pointType: string;
   resources: ActivityResourceItem[];
   minHeight?: number;
+  showHandles?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -52,7 +54,7 @@ function ActivityNode({ data, sourcePosition, targetPosition }: NodeProps<Node<A
       // eslint-disable-next-line template/no-jsx-style-prop -- runtime sizing for rank alignment
       style={data.minHeight ? { minHeight: data.minHeight } : undefined}
     >
-      <Handle type="target" position={targetPosition ?? Position.Top} className="!bg-[var(--color-border-strong)]" />
+      <Handle type="target" position={targetPosition ?? Position.Top} className={data.showHandles === false ? "!opacity-0" : "!bg-[var(--color-border-strong)]"} />
       <div className="flex items-center gap-[var(--space-2)]">
         <span
           className={
@@ -77,7 +79,7 @@ function ActivityNode({ data, sourcePosition, targetPosition }: NodeProps<Node<A
           ))}
         </div>
       )}
-      <Handle type="source" position={sourcePosition ?? Position.Bottom} className="!bg-[var(--color-border-strong)]" />
+      <Handle type="source" position={sourcePosition ?? Position.Bottom} className={data.showHandles === false ? "!opacity-0" : "!bg-[var(--color-border-strong)]"} />
     </div>
   );
 }
@@ -90,6 +92,7 @@ const nodeTypes = { activity: ActivityNode };
 
 export type EdgeType = "smoothstep" | "default" | "straight" | "step";
 export type RankDirection = "TB" | "LR" | "BT" | "RL";
+export type ConnectorEnd = "none" | "arrow" | "arrowclosed";
 
 export interface GraphConfig {
   edgeType: EdgeType;
@@ -97,14 +100,18 @@ export interface GraphConfig {
   nodeSpacing: number;
   rankSpacing: number;
   animated: boolean;
+  connectorEnd: ConnectorEnd;
+  showHandles: boolean;
 }
 
 export const DEFAULT_GRAPH_CONFIG: GraphConfig = {
-  edgeType: "smoothstep",
+  edgeType: "step",
   rankDirection: "TB",
   nodeSpacing: 40,
   rankSpacing: 60,
   animated: false,
+  connectorEnd: "none",
+  showHandles: true,
 };
 
 // ---------------------------------------------------------------------------
@@ -129,7 +136,7 @@ function buildGraph(
     id: act.id,
     type: "activity",
     position: { x: 0, y: 0 },
-    data: { label: act.name, pointType: act.pointType, resources: act.resources },
+    data: { label: act.name, pointType: act.pointType, resources: act.resources, showHandles: config.showHandles },
     sourcePosition,
     targetPosition,
   }));
@@ -141,6 +148,9 @@ function buildGraph(
       target: act.id,
       type: config.edgeType,
       animated: config.animated,
+      ...(config.connectorEnd !== "none" && {
+        markerEnd: { type: config.connectorEnd === "arrow" ? MarkerType.Arrow : MarkerType.ArrowClosed },
+      }),
     }))
   );
 

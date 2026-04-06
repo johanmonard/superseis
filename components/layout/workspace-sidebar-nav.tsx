@@ -208,7 +208,12 @@ export function WorkspaceSidebarNav({
                   ) : null}
                   <span>{child.label}</span>
                 </span>
-                <span className="flex items-center gap-[var(--space-1)]">
+                <span className="flex flex-1 items-center">
+                  <Icon
+                    icon={isSubExpanded ? appIcons.chevronDown : appIcons.chevronRight}
+                    size={12}
+                    className="text-[var(--color-text-muted)]"
+                  />
                   {isActivities ? (
                     <span
                       role="button"
@@ -225,16 +230,12 @@ export function WorkspaceSidebarNav({
                           setCreateActivityOpen(true);
                         }
                       }}
-                      className="flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+                      className="ml-auto flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] px-[var(--space-2)] py-px text-[10px] font-medium text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
                     >
-                      <Icon icon={appIcons.plus} size={12} />
+                      <Icon icon={appIcons.plus} size={10} />
+                      Add
                     </span>
                   ) : null}
-                  <Icon
-                    icon={isSubExpanded ? appIcons.chevronDown : appIcons.chevronRight}
-                    size={12}
-                    className="text-[var(--color-text-muted)]"
-                  />
                 </span>
               </SidebarItem>
               <div

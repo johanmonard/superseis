@@ -43,24 +43,33 @@ type StepData = {
   href: string;
   status: StepStatus;
   number: number;
+  showHandles: boolean;
   onCycleStatus: (id: string) => void;
   onNavigate: (href: string) => void;
 };
 
 type EdgeType = "smoothstep" | "default" | "straight" | "step";
+type RankDirection = "TB" | "LR" | "BT" | "RL";
+type ConnectorEnd = "none" | "arrow" | "arrowclosed";
 
 interface WorkflowConfig {
   edgeType: EdgeType;
+  rankDirection: RankDirection;
+  connectorEnd: ConnectorEnd;
   nodeSpacing: number;
   rankSpacing: number;
   animated: boolean;
+  showHandles: boolean;
 }
 
 const DEFAULT_CONFIG: WorkflowConfig = {
-  edgeType: "smoothstep",
+  edgeType: "step",
+  rankDirection: "TB",
+  connectorEnd: "none",
   nodeSpacing: 40,
   rankSpacing: 60,
   animated: false,
+  showHandles: true,
 };
 
 // ---------------------------------------------------------------------------
@@ -84,13 +93,13 @@ function StepNode({ id, data, selected }: NodeProps<Node<StepData>>) {
         if (e.key === "Enter" || e.key === " ") data.onNavigate(data.href);
       }}
       className={
-        "w-52 cursor-pointer rounded-[var(--radius-md)] border bg-[var(--color-bg-surface)] p-[var(--space-3)] shadow-[0_1px_2px_var(--color-shadow-alpha)] transition-colors hover:border-[var(--color-accent)] " +
+        "w-52 h-[72px] cursor-pointer rounded-[var(--radius-md)] border bg-[var(--color-bg-surface)] p-[var(--space-3)] shadow-[0_1px_2px_var(--color-shadow-alpha)] transition-colors hover:border-[var(--color-accent)] " +
         (selected
           ? "border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]"
           : "border-[var(--color-border-subtle)]")
       }
     >
-      <Handle type="target" position={Position.Top} className="!bg-[var(--color-border-strong)]" />
+      <Handle type="target" position={Position.Top} className={data.showHandles ? "!bg-[var(--color-border-strong)]" : "!opacity-0"} />
       <div className="flex items-center gap-[var(--space-2)]">
         <button
           type="button"
@@ -113,10 +122,10 @@ function StepNode({ id, data, selected }: NodeProps<Node<StepData>>) {
           {data.label}
         </span>
       </div>
-      <p className="mt-[var(--space-1)] text-xs text-[var(--color-text-secondary)] line-clamp-2">
+      <p className="mt-[var(--space-1)] pl-[calc(1.5rem+var(--space-2))] text-xs text-[var(--color-text-secondary)] line-clamp-2">
         {data.description}
       </p>
-      <Handle type="source" position={Position.Bottom} className="!bg-[var(--color-border-strong)]" />
+      <Handle type="source" position={Position.Bottom} className={data.showHandles ? "!bg-[var(--color-border-strong)]" : "!opacity-0"} />
     </div>
   );
 }
@@ -127,7 +136,7 @@ function StepNode({ id, data, selected }: NodeProps<Node<StepData>>) {
 
 function TitleNode(_props: NodeProps) {
   return (
-    <div className="flex w-52 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-accent)] bg-[var(--color-accent)] px-[var(--space-4)] py-[var(--space-3)] shadow-[0_2px_8px_var(--color-shadow-alpha)]">
+    <div className="flex w-52 h-[72px] items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-accent)] bg-[var(--color-accent)] px-[var(--space-4)] shadow-[0_2px_8px_var(--color-shadow-alpha)]">
       <span className="text-sm font-bold tracking-wide text-[var(--color-accent-foreground)]">
         Project Settings
       </span>
@@ -163,11 +172,11 @@ const TITLE_HEIGHT = 40;
 
 function layoutElements(nodes: Node[], edges: Edge[], config: WorkflowConfig) {
   const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: "TB", nodesep: config.nodeSpacing, ranksep: config.rankSpacing });
+  g.setGraph({ rankdir: config.rankDirection, nodesep: config.nodeSpacing, ranksep: config.rankSpacing });
 
+  // Use uniform height for all nodes so Dagre produces even spacing
   for (const node of nodes) {
-    const isTitle = node.type === "title";
-    g.setNode(node.id, { width: NODE_WIDTH, height: isTitle ? TITLE_HEIGHT : NODE_HEIGHT });
+    g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
   }
   for (const edge of edges) {
     g.setEdge(edge.source, edge.target);
@@ -177,8 +186,7 @@ function layoutElements(nodes: Node[], edges: Edge[], config: WorkflowConfig) {
 
   return nodes.map((node) => {
     const pos = g.node(node.id);
-    const h = node.type === "title" ? TITLE_HEIGHT : NODE_HEIGHT;
-    return { ...node, position: { x: pos.x - NODE_WIDTH / 2, y: pos.y - h / 2 } };
+    return { ...node, position: { x: pos.x - NODE_WIDTH / 2, y: pos.y - NODE_HEIGHT / 2 } };
   });
 }
 
@@ -190,7 +198,7 @@ const noop = () => {};
 
 const TITLE_NODE_ID = "title";
 
-function createInitialNodes(): Node[] {
+function createInitialNodes(showHandles = true): Node[] {
   const titleNode: Node = {
     id: TITLE_NODE_ID,
     type: "title",
@@ -208,6 +216,7 @@ function createInitialNodes(): Node[] {
       href: step.href,
       status: "todo" as StepStatus,
       number: step.number,
+      showHandles,
       onCycleStatus: noop,
       onNavigate: noop,
     },
@@ -220,7 +229,12 @@ function createInitialEdges(config: WorkflowConfig): Edge[] {
   const edgeStyle = {
     type: config.edgeType,
     animated: config.animated,
-    markerEnd: { type: MarkerType.ArrowClosed, color: "var(--color-border-strong)" },
+    ...(config.connectorEnd !== "none" && {
+      markerEnd: {
+        type: config.connectorEnd === "arrow" ? MarkerType.Arrow : MarkerType.ArrowClosed,
+        color: "var(--color-border-strong)",
+      },
+    }),
   } as const;
 
   const titleEdge: Edge = {
@@ -267,7 +281,7 @@ function WorkflowSettingsPanel({
   }
 
   return (
-    <div className="w-64 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] shadow-[0_4px_12px_var(--color-shadow-alpha)]">
+    <div className="w-70 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] shadow-[0_4px_12px_var(--color-shadow-alpha)]">
       <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] px-[var(--space-3)] py-[var(--space-2)]">
         <span className="text-xs font-semibold text-[var(--color-text-primary)]">Workflow Settings</span>
         <button
@@ -288,6 +302,29 @@ function WorkflowSettingsPanel({
             <option value="default">Bezier</option>
             <option value="straight">Straight</option>
             <option value="step">Step</option>
+          </Select>
+        </Field>
+
+        <Field label="Connector End" layout="horizontal">
+          <Select
+            value={config.connectorEnd}
+            onChange={(e) => onUpdate("connectorEnd", e.target.value as ConnectorEnd)}
+          >
+            <option value="none">None</option>
+            <option value="arrow">Arrow</option>
+            <option value="arrowclosed">Arrow (filled)</option>
+          </Select>
+        </Field>
+
+        <Field label="Direction" layout="horizontal">
+          <Select
+            value={config.rankDirection}
+            onChange={(e) => onUpdate("rankDirection", e.target.value as RankDirection)}
+          >
+            <option value="TB">Top to Bottom</option>
+            <option value="LR">Left to Right</option>
+            <option value="BT">Bottom to Top</option>
+            <option value="RL">Right to Left</option>
           </Select>
         </Field>
 
@@ -318,6 +355,16 @@ function WorkflowSettingsPanel({
               onCheckedChange={(checked) => onUpdate("animated", Boolean(checked))}
             />
             Enable
+          </label>
+        </Field>
+
+        <Field label="Handles" layout="horizontal">
+          <label className="flex items-center gap-[var(--space-2)] text-xs text-[var(--color-text-primary)]">
+            <Checkbox
+              checked={config.showHandles}
+              onCheckedChange={(checked) => onUpdate("showHandles", Boolean(checked))}
+            />
+            Show
           </label>
         </Field>
       </div>
@@ -351,7 +398,7 @@ function ProjectSettingsWorkflowInner() {
   const definitionStatus = getDefinitionStatus(definition);
 
   // Compute layout from config
-  const rawNodes = useMemo(() => createInitialNodes(), []);
+  const rawNodes = useMemo(() => createInitialNodes(config.showHandles), [config.showHandles]);
   const initialEdges = useMemo(() => createInitialEdges(config), [config]);
   const initialLayoutedNodes = useMemo(
     () => layoutElements(rawNodes, initialEdges, config),
@@ -381,7 +428,7 @@ function ProjectSettingsWorkflowInner() {
       for (const n of nds) {
         if (n.type === "step") statusMap.set(n.id, (n.data as StepData).status);
       }
-      const fresh = createInitialNodes().map((n) => {
+      const fresh = createInitialNodes(config.showHandles).map((n) => {
         if (n.type === "step" && statusMap.has(n.id)) {
           return { ...n, data: { ...n.data, status: statusMap.get(n.id) } };
         }

@@ -19,13 +19,10 @@ interface MapConfig {
   layers: string[];
 }
 
-let mapCounter = 0;
-
-function createMap(): MapConfig {
-  mapCounter++;
+function createMap(index: number): MapConfig {
   return {
     id: crypto.randomUUID(),
-    name: `Map ${mapCounter}`,
+    name: `Map ${index + 1}`,
     layers: [],
   };
 }
@@ -229,7 +226,7 @@ function SortableLayerList({
    ------------------------------------------------------------------ */
 
 export function ProjectMaps() {
-  const [maps, setMaps] = React.useState<MapConfig[]>([createMap()]);
+  const [maps, setMaps] = React.useState<MapConfig[]>([createMap(0)]);
   const [activeId, setActiveId] = React.useState(maps[0].id);
 
   const activeMap = maps.find((m) => m.id === activeId) ?? maps[0];
@@ -259,9 +256,11 @@ export function ProjectMaps() {
   );
 
   const addMap = React.useCallback(() => {
-    const m = createMap();
-    setMaps((prev) => [...prev, m]);
-    setActiveId(m.id);
+    setMaps((prev) => {
+      const m = createMap(prev.length);
+      setActiveId(m.id);
+      return [...prev, m];
+    });
   }, []);
 
   const deleteMap = React.useCallback(
