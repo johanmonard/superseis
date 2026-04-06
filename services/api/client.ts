@@ -8,6 +8,7 @@ type RequestOptions = {
   query?: QueryParams
   body?: unknown
   authMode?: 'session' | 'apiKey' | 'hybrid'
+  keepalive?: boolean
   signal?: AbortSignal
 }
 
@@ -91,6 +92,7 @@ export async function requestJson<T>(path: string, options: RequestOptions = {})
       method,
       headers,
       credentials: authMode === 'session' || authMode === 'hybrid' ? 'include' : 'omit',
+      keepalive: options.keepalive,
       signal: controller.signal,
       body:
         method === 'GET' || options.body === undefined

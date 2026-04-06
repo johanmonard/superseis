@@ -41,6 +41,17 @@ describe("requestJson", () => {
     expect(init.headers.get("X-API-Key")).toBe("test-api-key");
   });
 
+  it("passes keepalive through when requested", async () => {
+    await requestJson("/save", {
+      method: "PUT",
+      body: { name: "draft" },
+      keepalive: true,
+    });
+
+    const [, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(init.keepalive).toBe(true);
+  });
+
   it("throws ApiError on non-ok response", async () => {
     vi.stubGlobal(
       "fetch",
