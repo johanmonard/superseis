@@ -69,6 +69,12 @@ export const navigation: NavigationItem[] = [
         icon: "activity",
         children: [],
       },
+      {
+        label: "Resources",
+        href: "/project/resources",
+        icon: "blocks",
+        children: [],
+      },
     ],
   },
   // [new-module:insert-navigation]

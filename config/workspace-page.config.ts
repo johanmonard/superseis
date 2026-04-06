@@ -95,6 +95,11 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
     title: "Activities",
     subtitle: "Project activities and event log.",
   },
+  {
+    href: "/project/resources",
+    title: "Resources",
+    subtitle: "Project resources and equipment.",
+  },
   // [new-module:page-identity]
   {
     href: "/admin",

@@ -6,6 +6,10 @@ import Image from "next/image";
 
 import { CreateActivityDialog } from "../features/activities/create-activity-dialog";
 import { useActivityNavChildren } from "../features/activities/use-activity-nav-children";
+import { CreateResourceDialog } from "../features/resources/create-resource-dialog";
+import { useResourceNavChildren } from "../features/resources/use-resource-nav-children";
+import { useDeleteActivity } from "../../services/query/activities";
+import { useDeleteResource } from "../../services/query/resources";
 import type {
   NavigationChildItem,
   NavigationItem,
@@ -51,6 +55,10 @@ export function WorkspaceSidebarNav({
   const router = useRouter();
   const activityNavChildren = useActivityNavChildren();
   const [createActivityOpen, setCreateActivityOpen] = React.useState(false);
+  const resourceNavChildren = useResourceNavChildren();
+  const [createResourceOpen, setCreateResourceOpen] = React.useState(false);
+  const deleteActivityMutation = useDeleteActivity();
+  const deleteResourceMutation = useDeleteResource();
 
   const [expandedParentLabel, setExpandedParentLabel] = React.useState<string | null>(null);
   const [expandedSubParents, setExpandedSubParents] = React.useState<Set<string>>(new Set());
@@ -174,10 +182,17 @@ export function WorkspaceSidebarNav({
     ): React.ReactNode[] =>
       childrenItems.map((child) => {
         const isActivities = child.label === "Activities";
-        const effectiveChildren = isActivities
-          ? [...(child.children ?? []), ...activityNavChildren]
+        const isResources = child.label === "Resources";
+        const isDynamic = isActivities || isResources;
+        const dynamicChildren = isActivities
+          ? activityNavChildren
+          : isResources
+            ? resourceNavChildren
+            : [];
+        const effectiveChildren = isDynamic
+          ? [...(child.children ?? []), ...dynamicChildren]
           : child.children;
-        const hasSubChildren = isActivities
+        const hasSubChildren = isDynamic
           ? Boolean(child.children)
           : Boolean(child.children?.length);
 
@@ -214,20 +229,24 @@ export function WorkspaceSidebarNav({
                     size={12}
                     className="text-[var(--color-text-muted)]"
                   />
-                  {isActivities ? (
+                  {isDynamic ? (
                     <span
                       role="button"
                       tabIndex={0}
-                      aria-label="New activity"
+                      aria-label={isActivities ? "New activity" : "New resource"}
                       onClick={(e) => {
                         e.stopPropagation();
-                        setCreateActivityOpen(true);
+                        setExpandedSubParents((prev) => new Set(prev).add(child.label));
+                        if (isActivities) setCreateActivityOpen(true);
+                        if (isResources) setCreateResourceOpen(true);
                       }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
                           e.stopPropagation();
-                          setCreateActivityOpen(true);
+                          setExpandedSubParents((prev) => new Set(prev).add(child.label));
+                          if (isActivities) setCreateActivityOpen(true);
+                          if (isResources) setCreateResourceOpen(true);
                         }
                       }}
                       className="ml-auto flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] px-[var(--space-2)] py-px text-[10px] font-medium text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
@@ -248,6 +267,7 @@ export function WorkspaceSidebarNav({
                 <div className="space-y-1 pl-4 pt-1">
                   {effectiveChildren.map((sub) => {
                     const subIsActive = isActiveRoute(sub.href);
+                    const slug = isDynamic && sub.href ? sub.href.split("/").pop() : null;
                     return (
                       <SidebarItem
                         key={sub.href}
@@ -258,9 +278,9 @@ export function WorkspaceSidebarNav({
                           suppressCollapsedTooltips();
                           if (sub.href) router.push(sub.href);
                         }}
-                        className="h-7 px-[var(--space-3)]"
+                        className="group/sub h-7 px-[var(--space-3)]"
                       >
-                        <span className="flex items-center gap-[var(--space-2)]">
+                        <span className="flex w-full items-center gap-[var(--space-2)]">
                           {sub.icon ? (
                             <Icon
                               icon={appIcons[sub.icon]}
@@ -272,7 +292,22 @@ export function WorkspaceSidebarNav({
                               }
                             />
                           ) : null}
-                          <span>{sub.label}</span>
+                          <span className="flex-1 truncate text-left">{sub.label}</span>
+                          {slug ? (
+                            <button
+                              type="button"
+                              aria-label={`Delete ${sub.label}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (isActivities) deleteActivityMutation.mutate(slug);
+                                if (isResources) deleteResourceMutation.mutate(slug);
+                                if (subIsActive) router.push(child.href ?? "/");
+                              }}
+                              className="ml-auto flex-shrink-0 opacity-0 transition-opacity group-hover/sub:opacity-100 text-[var(--color-text-muted)] hover:text-[var(--color-status-danger)]"
+                            >
+                              <Icon icon={appIcons.trash} size={12} />
+                            </button>
+                          ) : null}
                         </span>
                       </SidebarItem>
                     );
@@ -315,7 +350,7 @@ export function WorkspaceSidebarNav({
           </SidebarItem>
         );
       }),
-    [activityNavChildren, expandedSubParents, isActiveRoute, router, setCreateActivityOpen, suppressCollapsedTooltips, toggleSubParent]
+    [activityNavChildren, resourceNavChildren, deleteActivityMutation, deleteResourceMutation, expandedSubParents, isActiveRoute, router, setCreateActivityOpen, setCreateResourceOpen, suppressCollapsedTooltips, toggleSubParent]
   );
 
   const renderCollapsedNavigationItem = React.useCallback(
@@ -585,6 +620,7 @@ export function WorkspaceSidebarNav({
           </SidebarFooter>
         ) : null}
         <CreateActivityDialog open={createActivityOpen} onOpenChange={setCreateActivityOpen} />
+        <CreateResourceDialog open={createResourceOpen} onOpenChange={setCreateResourceOpen} />
       </>
     </TooltipProvider>
   );
