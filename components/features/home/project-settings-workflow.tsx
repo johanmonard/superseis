@@ -168,7 +168,6 @@ const STEPS = [
 
 const NODE_WIDTH = 208;
 const NODE_HEIGHT = 72;
-const TITLE_HEIGHT = 40;
 
 function layoutElements(nodes: Node[], edges: Edge[], config: WorkflowConfig) {
   const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));

@@ -6,7 +6,6 @@ import { appIcons } from "@/components/ui/icon";
 import { Field } from "@/components/ui/field";
 
 const { check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
-import { Input } from "@/components/ui/input";
 import { SliderInput } from "@/components/ui/slider-input";
 import { cn } from "@/lib/utils";
 
