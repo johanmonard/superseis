@@ -36,6 +36,7 @@ export const navigation: NavigationItem[] = [
       { label: "React Flow", href: "/demo/reactflow", icon: "blocks" },
       { label: "Maps", href: "/demo/maps", icon: "map" },
       { label: "Wireframes", href: "/demo/wireframes", icon: "compass" },
+      { label: "GIS", href: "/demo/gis", icon: "layers" },
     ],
   },
   {

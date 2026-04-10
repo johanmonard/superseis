@@ -100,6 +100,11 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
     title: "Resources",
     subtitle: "Project resources and equipment.",
   },
+  {
+    href: "/demo/gis",
+    title: "GIS",
+    subtitle: "GIS data display and manipulation experiments.",
+  },
   // [new-module:page-identity]
   {
     href: "/admin",
