@@ -8,6 +8,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { useActiveProject } from "@/lib/use-active-project";
+import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
 
 const { download: Download } = appIcons;
 
@@ -79,14 +81,26 @@ function ProgressStep({
   );
 }
 
+interface OsmData {
+  terrainOption: string;
+  extentName: string;
+  skipIfExists: boolean;
+}
+const DEFAULT_OSM: OsmData = {
+  terrainOption: "Terrain Option 1",
+  extentName: "GISDATA",
+  skipIfExists: true,
+};
+
 /* ------------------------------------------------------------------
    Main component
    ------------------------------------------------------------------ */
 
 export function ProjectOsm() {
-  const [terrainOption, setTerrainOption] = React.useState("Terrain Option 1");
-  const [extentName, setExtentName] = React.useState("GISDATA");
-  const [skipIfExists, setSkipIfExists] = React.useState(true);
+  const { activeProject } = useActiveProject();
+  const projectId = activeProject?.id ?? null;
+
+  const { data, update, status } = useSectionData<OsmData>(projectId, "osm", DEFAULT_OSM);
 
   const [progress, setProgress] = React.useState<DownloadProgress>({
     status: "idle",
@@ -96,8 +110,8 @@ export function ProjectOsm() {
     message: "",
   });
 
-  const extents = terrainOption ? DUMMY_EXTENTS[terrainOption] ?? [] : [];
-  const canDownload = Boolean(terrainOption && extentName);
+  const extents = data.terrainOption ? DUMMY_EXTENTS[data.terrainOption] ?? [] : [];
+  const canDownload = Boolean(data.terrainOption && data.extentName);
 
   // Simulate a download
   const handleDownload = React.useCallback(() => {
@@ -123,12 +137,17 @@ export function ProjectOsm() {
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
+      {/* Header with autosave status */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">OSM</h2>
+        <AutosaveStatus status={status} />
+      </div>
+
       <Field label="Terrain Option" layout="horizontal">
         <Select
-          value={terrainOption}
+          value={data.terrainOption}
           onChange={(e) => {
-            setTerrainOption(e.target.value);
-            setExtentName("");
+            update({ ...data, terrainOption: e.target.value, extentName: "" });
           }}
         >
           <option value="">Select…</option>
@@ -140,9 +159,9 @@ export function ProjectOsm() {
 
       <Field label="Extent Name" layout="horizontal">
         <Select
-          value={extentName}
-          onChange={(e) => setExtentName(e.target.value)}
-          disabled={!terrainOption}
+          value={data.extentName}
+          onChange={(e) => update({ ...data, extentName: e.target.value })}
+          disabled={!data.terrainOption}
         >
           <option value="">Select…</option>
           {extents.map((e) => (
@@ -154,8 +173,8 @@ export function ProjectOsm() {
       <Field label="Skip if Exists" layout="horizontal">
         <div className="flex items-center pt-[var(--space-1)]">
           <Checkbox
-            checked={skipIfExists}
-            onCheckedChange={(v) => setSkipIfExists(v === true)}
+            checked={data.skipIfExists}
+            onCheckedChange={(v) => update({ ...data, skipIfExists: v === true })}
           />
         </div>
       </Field>

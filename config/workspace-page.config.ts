@@ -106,6 +106,16 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
     title: "Admin",
     subtitle: "Starter admin placeholder driven by the active authenticated session.",
   },
+  {
+    href: "/admin/companies",
+    title: "Companies",
+    subtitle: "Manage companies, their status, and user limits.",
+  },
+  {
+    href: "/admin/users",
+    title: "Users",
+    subtitle: "Manage user accounts, roles, and access.",
+  },
 ];
 
 export function getWorkspacePageIdentity(pathname: string): WorkspacePageIdentity | null {

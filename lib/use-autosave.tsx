@@ -12,35 +12,37 @@ import {
   type ProjectSectionData,
 } from "@/services/api/project-sections";
 
-type AutosaveStatus = "idle" | "saving" | "saved" | "error";
+type SaveStatus = "idle" | "saving" | "saved" | "error";
+
+const DEBOUNCE_MS = 2000;
 
 /**
- * Autosave hook for project sections.
+ * Section-data hook — React Query cache is the single source of truth.
  *
- * Saves on component unmount and browser unload. Updates the React Query
- * cache immediately so remounting shows fresh data. Ignores data until
- * hydration is complete to avoid overwriting saved data with defaults.
+ * `data`   – always reflects the latest state (server → cache → optimistic).
+ * `update` – writes to the cache immediately and debounce-saves to the server.
+ * On unmount / page-hide the pending save is flushed with `keepalive`.
+ *
+ * No local hydration dance, no readyToTrack, no race conditions.
  */
-export function useAutosave(
+export function useSectionData<T extends object>(
   projectId: number | null,
   section: string,
-  data: Record<string, unknown>,
+  defaultData: T,
 ) {
-  const { data: saved, isLoading } = useProjectSection(projectId, section);
+  const { data: serverData, isLoading } = useProjectSection(projectId, section);
   const queryClient = useQueryClient();
 
-  const [status, setStatus] = React.useState<AutosaveStatus>("idle");
+  const [status, setStatus] = React.useState<SaveStatus>("idle");
 
-  const dataRef = React.useRef(data);
+  // Refs for use in callbacks that must not re-create on every render
+  const mountedRef = React.useRef(true);
+  const pendingRef = React.useRef<Record<string, unknown> | null>(null);
+  const timerRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const projectIdRef = React.useRef(projectId);
   const sectionRef = React.useRef(section);
-  const mountedRef = React.useRef(false);
-  const lastPersistedJson = React.useRef("");
-  const inFlightJson = React.useRef<string | null>(null);
-  const readyToTrack = React.useRef(false);
+  const defaultRef = React.useRef(defaultData);
 
-  // Keep refs fresh
-  dataRef.current = data;
   projectIdRef.current = projectId;
   sectionRef.current = section;
 
@@ -51,138 +53,124 @@ export function useAutosave(
     };
   }, []);
 
-  // --- Determine initial server data for hydration ---
-  // This is derived directly from the query result, not a separate state.
-  // It's stable once loaded and doesn't re-trigger on cache updates.
-  const initialDataRef = React.useRef<Record<string, unknown> | null>(null);
-  const [initialData, setInitialData] = React.useState<Record<string, unknown> | null>(null);
-
+  // Clear pending save when project changes
   React.useEffect(() => {
-    if (initialDataRef.current !== null) return; // already captured
-    if (isLoading) return; // still loading
-    if (saved === undefined) return;
-
-    if (saved.data && Object.keys(saved.data).length > 0) {
-      initialDataRef.current = saved.data;
-      setInitialData(saved.data);
-      lastPersistedJson.current = JSON.stringify(saved.data);
-    } else {
-      initialDataRef.current = {};
-      setInitialData({});
-      // No saved data — current defaults are the baseline
-      lastPersistedJson.current = JSON.stringify(dataRef.current);
-    }
-  }, [saved, isLoading]);
-
-  // Reset on project change
-  React.useEffect(() => {
-    initialDataRef.current = null;
-    setInitialData(null);
-    lastPersistedJson.current = "";
-    inFlightJson.current = null;
-    readyToTrack.current = false;
+    pendingRef.current = null;
+    clearTimeout(timerRef.current);
     setStatus("idle");
   }, [projectId]);
 
-  const setStatusSafely = React.useCallback((nextStatus: AutosaveStatus) => {
-    if (!mountedRef.current) return;
-    setStatus(nextStatus);
-  }, []);
+  // --------------- derived data ---------------
 
-  // Called by component after it hydrates from initialData
-  const markHydrationApplied = React.useCallback(() => {
-    // Wait for the component's state update to flush, then snapshot
-    // the hydrated state as the baseline for dirty-checking.
-    requestAnimationFrame(() => {
-      lastPersistedJson.current = JSON.stringify(dataRef.current);
-      readyToTrack.current = true;
-    });
-  }, []);
-
-  // If server had no data, mark ready immediately (component keeps defaults)
-  React.useEffect(() => {
-    if (
-      initialData !== null &&
-      Object.keys(initialData).length === 0 &&
-      !readyToTrack.current
-    ) {
-      readyToTrack.current = true;
+  const data: T = React.useMemo(() => {
+    if (!serverData?.data || Object.keys(serverData.data).length === 0) {
+      return defaultRef.current;
     }
-  }, [initialData]);
+    return serverData.data as T;
+  }, [serverData]);
 
-  // --- Save logic ---
-  const saveIfDirty = React.useCallback(async (options?: { keepalive?: boolean }) => {
-    const pid = projectIdRef.current;
-    if (!pid || !readyToTrack.current) return;
+  // --------------- flush (save to server) ---------------
 
-    const json = JSON.stringify(dataRef.current);
-    if (json === lastPersistedJson.current || json === inFlightJson.current) return;
+  const flush = React.useCallback(
+    async (options?: { keepalive?: boolean }) => {
+      const pid = projectIdRef.current;
+      const sec = sectionRef.current;
+      const toSave = pendingRef.current;
+      if (!pid || !toSave) return;
 
-    const currentData = dataRef.current;
-    const sec = sectionRef.current;
-    inFlightJson.current = json;
-    setStatusSafely("saving");
+      pendingRef.current = null;
+      clearTimeout(timerRef.current);
 
-    try {
-      const savedSection = await saveProjectSection(pid, sec, currentData, {
-        keepalive: options?.keepalive,
-      });
+      if (mountedRef.current) setStatus("saving");
 
-      lastPersistedJson.current = json;
+      try {
+        const saved = await saveProjectSection(pid, sec, toSave, {
+          keepalive: options?.keepalive,
+        });
+        queryClient.setQueryData<ProjectSectionData>(
+          sectionKeys.detail(pid, sec),
+          saved,
+        );
+        if (mountedRef.current) setStatus("saved");
+      } catch {
+        if (mountedRef.current) setStatus("error");
+      }
+    },
+    [queryClient],
+  );
+
+  // --------------- update (optimistic cache + debounce) ---------------
+
+  const update = React.useCallback(
+    (newData: T) => {
+      const pid = projectIdRef.current;
+      const sec = sectionRef.current;
+      if (!pid) return;
+
+      // Optimistic cache write — consumers re-render immediately
       queryClient.setQueryData<ProjectSectionData>(
         sectionKeys.detail(pid, sec),
-        savedSection,
+        (old) => ({
+          section: sec,
+          data: newData as Record<string, unknown>,
+          updated_at: old?.updated_at ?? null,
+        }),
       );
-      setStatusSafely("saved");
-    } catch {
-      setStatusSafely("error");
-    } finally {
-      if (inFlightJson.current === json) {
-        inFlightJson.current = null;
-      }
-    }
-  }, [queryClient, setStatusSafely]);
 
-  // Save on unmount
+      // Schedule debounced save
+      pendingRef.current = newData as Record<string, unknown>;
+      clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => void flush(), DEBOUNCE_MS);
+    },
+    [queryClient, flush],
+  );
+
+  // --------------- safety-net saves ---------------
+
+  // Flush on unmount
   React.useEffect(() => {
     return () => {
-      void saveIfDirty({ keepalive: true });
+      void flush({ keepalive: true });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Save on browser unload
+  // Flush on browser unload
   React.useEffect(() => {
-    const handle = () => {
-      void saveIfDirty({ keepalive: true });
-    };
+    const handle = () => void flush({ keepalive: true });
     window.addEventListener("pagehide", handle);
     window.addEventListener("beforeunload", handle);
     return () => {
       window.removeEventListener("pagehide", handle);
       window.removeEventListener("beforeunload", handle);
     };
-  }, [saveIfDirty]);
+  }, [flush]);
 
-  // Reset "saved" after 2s
+  // Reset "saved" indicator after 2 s
   React.useEffect(() => {
     if (status !== "saved") return;
     const t = setTimeout(() => setStatus("idle"), 2000);
     return () => clearTimeout(t);
   }, [status]);
 
-  return { initialData, status, markHydrationApplied };
+  return { data, update, isLoading, status };
 }
 
 /**
- * Tiny status indicator component.
+ * Tiny status indicator — same as before.
  */
-export function AutosaveStatus({ status }: { status: AutosaveStatus }) {
+export function AutosaveStatus({ status }: { status: SaveStatus }) {
   if (status === "idle") return null;
   const label =
-    status === "saving" ? "Saving…" : status === "saved" ? "Saved" : "Save failed";
+    status === "saving"
+      ? "Saving…"
+      : status === "saved"
+        ? "Saved"
+        : "Save failed";
   const color =
-    status === "error" ? "var(--color-status-danger)" : "var(--color-text-muted)";
+    status === "error"
+      ? "var(--color-status-danger)"
+      : "var(--color-text-muted)";
   return (
     <span className="text-xs font-medium" style={{ color }}>
       {label}

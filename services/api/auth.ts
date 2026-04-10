@@ -3,7 +3,11 @@ import { ApiError, requestJson } from "./client";
 export const AUTH_SESSION_QUERY_KEY = ["auth", "session"] as const;
 
 export interface AuthSession {
-  username: string;
+  user_id: number;
+  email: string;
+  company_id: number;
+  company_name: string;
+  role: string;
   auth_type: string;
   is_admin: boolean;
 }

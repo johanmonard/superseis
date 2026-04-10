@@ -9,7 +9,6 @@ import {
 } from "@/services/config/runtimeConfig";
 import { ToastProvider } from "@/components/ui/toast";
 import { ActiveProjectProvider } from "@/lib/use-active-project";
-import { DefinitionFormProvider } from "@/lib/use-definition-form";
 
 function initConfig() {
   const result = resolveRuntimeConfig({
@@ -39,9 +38,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <ActiveProjectProvider>
-        <DefinitionFormProvider>
-          <ToastProvider>{children}</ToastProvider>
-        </DefinitionFormProvider>
+        <ToastProvider>{children}</ToastProvider>
       </ActiveProjectProvider>
     </QueryClientProvider>
   );

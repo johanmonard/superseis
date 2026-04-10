@@ -1,14 +1,23 @@
 import { requestJson } from "./client";
 
-// --- Types ---
-
 export type ProjectItem = {
-  id: string;
-  // Add fields here
+  id: number;
+  name: string;
+  created_at: string;
 };
 
-// --- API calls ---
+export type ProjectCreate = {
+  name: string;
+};
 
 export function fetchProjectList(signal?: AbortSignal): Promise<ProjectItem[]> {
   return requestJson<ProjectItem[]>("/project", { signal });
+}
+
+export function createProject(payload: ProjectCreate): Promise<ProjectItem> {
+  return requestJson<ProjectItem>("/project", { method: "POST", body: payload });
+}
+
+export function deleteProject(id: number): Promise<void> {
+  return requestJson<void>(`/project/${id}`, { method: "DELETE" });
 }

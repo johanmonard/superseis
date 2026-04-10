@@ -7,6 +7,7 @@ import { appIcons } from "@/components/ui/icon";
 const { chevronRight: ChevronRight, folderOpen: FolderOpen, plus: Plus } = appIcons;
 
 import { useActiveProject } from "@/lib/use-active-project";
+import { useProjectList, useCreateProject } from "@/services/query/project";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,17 +19,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { ProjectSettingsWorkflow } from "./project-settings-workflow";
-
-/* ------------------------------------------------------------------
-   Dummy data — replace with real project list later
-   ------------------------------------------------------------------ */
-
-const DUMMY_PROJECTS = [
-  { id: "1", name: "Groningen 2024", updatedAt: "2024-12-18" },
-  { id: "2", name: "Basel Geothermal", updatedAt: "2025-01-05" },
-  { id: "3", name: "Oklahoma Induced", updatedAt: "2025-03-22" },
-  { id: "4", name: "Vrancea Deep Monitor", updatedAt: "2025-04-01" },
-];
 
 /* ------------------------------------------------------------------
    Hooks
@@ -191,21 +181,40 @@ function ProjectListItem({
 export function HomeOverview() {
   const isDark = useIsDarkTheme();
   const { activeProject, setActiveProject } = useActiveProject();
+  const { data: projects, isLoading: isLoadingProjects } = useProjectList();
+  const createMutation = useCreateProject();
 
   const [showNewDialog, setShowNewDialog] = React.useState(false);
   const [showLoadDialog, setShowLoadDialog] = React.useState(false);
   const [newProjectName, setNewProjectName] = React.useState("");
 
+  const projectList = React.useMemo(
+    () =>
+      (projects ?? []).map((p) => ({
+        id: p.id,
+        name: p.name,
+        updatedAt: p.created_at.slice(0, 10),
+      })),
+    [projects]
+  );
+
   const handleCreateProject = () => {
     const trimmed = newProjectName.trim();
     if (!trimmed) return;
-    setActiveProject(trimmed);
-    setNewProjectName("");
-    setShowNewDialog(false);
+    createMutation.mutate(
+      { name: trimmed },
+      {
+        onSuccess: (project) => {
+          setActiveProject({ id: project.id, name: project.name });
+          setNewProjectName("");
+          setShowNewDialog(false);
+        },
+      }
+    );
   };
 
-  const handleLoadProject = (name: string) => {
-    setActiveProject(name);
+  const handleLoadProject = (project: { id: number; name: string }) => {
+    setActiveProject(project);
     setShowLoadDialog(false);
   };
 
@@ -265,7 +274,8 @@ export function HomeOverview() {
         <LoadProjectDialog
           open={showLoadDialog}
           onOpenChange={setShowLoadDialog}
-          projects={DUMMY_PROJECTS}
+          projects={projectList}
+          isLoading={isLoadingProjects}
           onSelect={handleLoadProject}
         />
       </>
@@ -289,7 +299,8 @@ export function HomeOverview() {
       <LoadProjectDialog
         open={showLoadDialog}
         onOpenChange={setShowLoadDialog}
-        projects={DUMMY_PROJECTS}
+        projects={projectList}
+          isLoading={isLoadingProjects}
         onSelect={handleLoadProject}
       />
     </>
@@ -360,12 +371,14 @@ function LoadProjectDialog({
   open,
   onOpenChange,
   projects,
+  isLoading,
   onSelect,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  projects: { id: string; name: string; updatedAt: string }[];
-  onSelect: (name: string) => void;
+  projects: { id: number; name: string; updatedAt: string }[];
+  isLoading?: boolean;
+  onSelect: (project: { id: number; name: string }) => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -373,7 +386,11 @@ function LoadProjectDialog({
         <DialogTitle>Load Project</DialogTitle>
       </DialogHeader>
       <DialogBody>
-        {projects.length === 0 ? (
+        {isLoading ? (
+          <p className="py-[var(--space-4)] text-center text-sm text-[var(--color-text-muted)]">
+            Loading projects...
+          </p>
+        ) : projects.length === 0 ? (
           <p className="py-[var(--space-4)] text-center text-sm text-[var(--color-text-muted)]">
             No projects found.
           </p>
@@ -384,7 +401,7 @@ function LoadProjectDialog({
                 key={p.id}
                 name={p.name}
                 updatedAt={p.updatedAt}
-                onClick={() => onSelect(p.name)}
+                onClick={() => onSelect({ id: p.id, name: p.name })}
               />
             ))}
           </div>

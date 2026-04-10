@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { useActiveProject } from "@/lib/use-active-project";
+import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
 
 const { plus: Plus, trash: Trash2, x: X } = appIcons;
@@ -47,6 +49,15 @@ const PALETTE = [
   "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728", "#9467BD",
   "#8C564B", "#E377C2", "#7F7F7F", "#BCBD22", "#17BECF",
 ];
+
+interface LayersData {
+  layers: LayerConfig[];
+  activeId: string;
+}
+const DEFAULT_LAYERS: LayersData = {
+  layers: [createLayer(0)],
+  activeId: "",
+};
 
 /* ------------------------------------------------------------------
    Dummy data
@@ -184,41 +195,46 @@ function ColorPicker({
    ------------------------------------------------------------------ */
 
 export function ProjectLayers() {
-  const [layers, setLayers] = React.useState<LayerConfig[]>([createLayer(0)]);
-  const [activeId, setActiveId] = React.useState(layers[0].id);
+  const { activeProject } = useActiveProject();
+  const projectId = activeProject?.id ?? null;
+
+  const { data, update, status } = useSectionData<LayersData>(projectId, "layers", DEFAULT_LAYERS);
+
+  const layers = data.layers;
+  const activeId = data.activeId || layers[0]?.id || "";
 
   const activeLayer = layers.find((l) => l.id === activeId) ?? layers[0];
 
   const updateLayer = React.useCallback(
     (id: string, patch: Partial<LayerConfig>) => {
-      setLayers((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+      update({ ...data, layers: data.layers.map((l) => (l.id === id ? { ...l, ...patch } : l)) });
     },
-    []
+    [data, update]
   );
 
   const addLayer = React.useCallback(() => {
-    setLayers((prev) => {
-      const l = createLayer(prev.length);
-      setActiveId(l.id);
-      return [...prev, l];
-    });
-  }, []);
+    const l = createLayer(data.layers.length);
+    update({ ...data, layers: [...data.layers, l], activeId: l.id });
+  }, [data, update]);
 
   const deleteLayer = React.useCallback(
     (id: string) => {
-      setLayers((prev) => {
-        const next = prev.filter((l) => l.id !== id);
-        if (activeId === id && next.length > 0) setActiveId(next[0].id);
-        return next;
-      });
+      const next = data.layers.filter((l) => l.id !== id);
+      const newActiveId = activeId === id && next.length > 0 ? next[0].id : data.activeId;
+      update({ ...data, layers: next, activeId: newActiveId });
     },
-    [activeId]
+    [data, update, activeId]
   );
 
   const sourceValues = DUMMY_SOURCE_VALUES[activeLayer.sourceField] ?? [];
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
+      {/* Autosave status */}
+      <div className="flex justify-end">
+        <AutosaveStatus status={status} />
+      </div>
+
       {/* Layer selector */}
       <div className="flex flex-col gap-[var(--space-2)]">
         <div className="flex flex-wrap items-center gap-[var(--space-1)]">
@@ -226,7 +242,7 @@ export function ProjectLayers() {
             <button
               key={l.id}
               type="button"
-              onClick={() => setActiveId(l.id)}
+              onClick={() => update({ ...data, activeId: l.id })}
               className={cn(
                 "rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-1)] text-xs font-medium transition-colors",
                 l.id === activeId

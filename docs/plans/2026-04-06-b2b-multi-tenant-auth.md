@@ -1547,6 +1547,690 @@ git commit -m "feat(db): add migration for company and user tables"
 
 ---
 
+## Task 11: Frontend admin services — companies and users API + query hooks
+
+**Files:**
+- Create: `services/api/admin-companies.ts`
+- Create: `services/api/admin-users.ts`
+- Create: `services/query/admin-companies.ts`
+- Create: `services/query/admin-users.ts`
+
+**Step 1: Create `services/api/admin-companies.ts`**
+
+```typescript
+import { requestJson } from "./client";
+
+export interface Company {
+  id: number;
+  name: string;
+  is_active: boolean;
+  max_users: number;
+  created_at: string;
+}
+
+export interface CompanyCreate {
+  name: string;
+  max_users?: number;
+}
+
+export interface CompanyUpdate {
+  name?: string;
+  is_active?: boolean;
+  max_users?: number;
+}
+
+export function fetchCompanies(signal?: AbortSignal): Promise<Company[]> {
+  return requestJson<Company[]>("/admin/companies", { signal });
+}
+
+export function createCompany(payload: CompanyCreate): Promise<Company> {
+  return requestJson<Company>("/admin/companies", { method: "POST", body: payload });
+}
+
+export function updateCompany(id: number, payload: CompanyUpdate): Promise<Company> {
+  return requestJson<Company>(`/admin/companies/${id}`, { method: "PATCH", body: payload });
+}
+```
+
+**Step 2: Create `services/api/admin-users.ts`**
+
+```typescript
+import { requestJson } from "./client";
+
+export interface AdminUser {
+  id: number;
+  email: string;
+  company_id: number;
+  role: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface AdminUserCreate {
+  email: string;
+  password: string;
+  company_id: number;
+  role?: string;
+}
+
+export interface AdminUserUpdate {
+  is_active?: boolean;
+  role?: string;
+}
+
+export function fetchUsers(signal?: AbortSignal): Promise<AdminUser[]> {
+  return requestJson<AdminUser[]>("/admin/users", { signal });
+}
+
+export function createUser(payload: AdminUserCreate): Promise<AdminUser> {
+  return requestJson<AdminUser>("/admin/users", { method: "POST", body: payload });
+}
+
+export function updateUser(id: number, payload: AdminUserUpdate): Promise<AdminUser> {
+  return requestJson<AdminUser>(`/admin/users/${id}`, { method: "PATCH", body: payload });
+}
+```
+
+**Step 3: Create `services/query/admin-companies.ts`**
+
+```typescript
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { fetchCompanies, createCompany, updateCompany } from "../api/admin-companies";
+import type { CompanyCreate, CompanyUpdate } from "../api/admin-companies";
+
+export const companyKeys = {
+  all: ["admin-companies"] as const,
+  list: () => [...companyKeys.all, "list"] as const,
+};
+
+export function useCompaniesList() {
+  return useQuery({
+    queryKey: companyKeys.list(),
+    queryFn: ({ signal }) => fetchCompanies(signal),
+  });
+}
+
+export function useCreateCompany() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: CompanyCreate) => createCompany(payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: companyKeys.all }),
+  });
+}
+
+export function useUpdateCompany() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...payload }: CompanyUpdate & { id: number }) => updateCompany(id, payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: companyKeys.all }),
+  });
+}
+```
+
+**Step 4: Create `services/query/admin-users.ts`**
+
+```typescript
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { fetchUsers, createUser, updateUser } from "../api/admin-users";
+import type { AdminUserCreate, AdminUserUpdate } from "../api/admin-users";
+
+export const adminUserKeys = {
+  all: ["admin-users"] as const,
+  list: () => [...adminUserKeys.all, "list"] as const,
+};
+
+export function useAdminUsersList() {
+  return useQuery({
+    queryKey: adminUserKeys.list(),
+    queryFn: ({ signal }) => fetchUsers(signal),
+  });
+}
+
+export function useCreateAdminUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: AdminUserCreate) => createUser(payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: adminUserKeys.all }),
+  });
+}
+
+export function useUpdateAdminUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...payload }: AdminUserUpdate & { id: number }) => updateUser(id, payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: adminUserKeys.all }),
+  });
+}
+```
+
+**Step 5: Verify frontend compiles**
+
+Run: `npx next build`
+Expected: Build succeeds
+
+**Step 6: Commit**
+
+```bash
+git add services/api/admin-companies.ts services/api/admin-users.ts services/query/admin-companies.ts services/query/admin-users.ts
+git commit -m "feat(admin): add frontend API services and query hooks for companies and users"
+```
+
+---
+
+## Task 12: Frontend admin pages — Companies and Users management
+
+**Files:**
+- Create: `app/(workspace)/admin/companies/page.tsx`
+- Create: `components/features/admin/companies-surface.tsx`
+- Create: `components/features/admin/create-company-dialog.tsx`
+- Create: `app/(workspace)/admin/users/page.tsx`
+- Create: `components/features/admin/users-surface.tsx`
+- Create: `components/features/admin/create-user-dialog.tsx`
+- Modify: `config/navigation.config.ts` (add admin sub-nav)
+- Modify: `config/workspace-page.config.ts` (add page identities)
+
+**Step 1: Create the Companies page**
+
+Create `app/(workspace)/admin/companies/page.tsx`:
+
+```typescript
+import { CompaniesSurface } from "@/components/features/admin/companies-surface";
+
+export default function CompaniesPage() {
+  return <CompaniesSurface />;
+}
+```
+
+**Step 2: Create CreateCompanyDialog**
+
+Create `components/features/admin/create-company-dialog.tsx`:
+
+```typescript
+"use client";
+
+import * as React from "react";
+
+import { Button } from "../../ui/button";
+import {
+  Dialog,
+  DialogBody,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../ui/dialog";
+import { Field } from "../../ui/field";
+import { Input } from "../../ui/input";
+import { useToast } from "../../ui/toast";
+import { useCreateCompany } from "../../../services/query/admin-companies";
+
+export function CreateCompanyDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [name, setName] = React.useState("");
+  const [maxUsers, setMaxUsers] = React.useState("5");
+  const { toast } = useToast();
+  const createMutation = useCreateCompany();
+
+  const handleCreate = () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    createMutation.mutate(
+      { name: trimmed, max_users: parseInt(maxUsers, 10) || 5 },
+      {
+        onSuccess: (company) => {
+          toast(`"${company.name}" created`, "success");
+          setName("");
+          setMaxUsers("5");
+          onOpenChange(false);
+        },
+        onError: () => {
+          toast("Failed to create company", "error");
+        },
+      }
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogHeader>
+        <DialogTitle>New Company</DialogTitle>
+      </DialogHeader>
+      <DialogBody className="space-y-4">
+        <Field label="Company name" htmlFor="company-name">
+          <Input
+            id="company-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+            placeholder="e.g. Acme Corp"
+            disabled={createMutation.isPending}
+            autoFocus
+          />
+        </Field>
+        <Field label="Max users" htmlFor="max-users">
+          <Input
+            id="max-users"
+            type="number"
+            min="1"
+            value={maxUsers}
+            onChange={(e) => setMaxUsers(e.target.value)}
+            disabled={createMutation.isPending}
+          />
+        </Field>
+      </DialogBody>
+      <DialogFooter>
+        <Button variant="secondary" size="sm" onClick={() => onOpenChange(false)} disabled={createMutation.isPending}>
+          Cancel
+        </Button>
+        <Button size="sm" onClick={handleCreate} disabled={!name.trim() || createMutation.isPending}>
+          {createMutation.isPending ? "Creating..." : "Create"}
+        </Button>
+      </DialogFooter>
+    </Dialog>
+  );
+}
+```
+
+**Step 3: Create CompaniesSurface**
+
+Create `components/features/admin/companies-surface.tsx`:
+
+```typescript
+"use client";
+
+import * as React from "react";
+
+import { Badge } from "../../ui/badge";
+import { Button } from "../../ui/button";
+import { DataTable, type DataTableColumn } from "../../ui/data-table";
+import { Skeleton } from "../../ui/skeleton";
+import { useToast } from "../../ui/toast";
+import { CreateCompanyDialog } from "./create-company-dialog";
+import { useCompaniesList, useUpdateCompany } from "../../../services/query/admin-companies";
+import type { Company } from "../../../services/api/admin-companies";
+
+export function CompaniesSurface() {
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const { data: companies, isLoading, error } = useCompaniesList();
+  const updateMutation = useUpdateCompany();
+  const { toast } = useToast();
+
+  const toggleActive = (company: Company) => {
+    updateMutation.mutate(
+      { id: company.id, is_active: !company.is_active },
+      {
+        onSuccess: (updated) => {
+          toast(`${updated.name} ${updated.is_active ? "activated" : "deactivated"}`, "success");
+        },
+      }
+    );
+  };
+
+  const columns: DataTableColumn<Company>[] = [
+    { id: "name", header: "Name", cell: (c) => c.name, tone: "strong" },
+    {
+      id: "status",
+      header: "Status",
+      cell: (c) => (
+        <Badge variant={c.is_active ? "success" : "danger"}>
+          {c.is_active ? "Active" : "Inactive"}
+        </Badge>
+      ),
+    },
+    { id: "max_users", header: "Max Users", cell: (c) => c.max_users, align: "right" },
+    {
+      id: "created_at",
+      header: "Created",
+      cell: (c) => new Date(c.created_at).toLocaleDateString(),
+      tone: "muted",
+    },
+    {
+      id: "actions",
+      header: "",
+      cell: (c) => (
+        <Button variant="ghost" size="sm" onClick={() => toggleActive(c)}>
+          {c.is_active ? "Deactivate" : "Activate"}
+        </Button>
+      ),
+      align: "right",
+    },
+  ];
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2 p-4">
+        {Array.from({ length: 3 }, (_, i) => (
+          <Skeleton key={i} height="2.5rem" />
+        ))}
+      </div>
+    );
+  }
+
+  if (error) {
+    return <p className="p-4 text-sm text-[var(--color-status-danger)]">Failed to load companies.</p>;
+  }
+
+  return (
+    <>
+      <DataTable
+        columns={columns}
+        data={companies ?? []}
+        title="Companies"
+        description="Manage client organisations and their access."
+        headerAction={
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            New Company
+          </Button>
+        }
+        emptyMessage="No companies yet."
+      />
+      <CreateCompanyDialog open={createOpen} onOpenChange={setCreateOpen} />
+    </>
+  );
+}
+```
+
+**Step 4: Create the Users page**
+
+Create `app/(workspace)/admin/users/page.tsx`:
+
+```typescript
+import { UsersSurface } from "@/components/features/admin/users-surface";
+
+export default function UsersPage() {
+  return <UsersSurface />;
+}
+```
+
+**Step 5: Create CreateUserDialog**
+
+Create `components/features/admin/create-user-dialog.tsx`:
+
+```typescript
+"use client";
+
+import * as React from "react";
+
+import { Button } from "../../ui/button";
+import {
+  Dialog,
+  DialogBody,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../ui/dialog";
+import { Field } from "../../ui/field";
+import { Input } from "../../ui/input";
+import { Select } from "../../ui/select";
+import { useToast } from "../../ui/toast";
+import { useCreateAdminUser } from "../../../services/query/admin-users";
+import { useCompaniesList } from "../../../services/query/admin-companies";
+
+export function CreateUserDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [companyId, setCompanyId] = React.useState("");
+  const [role, setRole] = React.useState("member");
+  const { toast } = useToast();
+  const createMutation = useCreateAdminUser();
+  const { data: companies } = useCompaniesList();
+
+  const handleCreate = () => {
+    if (!email.trim() || !password.trim() || !companyId) return;
+
+    createMutation.mutate(
+      {
+        email: email.trim(),
+        password: password.trim(),
+        company_id: parseInt(companyId, 10),
+        role,
+      },
+      {
+        onSuccess: (user) => {
+          toast(`User "${user.email}" created`, "success");
+          setEmail("");
+          setPassword("");
+          setCompanyId("");
+          setRole("member");
+          onOpenChange(false);
+        },
+        onError: () => {
+          toast("Failed to create user", "error");
+        },
+      }
+    );
+  };
+
+  const companyOptions = (companies ?? [])
+    .filter((c) => c.is_active)
+    .map((c) => ({ value: String(c.id), label: c.name }));
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogHeader>
+        <DialogTitle>New User</DialogTitle>
+      </DialogHeader>
+      <DialogBody className="space-y-4">
+        <Field label="Email" htmlFor="user-email">
+          <Input
+            id="user-email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="user@company.com"
+            disabled={createMutation.isPending}
+            autoFocus
+          />
+        </Field>
+        <Field label="Password" htmlFor="user-password">
+          <Input
+            id="user-password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            disabled={createMutation.isPending}
+          />
+        </Field>
+        <Field label="Company" htmlFor="user-company">
+          <Select
+            id="user-company"
+            value={companyId}
+            onChange={(e) => setCompanyId(e.target.value)}
+            disabled={createMutation.isPending}
+            options={[{ value: "", label: "Select company..." }, ...companyOptions]}
+          />
+        </Field>
+        <Field label="Role" htmlFor="user-role">
+          <Select
+            id="user-role"
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            disabled={createMutation.isPending}
+            options={[
+              { value: "viewer", label: "Viewer" },
+              { value: "member", label: "Member" },
+              { value: "admin", label: "Admin" },
+              { value: "owner", label: "Owner" },
+            ]}
+          />
+        </Field>
+      </DialogBody>
+      <DialogFooter>
+        <Button variant="secondary" size="sm" onClick={() => onOpenChange(false)} disabled={createMutation.isPending}>
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          onClick={handleCreate}
+          disabled={!email.trim() || !password.trim() || !companyId || createMutation.isPending}
+        >
+          {createMutation.isPending ? "Creating..." : "Create"}
+        </Button>
+      </DialogFooter>
+    </Dialog>
+  );
+}
+```
+
+**Step 6: Create UsersSurface**
+
+Create `components/features/admin/users-surface.tsx`:
+
+```typescript
+"use client";
+
+import * as React from "react";
+
+import { Badge } from "../../ui/badge";
+import { Button } from "../../ui/button";
+import { DataTable, type DataTableColumn } from "../../ui/data-table";
+import { Skeleton } from "../../ui/skeleton";
+import { useToast } from "../../ui/toast";
+import { CreateUserDialog } from "./create-user-dialog";
+import { useAdminUsersList, useUpdateAdminUser } from "../../../services/query/admin-users";
+import type { AdminUser } from "../../../services/api/admin-users";
+
+export function UsersSurface() {
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const { data: users, isLoading, error } = useAdminUsersList();
+  const updateMutation = useUpdateAdminUser();
+  const { toast } = useToast();
+
+  const toggleActive = (user: AdminUser) => {
+    updateMutation.mutate(
+      { id: user.id, is_active: !user.is_active },
+      {
+        onSuccess: (updated) => {
+          toast(`${updated.email} ${updated.is_active ? "activated" : "deactivated"}`, "success");
+        },
+      }
+    );
+  };
+
+  const columns: DataTableColumn<AdminUser>[] = [
+    { id: "email", header: "Email", cell: (u) => u.email, tone: "strong" },
+    { id: "role", header: "Role", cell: (u) => <Badge variant="accent">{u.role}</Badge> },
+    {
+      id: "status",
+      header: "Status",
+      cell: (u) => (
+        <Badge variant={u.is_active ? "success" : "danger"}>
+          {u.is_active ? "Active" : "Inactive"}
+        </Badge>
+      ),
+    },
+    {
+      id: "created_at",
+      header: "Created",
+      cell: (u) => new Date(u.created_at).toLocaleDateString(),
+      tone: "muted",
+    },
+    {
+      id: "actions",
+      header: "",
+      cell: (u) => (
+        <Button variant="ghost" size="sm" onClick={() => toggleActive(u)}>
+          {u.is_active ? "Deactivate" : "Activate"}
+        </Button>
+      ),
+      align: "right",
+    },
+  ];
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2 p-4">
+        {Array.from({ length: 3 }, (_, i) => (
+          <Skeleton key={i} height="2.5rem" />
+        ))}
+      </div>
+    );
+  }
+
+  if (error) {
+    return <p className="p-4 text-sm text-[var(--color-status-danger)]">Failed to load users.</p>;
+  }
+
+  return (
+    <>
+      <DataTable
+        columns={columns}
+        data={users ?? []}
+        title="Users"
+        description="Manage users across all companies."
+        headerAction={
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            New User
+          </Button>
+        }
+        emptyMessage="No users yet."
+      />
+      <CreateUserDialog open={createOpen} onOpenChange={setCreateOpen} />
+    </>
+  );
+}
+```
+
+**Step 7: Update navigation config**
+
+In `config/navigation.config.ts`, add children to the admin nav item:
+
+```typescript
+{
+  label: "Admin",
+  href: "/admin",
+  icon: "settings",
+  adminOnly: true,
+  children: [
+    { label: "Overview", href: "/admin", icon: "home" },
+    { label: "Companies", href: "/admin/companies", icon: "blocks" },
+    { label: "Users", href: "/admin/users", icon: "users" },
+  ],
+},
+```
+
+**Step 8: Update workspace page config**
+
+In `config/workspace-page.config.ts`, add:
+
+```typescript
+{
+  href: "/admin/companies",
+  title: "Companies",
+  subtitle: "Manage client organisations.",
+},
+{
+  href: "/admin/users",
+  title: "Users",
+  subtitle: "Manage users across all companies.",
+},
+```
+
+**Step 9: Verify frontend compiles**
+
+Run: `npx next build`
+Expected: Build succeeds
+
+**Step 10: Commit**
+
+```bash
+git add app/(workspace)/admin/ components/features/admin/ config/navigation.config.ts config/workspace-page.config.ts
+git commit -m "feat(admin): add companies and users management pages"
+```
+
+---
+
 ## Summary of what each role can do after implementation
 
 | Action | Super-admin (you) | Company owner/admin | Company member/viewer |

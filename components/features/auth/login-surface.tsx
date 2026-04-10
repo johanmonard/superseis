@@ -65,21 +65,19 @@ export function LoginSurface() {
           <CardDescription>
             Sign in to continue.
             <br />
-            Local development stub: any non-empty username and password create a
-            session. Usernames listed in `APP_ADMIN_USERS` are treated as admins
-            until you replace this flow.
+            Enter your email and password to sign in.
           </CardDescription>
         </div>
       </CardHeader>
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <CardContent className="space-y-3">
-          <Field label="Username" htmlFor="username">
+          <Field label="Email" htmlFor="username">
             <Input
               id="username"
               name="username"
               autoComplete="username"
-              placeholder="Username"
+              placeholder="Email"
               value={username}
               onChange={(event) => setUsername(event.target.value)}
             />

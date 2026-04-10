@@ -2,9 +2,14 @@
 
 import * as React from "react";
 
+export interface ActiveProject {
+  id: number;
+  name: string;
+}
+
 interface ActiveProjectContextValue {
-  activeProject: string | null;
-  setActiveProject: (name: string | null) => void;
+  activeProject: ActiveProject | null;
+  setActiveProject: (project: ActiveProject | null) => void;
 }
 
 const ActiveProjectContext = React.createContext<ActiveProjectContextValue>({
@@ -17,11 +22,12 @@ export function ActiveProjectProvider({
 }: {
   children: React.ReactNode;
 }) {
-  const [activeProject, setActiveProject] = React.useState<string | null>(null);
+  const [activeProject, setActiveProject] =
+    React.useState<ActiveProject | null>(null);
 
   const value = React.useMemo(
     () => ({ activeProject, setActiveProject }),
-    [activeProject]
+    [activeProject],
   );
 
   return (

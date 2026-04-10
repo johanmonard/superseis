@@ -10,6 +10,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { useActiveProject } from "@/lib/use-active-project";
+import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------
@@ -278,52 +280,61 @@ function PolygonList({
 }
 
 /* ------------------------------------------------------------------
+   Section data
+   ------------------------------------------------------------------ */
+
+interface PartitioningData {
+  groups: RegionGroup[];
+  activeId: string;
+}
+const DEFAULT_PARTITIONING: PartitioningData = {
+  groups: [createGroup("Design")],
+  activeId: "",
+};
+
+/* ------------------------------------------------------------------
    Main form
    ------------------------------------------------------------------ */
 
 export function ProjectPartitioning() {
-  const [groups, setGroups] = React.useState<RegionGroup[]>([
-    createGroup("Design"),
-  ]);
-  const [activeId, setActiveId] = React.useState(groups[0].id);
+  const { activeProject } = useActiveProject();
+  const projectId = activeProject?.id ?? null;
 
+  const { data, update, status } = useSectionData<PartitioningData>(projectId, "partitioning", DEFAULT_PARTITIONING);
+
+  const groups = data.groups;
+  const activeId = data.activeId || groups[0]?.id || "";
   const activeGroup = groups.find((g) => g.id === activeId) ?? groups[0];
 
   const updateGroup = React.useCallback(
     (id: string, patch: Partial<RegionGroup>) => {
-      setGroups((prev) =>
-        prev.map((g) => {
-          if (g.id !== id) return g;
-          const updated = { ...g, ...patch };
-          // Auto-update region tag when name changes
-          if (patch.name !== undefined) {
-            updated.regionTag =
-              patch.name.toLowerCase().replace(/\s+/g, "_") + "_reg";
-          }
-          return updated;
-        })
-      );
+      const newGroups = data.groups.map((g) => {
+        if (g.id !== id) return g;
+        const updated = { ...g, ...patch };
+        // Auto-update region tag when name changes
+        if (patch.name !== undefined) {
+          updated.regionTag =
+            patch.name.toLowerCase().replace(/\s+/g, "_") + "_reg";
+        }
+        return updated;
+      });
+      update({ ...data, groups: newGroups });
     },
-    []
+    [data, update]
   );
 
   const handleAdd = React.useCallback(() => {
     const newGroup = createGroup(`Group ${groups.length + 1}`);
-    setGroups((prev) => [...prev, newGroup]);
-    setActiveId(newGroup.id);
-  }, [groups.length]);
+    update({ ...data, groups: [...data.groups, newGroup], activeId: newGroup.id });
+  }, [data, groups.length, update]);
 
   const handleDelete = React.useCallback(
     (id: string) => {
-      setGroups((prev) => {
-        const next = prev.filter((g) => g.id !== id);
-        if (activeId === id && next.length > 0) {
-          setActiveId(next[0].id);
-        }
-        return next;
-      });
+      const next = data.groups.filter((g) => g.id !== id);
+      const newActiveId = activeId === id && next.length > 0 ? next[0].id : data.activeId;
+      update({ ...data, groups: next, activeId: newActiveId });
     },
-    [activeId]
+    [data, activeId, update]
   );
 
   const handleRename = React.useCallback(
@@ -346,11 +357,15 @@ export function ProjectPartitioning() {
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
+      <div className="flex items-center justify-end">
+        <AutosaveStatus status={status} />
+      </div>
+
       {/* Group selector */}
       <GroupSelector
         groups={groups}
         activeId={activeId}
-        onSelect={setActiveId}
+        onSelect={(id) => update({ ...data, activeId: id })}
         onAdd={handleAdd}
         onRename={handleRename}
         onDelete={handleDelete}

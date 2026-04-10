@@ -51,3 +51,9 @@ AUTH_ADMIN_USERS = [
     entry.lower()
     for entry in _read_csv_env("APP_ADMIN_USERS", "admin")
 ]
+
+# ---------------------------------------------------------------------------
+# Super admin bootstrap
+# ---------------------------------------------------------------------------
+SUPER_ADMIN_EMAIL = os.environ.get("APP_SUPER_ADMIN_EMAIL", "admin@superseis.com")
+SUPER_ADMIN_PASSWORD = os.environ.get("APP_SUPER_ADMIN_PASSWORD", "admin")

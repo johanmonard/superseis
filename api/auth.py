@@ -1,8 +1,9 @@
-# ---------------------------------------------------------------------------
-# DEVELOPMENT AUTH STUB — accepts any credentials, no real validation.
-# Replace this entire module with a proper auth provider (OAuth, OIDC, etc.)
-# before deploying to any shared or production environment.
-# ---------------------------------------------------------------------------
+"""
+Authentication — session token creation/parsing + FastAPI dependencies.
+
+The `get_current_user` dependency is the SINGLE abstraction every route uses.
+When migrating to an external provider, only this module changes.
+"""
 
 import base64
 import hashlib
@@ -13,36 +14,30 @@ from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyHeader
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import (
     API_KEY,
-    AUTH_ADMIN_USERS,
     AUTH_SESSION_COOKIE_NAME,
     AUTH_SESSION_SECRET,
     AUTH_SESSION_TTL_SECONDS,
 )
+from api.db.engine import get_db
+from api.db.models import User
 
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
 @dataclass(frozen=True)
 class AuthPrincipal:
-    username: str
+    user_id: int
+    email: str
+    company_id: int
+    company_name: str
+    role: str
     auth_type: str
     is_admin: bool
-
-
-def _is_admin_username(username: str) -> bool:
-    return username.strip().lower() in AUTH_ADMIN_USERS
-
-
-def create_auth_principal(username: str, auth_type: str = "session") -> AuthPrincipal:
-    normalized_username = username.strip()
-    return AuthPrincipal(
-        username=normalized_username,
-        auth_type=auth_type,
-        is_admin=_is_admin_username(normalized_username),
-    )
 
 
 def _b64url_encode(value: bytes) -> str:
@@ -63,10 +58,10 @@ def _sign_payload(encoded_payload: str) -> str:
     return _b64url_encode(digest)
 
 
-def create_session_token(username: str) -> str:
+def create_session_token(user_id: int) -> str:
     issued_at = int(time.time())
     payload = {
-        "sub": username,
+        "sub": user_id,
         "iat": issued_at,
         "exp": issued_at + AUTH_SESSION_TTL_SECONDS,
     }
@@ -75,7 +70,7 @@ def create_session_token(username: str) -> str:
     return f"{encoded_payload}.{signature}"
 
 
-def parse_session_token(token: str) -> AuthPrincipal | None:
+def parse_session_token(token: str) -> int | None:
     if "." not in token:
         return None
 
@@ -94,68 +89,62 @@ def parse_session_token(token: str) -> AuthPrincipal | None:
     if expires_at <= int(time.time()):
         return None
 
-    username = str(payload.get("sub", "")).strip()
-    if not username:
+    user_id = payload.get("sub")
+    if not isinstance(user_id, int):
         return None
 
-    return create_auth_principal(username, auth_type="session")
+    return user_id
 
 
-def get_session_principal(request: Request) -> AuthPrincipal | None:
+async def get_current_user(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> AuthPrincipal:
     token = request.cookies.get(AUTH_SESSION_COOKIE_NAME)
     if not token:
-        return None
-    return parse_session_token(token)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authenticated")
+
+    user_id = parse_session_token(token)
+    if user_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid or expired session")
+
+    result = await db.execute(
+        select(User).where(User.id == user_id, User.is_active == True)  # noqa: E712
+    )
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not found or inactive")
+
+    if not user.company.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Company is inactive")
+
+    return AuthPrincipal(
+        user_id=user.id,
+        email=user.email,
+        company_id=user.company_id,
+        company_name=user.company.name,
+        role=user.role,
+        auth_type="session",
+        is_admin=user.role == "super_admin",
+    )
+
+
+async def require_admin(
+    principal: AuthPrincipal = Depends(get_current_user),
+) -> AuthPrincipal:
+    if not principal.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
+    return principal
+
+
+async def require_company_admin(
+    principal: AuthPrincipal = Depends(get_current_user),
+) -> AuthPrincipal:
+    if principal.role not in ("super_admin", "owner", "admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Company admin privileges required")
+    return principal
 
 
 async def api_key_auth(key: str | None = Depends(_api_key_header)):
-    """FastAPI dependency — validates the X-API-Key header."""
     if key != API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid or missing API key",
-        )
-
-
-async def session_auth(request: Request) -> AuthPrincipal:
-    principal = get_session_principal(request)
-    if principal is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid or missing session",
-        )
-    return principal
-
-
-async def session_admin_auth(
-    principal: AuthPrincipal = Depends(session_auth),
-) -> AuthPrincipal:
-    if not principal.is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges are required for this operation",
-        )
-    return principal
-
-
-async def api_key_or_session_auth(
-    request: Request,
-    key: str | None = Depends(_api_key_header),
-) -> AuthPrincipal:
-    """Accept either API key auth or cookie session auth."""
-    session_principal = get_session_principal(request)
-    if session_principal is not None:
-        return session_principal
-
-    if key is not None:
-        if key == API_KEY:
-            return AuthPrincipal(username="api-key", auth_type="api_key", is_admin=True)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid or missing API key",
-        )
-
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="Missing authentication credentials",
-    )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid or missing API key")

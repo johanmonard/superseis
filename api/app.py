@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.db.engine import engine
+from api.db.engine import async_session_factory, engine
 from api.db.models import Base
 from api.middleware import RateLimitMiddleware
 from api.routes.auth import router as auth_router
@@ -16,6 +16,9 @@ async def lifespan(application: FastAPI):
     """Create tables on startup (safe no-op if they already exist)."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    from api.bootstrap import bootstrap_super_admin
+    async with async_session_factory() as session:
+        await bootstrap_super_admin(session)
     yield
 
 app = FastAPI(
@@ -59,13 +62,19 @@ app.include_router(auth_router)
 app.include_router(items_router)
 
 
+from api.routes.admin_companies import router as admin_companies_router
+from api.routes.admin_users import router as admin_users_router
 from api.routes.project import router as project_router
+from api.routes.project_sections import router as project_sections_router
 
 
 # [new-module:import-router]
 
 
+app.include_router(admin_companies_router)
+app.include_router(admin_users_router)
 app.include_router(project_router)
+app.include_router(project_sections_router)
 
 
 # [new-module:register-router]

@@ -39,7 +39,7 @@ export function AdminOverview() {
         <CardContent className="space-y-[var(--space-3)]">
           <div className="flex items-center gap-[var(--space-2)]">
             <p className="text-sm font-medium text-[var(--color-text-primary)]">
-              {session.username}
+              {session.email}
             </p>
             <Badge variant="accent">Admin</Badge>
           </div>

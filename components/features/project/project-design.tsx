@@ -7,6 +7,8 @@ import { Field } from "@/components/ui/field";
 
 const { check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
 import { SliderInput } from "@/components/ui/slider-input";
+import { useActiveProject } from "@/lib/use-active-project";
+import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------
@@ -41,6 +43,27 @@ function createGroup(name: string, overrides?: Partial<DesignGroup>): DesignGrou
     ...overrides,
   };
 }
+
+interface DesignData {
+  groups: DesignGroup[];
+  activeId: string;
+}
+
+const DEFAULT_DESIGN: DesignData = {
+  groups: [
+    createGroup("Design 1", {
+      rpi: "40",
+      rli: "360",
+      spi: "40",
+      sli: "360",
+      activeRl: "12",
+      activeRp: "110",
+      spSalvo: "9",
+      roll: "1",
+    }),
+  ],
+  activeId: "",
+};
 
 /* ------------------------------------------------------------------
    Group selector
@@ -181,19 +204,12 @@ export function ProjectDesign({
 }: {
   onActiveChange?: (group: DesignGroup) => void;
 } = {}) {
-  const [groups, setGroups] = React.useState<DesignGroup[]>([
-    createGroup("Design 1", {
-      rpi: "40",
-      rli: "360",
-      spi: "40",
-      sli: "360",
-      activeRl: "12",
-      activeRp: "110",
-      spSalvo: "9",
-      roll: "1",
-    }),
-  ]);
-  const [activeId, setActiveId] = React.useState(groups[0].id);
+  const { activeProject } = useActiveProject();
+  const projectId = activeProject?.id ?? null;
+
+  const { data, update, status } = useSectionData<DesignData>(projectId, "design", DEFAULT_DESIGN);
+  const groups = data.groups;
+  const activeId = data.activeId || groups[0]?.id || "";
 
   const activeGroup = groups.find((g) => g.id === activeId) ?? groups[0];
 
@@ -204,34 +220,35 @@ export function ProjectDesign({
 
   const updateGroup = React.useCallback(
     (id: string, patch: Partial<DesignGroup>) => {
-      setGroups((prev) => prev.map((g) => (g.id === id ? { ...g, ...patch } : g)));
+      update({ ...data, groups: data.groups.map((g) => (g.id === id ? { ...g, ...patch } : g)) });
     },
-    []
+    [data, update]
   );
 
   const handleAdd = React.useCallback(() => {
-    const g = createGroup(`Design ${groups.length + 1}`);
-    setGroups((prev) => [...prev, g]);
-    setActiveId(g.id);
-  }, [groups.length]);
+    const g = createGroup(`Design ${data.groups.length + 1}`);
+    update({ ...data, groups: [...data.groups, g], activeId: g.id });
+  }, [data, update]);
 
   const handleDelete = React.useCallback(
     (id: string) => {
-      setGroups((prev) => {
-        const next = prev.filter((g) => g.id !== id);
-        if (activeId === id && next.length > 0) setActiveId(next[0].id);
-        return next;
-      });
+      const next = data.groups.filter((g) => g.id !== id);
+      const newActiveId = data.activeId === id && next.length > 0 ? next[0].id : data.activeId;
+      update({ ...data, groups: next, activeId: newActiveId });
     },
-    [activeId]
+    [data, update]
   );
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
+      <div className="flex items-center justify-end">
+        <AutosaveStatus status={status} />
+      </div>
+
       <GroupSelector
         groups={groups}
         activeId={activeId}
-        onSelect={setActiveId}
+        onSelect={(id) => update({ ...data, activeId: id })}
         onAdd={handleAdd}
         onRename={(id, name) => updateGroup(id, { name })}
         onDelete={handleDelete}

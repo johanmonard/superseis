@@ -1,6 +1,10 @@
 "use client";
 
-import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
+
+import { sectionKeys, useProjectSection } from "@/services/query/project-sections";
+import type { ProjectSectionData } from "@/services/api/project-sections";
+import { useActiveProject } from "./use-active-project";
 
 export interface DefinitionFormData {
   client: string;
@@ -20,45 +24,35 @@ export function getDefinitionStatus(data: DefinitionFormData): DefinitionStatus 
   return "todo";
 }
 
-interface DefinitionFormContextValue {
-  definition: DefinitionFormData;
-  setDefinitionField: <K extends keyof DefinitionFormData>(key: K, value: DefinitionFormData[K]) => void;
-}
-
-const DEFAULT_DEFINITION: DefinitionFormData = {
+const EMPTY: DefinitionFormData = {
   client: "",
   country: "",
   epsg: "",
   second: "",
 };
 
-const DefinitionFormContext = React.createContext<DefinitionFormContextValue>({
-  definition: DEFAULT_DEFINITION,
-  setDefinitionField: () => {},
-});
+/**
+ * Read definition form data directly from the React Query cache.
+ *
+ * No local state — the query cache (populated by `useSectionData` in the
+ * Definition page) is the single source of truth.
+ */
+export function useDefinitionForm(): { definition: DefinitionFormData } {
+  const { activeProject } = useActiveProject();
+  const projectId = activeProject?.id ?? null;
+  const { data: serverData } = useProjectSection(projectId, "definition");
 
-export function DefinitionFormProvider({ children }: { children: React.ReactNode }) {
-  const [definition, setDefinition] = React.useState<DefinitionFormData>(DEFAULT_DEFINITION);
+  if (!serverData?.data || Object.keys(serverData.data).length === 0) {
+    return { definition: EMPTY };
+  }
 
-  const setDefinitionField = React.useCallback(
-    <K extends keyof DefinitionFormData>(key: K, value: DefinitionFormData[K]) => {
-      setDefinition((prev) => ({ ...prev, [key]: value }));
+  const d = serverData.data as Record<string, string>;
+  return {
+    definition: {
+      client: d.client ?? "",
+      country: d.country ?? "",
+      epsg: d.epsg ?? "",
+      second: d.second ?? "",
     },
-    [],
-  );
-
-  const value = React.useMemo(
-    () => ({ definition, setDefinitionField }),
-    [definition, setDefinitionField],
-  );
-
-  return (
-    <DefinitionFormContext.Provider value={value}>
-      {children}
-    </DefinitionFormContext.Provider>
-  );
-}
-
-export function useDefinitionForm() {
-  return React.useContext(DefinitionFormContext);
+  };
 }

@@ -4,7 +4,8 @@ import * as React from "react";
 import { appIcons } from "@/components/ui/icon";
 
 import { Button } from "@/components/ui/button";
-
+import { useActiveProject } from "@/lib/use-active-project";
+import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
 
 const { check: Check, gripVertical: GripVertical, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
@@ -26,6 +27,15 @@ function createMap(index: number): MapConfig {
     layers: [],
   };
 }
+
+interface MapsData {
+  maps: MapConfig[];
+  activeId: string;
+}
+const DEFAULT_MAPS: MapsData = {
+  maps: [createMap(0)],
+  activeId: "",
+};
 
 const DUMMY_AVAILABLE_LAYERS = [
   "roads",
@@ -226,8 +236,13 @@ function SortableLayerList({
    ------------------------------------------------------------------ */
 
 export function ProjectMaps() {
-  const [maps, setMaps] = React.useState<MapConfig[]>([createMap(0)]);
-  const [activeId, setActiveId] = React.useState(maps[0].id);
+  const { activeProject } = useActiveProject();
+  const projectId = activeProject?.id ?? null;
+
+  const { data, update, status } = useSectionData<MapsData>(projectId, "maps", DEFAULT_MAPS);
+
+  const maps = data.maps;
+  const activeId = data.activeId || maps[0]?.id || "";
 
   const activeMap = maps.find((m) => m.id === activeId) ?? maps[0];
 
@@ -241,41 +256,39 @@ export function ProjectMaps() {
 
   const commitEdit = () => {
     if (editingId && editValue.trim()) {
-      setMaps((prev) =>
-        prev.map((m) => (m.id === editingId ? { ...m, name: editValue.trim() } : m))
-      );
+      update({ ...data, maps: data.maps.map((m) => (m.id === editingId ? { ...m, name: editValue.trim() } : m)) });
     }
     setEditingId(null);
   };
 
   const updateMap = React.useCallback(
     (id: string, patch: Partial<MapConfig>) => {
-      setMaps((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+      update({ ...data, maps: data.maps.map((m) => (m.id === id ? { ...m, ...patch } : m)) });
     },
-    []
+    [data, update]
   );
 
   const addMap = React.useCallback(() => {
-    setMaps((prev) => {
-      const m = createMap(prev.length);
-      setActiveId(m.id);
-      return [...prev, m];
-    });
-  }, []);
+    const m = createMap(data.maps.length);
+    update({ ...data, maps: [...data.maps, m], activeId: m.id });
+  }, [data, update]);
 
   const deleteMap = React.useCallback(
     (id: string) => {
-      setMaps((prev) => {
-        const next = prev.filter((m) => m.id !== id);
-        if (activeId === id && next.length > 0) setActiveId(next[0].id);
-        return next;
-      });
+      const next = data.maps.filter((m) => m.id !== id);
+      const newActiveId = activeId === id && next.length > 0 ? next[0].id : data.activeId;
+      update({ ...data, maps: next, activeId: newActiveId });
     },
-    [activeId]
+    [data, update, activeId]
   );
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
+      {/* Autosave status */}
+      <div className="flex justify-end">
+        <AutosaveStatus status={status} />
+      </div>
+
       {/* Map selector */}
       <div className="flex flex-col gap-[var(--space-2)]">
         <div className="flex flex-wrap items-center gap-[var(--space-1)]">
@@ -309,7 +322,7 @@ export function ProjectMaps() {
               <button
                 key={m.id}
                 type="button"
-                onClick={() => setActiveId(m.id)}
+                onClick={() => update({ ...data, activeId: m.id })}
                 className={cn(
                   "rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-1)] text-xs font-medium transition-colors",
                   m.id === activeId

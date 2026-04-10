@@ -9,6 +9,8 @@ import { CoordinateInput } from "@/components/ui/coordinate-input";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { useActiveProject } from "@/lib/use-active-project";
+import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------
@@ -81,6 +83,16 @@ function createGroup(name: string): TerrainGroup {
     activeExtentId: offsets.id,
   };
 }
+
+interface TerrainData {
+  groups: TerrainGroup[];
+  activeGroupId: string;
+}
+
+const DEFAULT_TERRAIN: TerrainData = {
+  groups: [createGroup("Terrain Option 1")],
+  activeGroupId: "",
+};
 
 /* ------------------------------------------------------------------
    Group selector (reusable pattern)
@@ -422,10 +434,12 @@ function ExtentTabs({
    ------------------------------------------------------------------ */
 
 export function ProjectTerrain() {
-  const [groups, setGroups] = React.useState<TerrainGroup[]>([
-    createGroup("Terrain Option 1"),
-  ]);
-  const [activeGroupId, setActiveGroupId] = React.useState(groups[0].id);
+  const { activeProject } = useActiveProject();
+  const projectId = activeProject?.id ?? null;
+
+  const { data, update, status } = useSectionData<TerrainData>(projectId, "terrain", DEFAULT_TERRAIN);
+  const groups = data.groups;
+  const activeGroupId = data.activeGroupId || groups[0]?.id || "";
 
   const activeGroup = groups.find((g) => g.id === activeGroupId) ?? groups[0];
   const activeExtent =
@@ -434,72 +448,84 @@ export function ProjectTerrain() {
 
   const updateGroup = React.useCallback(
     (id: string, patch: Partial<TerrainGroup>) => {
-      setGroups((prev) => prev.map((g) => (g.id === id ? { ...g, ...patch } : g)));
+      update({ ...data, groups: data.groups.map((g) => (g.id === id ? { ...g, ...patch } : g)) });
     },
-    []
+    [data, update]
   );
 
   const addGroup = React.useCallback(() => {
     const g = createGroup(`Terrain Option ${groups.length + 1}`);
-    setGroups((prev) => [...prev, g]);
-    setActiveGroupId(g.id);
-  }, [groups.length]);
+    update({ groups: [...data.groups, g], activeGroupId: g.id });
+  }, [data, groups.length, update]);
 
   const deleteGroup = React.useCallback(
     (id: string) => {
-      setGroups((prev) => {
-        const next = prev.filter((g) => g.id !== id);
-        if (activeGroupId === id && next.length > 0) setActiveGroupId(next[0].id);
-        return next;
-      });
+      const next = data.groups.filter((g) => g.id !== id);
+      const newActiveId = activeGroupId === id && next.length > 0 ? next[0].id : activeGroupId;
+      update({ groups: next, activeGroupId: newActiveId });
     },
-    [activeGroupId]
+    [data, activeGroupId, update]
   );
 
   const updateExtent = React.useCallback(
     (extentId: string, patch: Partial<ExtentTab>) => {
-      setGroups((prev) =>
-        prev.map((g) => {
+      update({
+        ...data,
+        groups: data.groups.map((g) => {
           if (g.id !== activeGroupId) return g;
           return {
             ...g,
             extents: g.extents.map((e) => (e.id === extentId ? { ...e, ...patch } : e)),
           };
-        })
-      );
+        }),
+      });
     },
-    [activeGroupId]
+    [data, activeGroupId, update]
   );
 
   const addExtent = React.useCallback(() => {
     const ext = createExtent(`Extent ${activeGroup.extents.length + 1}`);
-    updateGroup(activeGroupId, {
-      extents: [...activeGroup.extents, ext],
-      activeExtentId: ext.id,
+    update({
+      ...data,
+      groups: data.groups.map((g) =>
+        g.id === activeGroupId
+          ? { ...g, extents: [...g.extents, ext], activeExtentId: ext.id }
+          : g
+      ),
     });
-  }, [activeGroup, activeGroupId, updateGroup]);
+  }, [data, activeGroup, activeGroupId, update]);
 
   const deleteExtent = React.useCallback(
     (extentId: string) => {
-      const next = activeGroup.extents.filter((e) => e.id !== extentId);
-      updateGroup(activeGroupId, {
-        extents: next,
-        activeExtentId:
-          activeGroup.activeExtentId === extentId && next.length > 0
-            ? next[0].id
-            : activeGroup.activeExtentId,
+      const nextExtents = activeGroup.extents.filter((e) => e.id !== extentId);
+      const newActiveExtentId =
+        activeGroup.activeExtentId === extentId && nextExtents.length > 0
+          ? nextExtents[0].id
+          : activeGroup.activeExtentId;
+      update({
+        ...data,
+        groups: data.groups.map((g) =>
+          g.id === activeGroupId
+            ? { ...g, extents: nextExtents, activeExtentId: newActiveExtentId }
+            : g
+        ),
       });
     },
-    [activeGroup, activeGroupId, updateGroup]
+    [data, activeGroup, activeGroupId, update]
   );
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
+      {/* Autosave status */}
+      <div className="flex justify-end">
+        <AutosaveStatus status={status} />
+      </div>
+
       {/* Group selector */}
       <GroupSelector
         groups={groups}
         activeId={activeGroupId}
-        onSelect={setActiveGroupId}
+        onSelect={(id) => update({ ...data, activeGroupId: id })}
         onAdd={addGroup}
         onRename={(id, name) => updateGroup(id, { name })}
         onDelete={deleteGroup}

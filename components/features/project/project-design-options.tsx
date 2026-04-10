@@ -9,6 +9,8 @@ const { check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIco
 import { CoordinateInput } from "@/components/ui/coordinate-input";
 import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
+import { useActiveProject } from "@/lib/use-active-project";
+import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------
@@ -53,6 +55,16 @@ function createOption(name: string): DesignOption {
   };
 }
 
+interface DesignOptionsData {
+  options: DesignOption[];
+  activeId: string;
+}
+
+const DEFAULT_DESIGN_OPTIONS: DesignOptionsData = {
+  options: [createOption("Option 1")],
+  activeId: "",
+};
+
 /* ------------------------------------------------------------------
    Dummy data — will come from actual Design / Partitioning state
    ------------------------------------------------------------------ */
@@ -69,43 +81,51 @@ const DUMMY_REGIONS: Record<string, string[]> = {
    ------------------------------------------------------------------ */
 
 export function ProjectDesignOptions() {
-  const [options, setOptions] = React.useState<DesignOption[]>([
-    createOption("Option 1"),
-  ]);
-  const [activeId, setActiveId] = React.useState(options[0].id);
+  const { activeProject } = useActiveProject();
+  const projectId = activeProject?.id ?? null;
+
+  const { data, update, status } = useSectionData<DesignOptionsData>(projectId, "design_options", DEFAULT_DESIGN_OPTIONS);
+  const options = data.options;
+  const activeId = data.activeId || options[0]?.id || "";
 
   const activeOption = options.find((o) => o.id === activeId) ?? options[0];
 
   const updateOption = React.useCallback(
     (id: string, patch: Partial<DesignOption>) => {
-      setOptions((prev) =>
-        prev.map((o) => (o.id === id ? { ...o, ...patch } : o))
-      );
+      update({
+        ...data,
+        options: data.options.map((o) => (o.id === id ? { ...o, ...patch } : o)),
+      });
     },
-    []
+    [data, update]
   );
 
   const addOption = React.useCallback(() => {
-    const o = createOption(`Option ${options.length + 1}`);
-    setOptions((prev) => [...prev, o]);
-    setActiveId(o.id);
-  }, [options.length]);
+    const o = createOption(`Option ${data.options.length + 1}`);
+    update({
+      ...data,
+      options: [...data.options, o],
+      activeId: o.id,
+    });
+  }, [data, update]);
 
   const deleteOption = React.useCallback(
     (id: string) => {
-      setOptions((prev) => {
-        const next = prev.filter((o) => o.id !== id);
-        if (activeId === id && next.length > 0) setActiveId(next[0].id);
-        return next;
+      const next = data.options.filter((o) => o.id !== id);
+      update({
+        ...data,
+        options: next,
+        activeId: activeId === id && next.length > 0 ? next[0].id : data.activeId,
       });
     },
-    [activeId]
+    [data, activeId, update]
   );
 
   const updateRow = React.useCallback(
     (rowId: string, patch: Partial<OptionRow>) => {
-      setOptions((prev) =>
-        prev.map((o) => {
+      update({
+        ...data,
+        options: data.options.map((o) => {
           if (o.id !== activeId) return o;
           return {
             ...o,
@@ -113,10 +133,10 @@ export function ProjectDesignOptions() {
               r.id === rowId ? { ...r, ...patch } : r
             ),
           };
-        })
-      );
+        }),
+      });
     },
-    [activeId]
+    [data, activeId, update]
   );
 
   const addRow = React.useCallback(() => {
@@ -155,6 +175,10 @@ export function ProjectDesignOptions() {
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
+      <div className="flex items-center justify-end">
+        <AutosaveStatus status={status} />
+      </div>
+
       {/* Option tabs */}
       <div className="flex flex-col gap-[var(--space-2)]">
         <div className="flex flex-wrap items-center gap-[var(--space-1)]">
@@ -197,7 +221,7 @@ export function ProjectDesignOptions() {
               <button
                 key={o.id}
                 type="button"
-                onClick={() => setActiveId(o.id)}
+                onClick={() => update({ ...data, activeId: o.id })}
                 className={cn(
                   "rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-1)] text-xs font-medium transition-colors",
                   o.id === activeId

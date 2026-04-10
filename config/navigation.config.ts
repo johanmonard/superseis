@@ -80,10 +80,14 @@ export const navigation: NavigationItem[] = [
   // [new-module:insert-navigation]
   {
     label: "Admin",
-    href: "/admin",
     module: "admin",
     icon: "admin",
     section: "system",
     adminOnly: true,
+    children: [
+      { label: "Overview", href: "/admin", icon: "home" },
+      { label: "Companies", href: "/admin/companies", icon: "blocks" },
+      { label: "Users", href: "/admin/users", icon: "users" },
+    ],
   },
 ];

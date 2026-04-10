@@ -33,7 +33,7 @@ import { getApiErrorMessage } from "../../services/api/auth";
 const { folderOpen: FolderOpen, logOut: LogOut, rows3: Rows3, save: Save, upload: Upload, x: X } = appIcons;
 
 export interface WorkspacePageHeaderProps {
-  session: { username: string; is_admin: boolean };
+  session: { email: string; is_admin: boolean };
   pageTitle?: string;
   pageSubtitle?: string;
 }
@@ -77,7 +77,7 @@ export function WorkspacePageHeader({
 
   const pathname = usePathname();
   const { activeProject, setActiveProject } = useActiveProject();
-  const userInitials = session.username.slice(0, 2).toUpperCase();
+  const userInitials = session.email.slice(0, 2).toUpperCase();
   const isProjectPage = pathname.startsWith("/project") || pathname === "/";
   const [showFilesDialog, setShowFilesDialog] = React.useState(false);
 
@@ -102,7 +102,7 @@ export function WorkspacePageHeader({
             <TooltipProvider delayDuration={200}>
               <div className="pointer-events-auto flex items-center gap-[var(--space-1)] rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] px-[var(--space-3)] py-[var(--space-1)] shadow-[0_1px_2px_var(--color-shadow-alpha)]">
                 <span className="pl-[var(--space-1)] pr-[1ch] text-xs font-semibold text-[var(--color-text-primary)]">
-                  {activeProject}
+                  {activeProject.name}
                 </span>
                 <div className="h-4 w-px bg-[var(--color-border-subtle)]" />
                 <Tooltip>
@@ -149,7 +149,7 @@ export function WorkspacePageHeader({
               </div>
             </TooltipProvider>
           ) : activeProject ? (
-            <Badge variant="accent">{activeProject}</Badge>
+            <Badge variant="accent">{activeProject.name}</Badge>
           ) : null}
         </div>
         <div className="flex items-center justify-end gap-2">
@@ -194,7 +194,7 @@ export function WorkspacePageHeader({
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-bg-elevated)] text-xs font-semibold text-[var(--color-text-primary)]">
                   {userInitials}
                 </span>
-                <span className="hidden max-w-28 truncate sm:inline">{session.username}</span>
+                <span className="hidden max-w-28 truncate sm:inline">{session.email}</span>
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-72">
@@ -202,7 +202,7 @@ export function WorkspacePageHeader({
                 <div className="space-y-[var(--space-2)]">
                   <div className="flex items-center gap-[var(--space-2)]">
                     <p className="text-sm font-medium text-[var(--color-text-primary)]">
-                      {session.username}
+                      {session.email}
                     </p>
                     <Badge variant={session.is_admin ? "accent" : "outline"}>
                       {session.is_admin ? "Admin" : "User"}

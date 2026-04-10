@@ -11,29 +11,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth import AuthPrincipal, get_current_user
 from api.db.engine import get_db
-from api.db.models import Base
-
-# ---------------------------------------------------------------------------
-# Model — move to api/db/models.py when it stabilises
-# ---------------------------------------------------------------------------
-from sqlalchemy import DateTime, Integer, String, func
-from sqlalchemy.orm import Mapped, mapped_column
-
-
-class Project(Base):
-    """Project domain model. Customise columns as needed."""
-
-    __tablename__ = "project"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), nullable=False
-    )
-
-    def __repr__(self) -> str:
-        return f"<Project id={self.id} name={self.name!r}>"
+from api.db.models import Project
+from api.tenant import get_company_id
 
 
 # ---------------------------------------------------------------------------
@@ -58,14 +39,25 @@ router = APIRouter(prefix="/project", tags=["project"])
 
 
 @router.get("", response_model=list[ProjectResponse])
-async def list_project(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Project).order_by(Project.created_at.desc(), Project.id.desc()))
+async def list_project(
+    db: AsyncSession = Depends(get_db),
+    company_id: int = Depends(get_company_id),
+):
+    result = await db.execute(
+        select(Project)
+        .where(Project.company_id == company_id)
+        .order_by(Project.created_at.desc(), Project.id.desc())
+    )
     return result.scalars().all()
 
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
-async def create_project(payload: ProjectCreate, db: AsyncSession = Depends(get_db)):
-    row = Project(name=payload.name.strip())
+async def create_project(
+    payload: ProjectCreate,
+    db: AsyncSession = Depends(get_db),
+    principal: AuthPrincipal = Depends(get_current_user),
+):
+    row = Project(name=payload.name.strip(), company_id=principal.company_id)
     db.add(row)
     await db.commit()
     await db.refresh(row)
@@ -73,8 +65,14 @@ async def create_project(payload: ProjectCreate, db: AsyncSession = Depends(get_
 
 
 @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_project(item_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Project).where(Project.id == item_id))
+async def delete_project(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    company_id: int = Depends(get_company_id),
+):
+    result = await db.execute(
+        select(Project).where(Project.id == item_id, Project.company_id == company_id)
+    )
     row = result.scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")

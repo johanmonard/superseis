@@ -11,6 +11,8 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Section } from "@/components/features/activities/section";
 import { cn } from "@/lib/utils";
+import { useActiveProject } from "@/lib/use-active-project";
+import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
 
 /* ------------------------------------------------------------------
    Tag select (matches Layers source-file picker)
@@ -195,6 +197,15 @@ function buildDummyOption(): CrewOption {
   };
 }
 
+interface CrewData {
+  options: CrewOption[];
+  activeId: string;
+}
+const DEFAULT_CREW: CrewData = {
+  options: [buildDummyOption()],
+  activeId: "",
+};
+
 /* ------------------------------------------------------------------
    Option selector (pill-style, matches Partitioning GroupSelector)
    ------------------------------------------------------------------ */
@@ -350,10 +361,13 @@ export function ProjectCrew({
 }: {
   onActivitiesChange?: (activities: CrewActivityInfo[]) => void;
 } = {}) {
-  const [options, setOptions] = React.useState<CrewOption[]>([
-    buildDummyOption(),
-  ]);
-  const [activeId, setActiveId] = React.useState<string>(options[0].id);
+  const { activeProject } = useActiveProject();
+  const projectId = activeProject?.id ?? null;
+
+  const { data, update, status } = useSectionData<CrewData>(projectId, "crew", DEFAULT_CREW);
+
+  const options = data.options;
+  const activeId = data.activeId || options[0]?.id || "";
 
   const active = options.find((o) => o.id === activeId) ?? options[0];
   const [expandedActivityId, setExpandedActivityId] = React.useState<string | null>(null);
@@ -395,58 +409,54 @@ export function ProjectCrew({
   /* ── Option CRUD ───────────────────────────────────────────────── */
 
   const handleAdd = React.useCallback(() => {
-    const opt = createCrewOption(`Option ${options.length + 1}`);
-    setOptions((prev) => [...prev, opt]);
-    setActiveId(opt.id);
-  }, [options.length]);
+    const opt = createCrewOption(`Option ${data.options.length + 1}`);
+    update({ ...data, options: [...data.options, opt], activeId: opt.id });
+  }, [data, update]);
 
   const handleDelete = React.useCallback(
     (id: string) => {
-      setOptions((prev) => {
-        const next = prev.filter((o) => o.id !== id);
-        if (activeId === id && next.length > 0) {
-          setActiveId(next[0].id);
-        }
-        return next;
-      });
+      const next = data.options.filter((o) => o.id !== id);
+      const newActiveId = data.activeId === id && next.length > 0 ? next[0].id : data.activeId;
+      update({ ...data, options: next, activeId: newActiveId });
     },
-    [activeId]
+    [data, update]
   );
 
   const handleRename = React.useCallback(
     (id: string, name: string) => {
-      setOptions((prev) => prev.map((o) => (o.id === id ? { ...o, name } : o)));
+      update({ ...data, options: data.options.map((o) => (o.id === id ? { ...o, name } : o)) });
     },
-    []
+    [data, update]
   );
 
   /* ── Activity CRUD ─────────────────────────────────────────────── */
 
   const addActivity = (optionId: string) => {
-    const act = createActivity(`Activity ${(options.find((o) => o.id === optionId)?.activities.length ?? 0) + 1}`);
+    const act = createActivity(`Activity ${(data.options.find((o) => o.id === optionId)?.activities.length ?? 0) + 1}`);
     setExpandedActivityId(act.id);
-    setOptions((prev) =>
-      prev.map((o) =>
-        o.id === optionId
-          ? { ...o, activities: [...o.activities, act] }
-          : o
-      )
-    );
+    update({
+      ...data,
+      options: data.options.map((o) =>
+        o.id === optionId ? { ...o, activities: [...o.activities, act] } : o
+      ),
+    });
   };
 
   const updateActivity = (optionId: string, actId: string, patch: Partial<Activity>) => {
-    setOptions((prev) =>
-      prev.map((o) =>
+    update({
+      ...data,
+      options: data.options.map((o) =>
         o.id === optionId
           ? { ...o, activities: o.activities.map((a) => (a.id === actId ? { ...a, ...patch } : a)) }
           : o
-      )
-    );
+      ),
+    });
   };
 
   const removeActivity = (optionId: string, actId: string) => {
-    setOptions((prev) =>
-      prev.map((o) =>
+    update({
+      ...data,
+      options: data.options.map((o) =>
         o.id === optionId
           ? {
               ...o,
@@ -458,15 +468,16 @@ export function ProjectCrew({
                 })),
             }
           : o
-      )
-    );
+      ),
+    });
   };
 
   /* ── Resource CRUD ─────────────────────────────────────────────── */
 
   const addResource = (optionId: string, actId: string) => {
-    setOptions((prev) =>
-      prev.map((o) =>
+    update({
+      ...data,
+      options: data.options.map((o) =>
         o.id === optionId
           ? {
               ...o,
@@ -477,13 +488,14 @@ export function ProjectCrew({
               ),
             }
           : o
-      )
-    );
+      ),
+    });
   };
 
   const updateResource = (optionId: string, actId: string, resId: string, patch: Partial<Omit<Resource, "id">>) => {
-    setOptions((prev) =>
-      prev.map((o) =>
+    update({
+      ...data,
+      options: data.options.map((o) =>
         o.id === optionId
           ? {
               ...o,
@@ -494,13 +506,14 @@ export function ProjectCrew({
               ),
             }
           : o
-      )
-    );
+      ),
+    });
   };
 
   const removeResource = (optionId: string, actId: string, resId: string) => {
-    setOptions((prev) =>
-      prev.map((o) =>
+    update({
+      ...data,
+      options: data.options.map((o) =>
         o.id === optionId
           ? {
               ...o,
@@ -511,19 +524,25 @@ export function ProjectCrew({
               ),
             }
           : o
-      )
-    );
+      ),
+    });
   };
 
   /* ── Render ────────────────────────────────────────────────────── */
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
+      {/* Header with autosave status */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Crew</h2>
+        <AutosaveStatus status={status} />
+      </div>
+
       {/* Option selector */}
       <OptionSelector
         options={options}
         activeId={activeId}
-        onSelect={setActiveId}
+        onSelect={(id) => update({ ...data, activeId: id })}
         onAdd={handleAdd}
         onRename={handleRename}
         onDelete={handleDelete}

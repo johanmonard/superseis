@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { useActiveProject } from "@/lib/use-active-project";
+import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
 
 const { check: Check, chevronLeft: ChevronLeft, chevronRight: ChevronRight, gripVertical: GripVertical, minus: Minus, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
 
@@ -517,51 +519,76 @@ function PointTypePanel({
 }
 
 /* ------------------------------------------------------------------
+   Section data
+   ------------------------------------------------------------------ */
+
+interface OffsettersData {
+  configs: OffsetterConfig[];
+  activeId: string;
+}
+const DEFAULT_OFFSETTERS: OffsettersData = {
+  configs: [createConfig()],
+  activeId: "",
+};
+
+/* ------------------------------------------------------------------
    Main component
    ------------------------------------------------------------------ */
 
 export function ProjectOffsetters() {
-  const [configs, setConfigs] = React.useState<OffsetterConfig[]>([createConfig()]);
-  const [activeId, setActiveId] = React.useState(configs[0].id);
+  const { activeProject } = useActiveProject();
+  const projectId = activeProject?.id ?? null;
+
+  const { data, update, status } = useSectionData<OffsettersData>(projectId, "offsetters", DEFAULT_OFFSETTERS);
+
+  const configs = data.configs;
+  const activeId = data.activeId || configs[0]?.id || "";
   const active = configs.find((c) => c.id === activeId) ?? configs[0];
 
-  const update = React.useCallback(
+  const updateConfig = React.useCallback(
     (id: string, patch: Partial<OffsetterConfig>) => {
-      setConfigs((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-    }, []
+      const newConfigs = data.configs.map((c) => (c.id === id ? { ...c, ...patch } : c));
+      update({ ...data, configs: newConfigs });
+    }, [data, update]
   );
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
+      {/* Header with autosave status */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Offsetters</h2>
+        <AutosaveStatus status={status} />
+      </div>
+
       {/* Config selector */}
       <GroupSelector
         items={configs}
         activeId={activeId}
-        onSelect={setActiveId}
-        onAdd={() => { const c = createConfig(); setConfigs((p) => [...p, c]); setActiveId(c.id); }}
-        onRename={(id, name) => update(id, { name })}
-        onDelete={(id) => { setConfigs((p) => { const n = p.filter((c) => c.id !== id); if (activeId === id && n.length > 0) setActiveId(n[0].id); return n; }); }}
+        onSelect={(id) => update({ ...data, activeId: id })}
+        onAdd={() => { const c = createConfig(); update({ ...data, configs: [...data.configs, c], activeId: c.id }); }}
+        onRename={(id, name) => updateConfig(id, { name })}
+        onDelete={(id) => { const n = data.configs.filter((c) => c.id !== id); const newActiveId = activeId === id && n.length > 0 ? n[0].id : data.activeId; update({ ...data, configs: n, activeId: newActiveId }); }}
       />
 
       <div className="h-px bg-[var(--color-border-subtle)]" />
 
       {/* Fixed config */}
       <Field label="Design Option" layout="horizontal">
-        <Select value={active.designOption} onChange={(e) => update(activeId, { designOption: e.target.value })}>
+        <Select value={active.designOption} onChange={(e) => updateConfig(activeId, { designOption: e.target.value })}>
           <option value="">Select…</option>
           {DUMMY_DESIGN_OPTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
         </Select>
       </Field>
 
       <Field label="Map" layout="horizontal">
-        <Select value={active.map} onChange={(e) => update(activeId, { map: e.target.value })}>
+        <Select value={active.map} onChange={(e) => updateConfig(activeId, { map: e.target.value })}>
           <option value="">Select…</option>
           {DUMMY_MAPS.map((m) => <option key={m} value={m}>{m}</option>)}
         </Select>
       </Field>
 
       <Field label="Snapper Max Dist." layout="horizontal">
-        <Input type="number" value={active.snapperMaxDist} onChange={(e) => update(activeId, { snapperMaxDist: e.target.value })} />
+        <Input type="number" value={active.snapperMaxDist} onChange={(e) => updateConfig(activeId, { snapperMaxDist: e.target.value })} />
       </Field>
 
       {/* SP and RP panels side by side */}
@@ -569,12 +596,12 @@ export function ProjectOffsetters() {
         <PointTypePanel
           label="Sources"
           config={active.sources}
-          onChange={(sources) => update(activeId, { sources })}
+          onChange={(sources) => updateConfig(activeId, { sources })}
         />
         <PointTypePanel
           label="Receivers"
           config={active.receivers}
-          onChange={(receivers) => update(activeId, { receivers })}
+          onChange={(receivers) => updateConfig(activeId, { receivers })}
         />
       </div>
     </div>

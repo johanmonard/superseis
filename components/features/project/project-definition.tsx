@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { CountryMap } from "@/components/features/project/country-map";
 import { ViewportPlaceholder } from "@/components/features/project/viewport-placeholder";
 import { useActiveProject } from "@/lib/use-active-project";
-import { useDefinitionForm } from "@/lib/use-definition-form";
+import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------
@@ -219,9 +219,35 @@ const COLLAPSED_WIDTH = 36;
    Main component
    ------------------------------------------------------------------ */
 
+interface DefinitionData {
+  client: string;
+  contractor: string;
+  country: string;
+  epsg: string;
+  second: string;
+  region: string;
+  crsName: string;
+  overlapGrid: string;
+  overlapStrip: string;
+  notes: string;
+}
+
+const DEFAULT_DEFINITION: DefinitionData = {
+  client: "",
+  contractor: "",
+  country: "",
+  epsg: "",
+  second: "",
+  region: "",
+  crsName: "",
+  overlapGrid: "",
+  overlapStrip: "",
+  notes: "",
+};
+
 export function ProjectDefinition() {
   const { activeProject } = useActiveProject();
-  const { definition, setDefinitionField } = useDefinitionForm();
+  const projectId = activeProject?.id ?? null;
 
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [leftFraction, setLeftFraction] = React.useState(DEFAULT_LEFT_FRACTION);
@@ -229,22 +255,21 @@ export function ProjectDefinition() {
   const isDragging = React.useRef(false);
   const [isResizing, setIsResizing] = React.useState(false);
 
-  // Form state — tracked fields come from shared context
-  const client = definition.client;
-  const country = definition.country;
-  const epsg = definition.epsg;
-  const second = definition.second;
-  const setClient = React.useCallback((v: string) => setDefinitionField("client", v), [setDefinitionField]);
-  const setCountry = React.useCallback((v: string) => setDefinitionField("country", v), [setDefinitionField]);
-  const setEpsg = React.useCallback((v: string) => setDefinitionField("epsg", v), [setDefinitionField]);
-  const setSecond = React.useCallback((v: string) => setDefinitionField("second", v), [setDefinitionField]);
+  // Section data — React Query cache is the source of truth
+  const { data, update, status } = useSectionData<DefinitionData>(
+    projectId,
+    "definition",
+    DEFAULT_DEFINITION,
+  );
 
-  // Local-only fields
-  const [region, setRegion] = React.useState("");
-  const [crsName, setCrsName] = React.useState("");
-  const [overlapGrid, setOverlapGrid] = React.useState("");
-  const [overlapStrip, setOverlapStrip] = React.useState("");
-  const [notes, setNotes] = React.useState("");
+  const setField = React.useCallback(
+    <K extends keyof DefinitionData>(key: K, value: DefinitionData[K]) => {
+      update({ ...data, [key]: value });
+    },
+    [data, update],
+  );
+
+  // Local-only (not persisted)
   const [files, setFiles] = React.useState<File[]>([]);
 
   const handlePointerDown = React.useCallback((e: React.PointerEvent) => {
@@ -305,21 +330,24 @@ export function ProjectDefinition() {
             <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
               Parameters
             </h2>
-            <button
-              type="button"
-              onClick={() => setCollapsed(true)}
-              className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
-              aria-label="Collapse panel"
-            >
-              <ChevronLeft size={14} />
-            </button>
+            <div className="flex items-center gap-[var(--space-2)]">
+              <AutosaveStatus status={status} />
+              <button
+                type="button"
+                onClick={() => setCollapsed(true)}
+                className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+                aria-label="Collapse panel"
+              >
+                <ChevronLeft size={14} />
+              </button>
+            </div>
           </div>
 
           <div className="flex flex-col gap-[var(--space-4)]">
             <Field label="Project Name" htmlFor="def-project-name" layout="horizontal">
               <Input
                 id="def-project-name"
-                value={activeProject ?? ""}
+                value={activeProject?.name ?? ""}
                 readOnly
                 className="bg-[var(--color-bg-elevated)]"
               />
@@ -328,8 +356,8 @@ export function ProjectDefinition() {
             <Field label="Client" htmlFor="def-client" layout="horizontal">
               <Input
                 id="def-client"
-                value={client}
-                onChange={(e) => setClient(e.target.value as string)}
+                value={data.client}
+                onChange={(e) => setField("client", e.target.value)}
                 placeholder="Client name"
               />
             </Field>
@@ -337,16 +365,16 @@ export function ProjectDefinition() {
             <Field label="Contractor" htmlFor="def-contractor" layout="horizontal">
               <Input
                 id="def-contractor"
-                value="admin"
-                readOnly
-                className="bg-[var(--color-bg-elevated)]"
+                value={data.contractor}
+                onChange={(e) => setField("contractor", e.target.value)}
+                placeholder="Contractor name"
               />
             </Field>
 
             <Field label="Country" htmlFor="def-country" layout="horizontal">
               <SearchableSelect
-                value={country}
-                onChange={setCountry}
+                value={data.country}
+                onChange={(v) => setField("country", v)}
                 options={COUNTRIES}
                 placeholder="Select a country"
               />
@@ -355,8 +383,8 @@ export function ProjectDefinition() {
             <Field label="Region" htmlFor="def-region" layout="horizontal">
               <Input
                 id="def-region"
-                value={region}
-                onChange={(e) => setRegion(e.target.value)}
+                value={data.region}
+                onChange={(e) => setField("region", e.target.value)}
                 placeholder="Region or province"
               />
             </Field>
@@ -365,8 +393,8 @@ export function ProjectDefinition() {
               <Input
                 id="def-epsg"
                 type="number"
-                value={epsg}
-                onChange={(e) => setEpsg(e.target.value)}
+                value={data.epsg}
+                onChange={(e) => setField("epsg", e.target.value)}
                 placeholder="e.g. 4326"
               />
             </Field>
@@ -374,8 +402,8 @@ export function ProjectDefinition() {
             <Field label="CRS Name" htmlFor="def-crs" layout="horizontal">
               <Input
                 id="def-crs"
-                value={crsName}
-                onChange={(e) => setCrsName(e.target.value)}
+                value={data.crsName}
+                onChange={(e) => setField("crsName", e.target.value)}
                 placeholder="e.g. WGS 84"
               />
             </Field>
@@ -384,16 +412,16 @@ export function ProjectDefinition() {
               <Input
                 id="def-second"
                 type="number"
-                value={second}
-                onChange={(e) => setSecond(e.target.value)}
+                value={data.second}
+                onChange={(e) => setField("second", e.target.value)}
               />
             </Field>
 
             <Field label="No Overlap Grid" htmlFor="def-overlap-grid" layout="horizontal">
               <Select
                 id="def-overlap-grid"
-                value={overlapGrid}
-                onChange={(e) => setOverlapGrid(e.target.value)}
+                value={data.overlapGrid}
+                onChange={(e) => setField("overlapGrid", e.target.value)}
               >
                 <option value="">Select…</option>
                 <option value="Source">Source</option>
@@ -404,8 +432,8 @@ export function ProjectDefinition() {
             <Field label="No Overlap Strip" htmlFor="def-overlap-strip" layout="horizontal">
               <Select
                 id="def-overlap-strip"
-                value={overlapStrip}
-                onChange={(e) => setOverlapStrip(e.target.value)}
+                value={data.overlapStrip}
+                onChange={(e) => setField("overlapStrip", e.target.value)}
               >
                 <option value="">Select…</option>
                 <option value="Inline">Inline</option>
@@ -421,13 +449,13 @@ export function ProjectDefinition() {
               />
             </Field>
 
-            <Field label="Notes" htmlFor="def-notes" hint={`${notes.length}/300`}>
+            <Field label="Notes" htmlFor="def-notes" hint={`${data.notes.length}/300`}>
               <Textarea
                 id="def-notes"
                 rows={6}
                 maxLength={300}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
+                value={data.notes}
+                onChange={(e) => setField("notes", e.target.value)}
                 placeholder="Additional notes…"
               />
             </Field>
@@ -458,7 +486,7 @@ export function ProjectDefinition() {
       {/* Viewport panel */}
       <div className="min-w-0 flex-1 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
         <div className="flex h-full flex-col items-center justify-center p-[var(--space-4)]">
-          {country ? <CountryMap country={country} /> : <ViewportPlaceholder variant="globe" message="Select a country" />}
+          {data.country ? <CountryMap country={data.country} /> : <ViewportPlaceholder variant="globe" message="Select a country" />}
         </div>
       </div>
     </div>
