@@ -447,12 +447,26 @@ const GLOBE_CSS = `
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 4px;
-    border: 2px solid rgba(0,0,0,0.2);
+    border-radius: 6px;
+    border: 1px solid rgba(15, 23, 42, 0.14);
     background-color: #fff;
-    color: #333;
+    color: #1e293b;
     cursor: pointer;
     background-clip: padding-box;
+  }
+  .glb-fs-toolbar .glb-btn {
+    border-color: transparent;
+    background-color: rgba(15, 23, 42, 0.05);
+  }
+  .glb-fs-toolbar .glb-btn:hover:not(:disabled) {
+    background-color: rgba(15, 23, 42, 0.1);
+  }
+  [data-theme="dark"] .glb-fs-toolbar .glb-btn {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #e2e8f0;
+  }
+  [data-theme="dark"] .glb-fs-toolbar .glb-btn:hover:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.16);
   }
   .glb-btn:hover:not(:disabled) { background-color: #f3f4f6; }
   .glb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -511,17 +525,42 @@ const GLOBE_CSS = `
     border-color: var(--color-border-strong);
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23cbd5e1'/%3E%3C/svg%3E");
   }
+  .glb-fs-toolbar .glb-tile-select {
+    border-color: transparent;
+    background-color: rgba(15, 23, 42, 0.05);
+    color: #1e293b;
+    font-weight: 500;
+  }
+  [data-theme="dark"] .glb-fs-toolbar .glb-tile-select {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #e2e8f0;
+  }
 
   .glb-zoom-badge {
-    font-size: 11px;
-    font-family: monospace;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+    letter-spacing: 0.02em;
     color: #fff;
-    background-color: rgba(0,0,0,0.5);
-    border-radius: 4px;
-    padding: 3px 6px;
+    background-color: rgba(0,0,0,0.6);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 5px;
+    padding: 4px 9px;
     pointer-events: none;
     user-select: none;
     align-self: flex-start;
+    min-width: 54px;
+    text-align: center;
+  }
+  .glb-fs-toolbar .glb-zoom-badge {
+    background-color: rgba(15, 23, 42, 0.06);
+    border-color: rgba(15, 23, 42, 0.18);
+    color: #0f172a;
+  }
+  [data-theme="dark"] .glb-fs-toolbar .glb-zoom-badge {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.22);
+    color: #fff;
   }
 
   .glb-attribution {
@@ -585,6 +624,44 @@ const GLOBE_CSS = `
     0%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.5); }
     50% { box-shadow: 0 0 0 6px rgba(251, 191, 36, 0); }
   }
+
+  /* Merged draggable toolbar — all controls in one pill.
+     Defaults to bottom-center; once dragged, absolute left/top take over. */
+  .glb-fs-toolbar {
+    position: absolute;
+    bottom: 48px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 3;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    box-shadow: 0 6px 20px rgba(15, 23, 42, 0.18);
+    cursor: grab;
+    user-select: none;
+    backdrop-filter: blur(8px);
+  }
+  [data-theme="dark"] .glb-fs-toolbar {
+    background-color: rgba(15, 23, 42, 0.82);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  }
+  .glb-fs-toolbar--dragging { cursor: grabbing; }
+
+  .glb-fs-divider {
+    width: 1px;
+    height: 22px;
+    background-color: rgba(15, 23, 42, 0.14);
+    flex-shrink: 0;
+  }
+  [data-theme="dark"] .glb-fs-divider {
+    background-color: rgba(255, 255, 255, 0.22);
+  }
 `;
 
 let cssInjected = false;
@@ -610,14 +687,6 @@ const EXPAND_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>';
 const SHRINK_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>';
-
-function makeBtn(icon: string): HTMLButtonElement {
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "glb-btn";
-  btn.innerHTML = icon;
-  return btn;
-}
 
 export function GisGlobeViewport({
   data,
@@ -646,12 +715,34 @@ export function GisGlobeViewport({
   onEdited: (features: GeoJSON.Feature[]) => void;
   onAdded: (feature: GeoJSON.Feature) => void;
 }) {
+  const wrapperRef = React.useRef<HTMLDivElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<MLMap | null>(null);
   const [tileIndex, setTileIndex] = React.useState(0);
   const [styleReady, setStyleReady] = React.useState(false);
   const [zoomDisplay, setZoomDisplay] = React.useState(DEFAULT_ZOOM);
+  const [isFullscreen, setIsFullscreen] = React.useState(false);
   const fittedKeyRef = React.useRef<string | null>(null);
+
+  // Track fullscreen state at the viewport level so we can swap the chrome.
+  React.useEffect(() => {
+    const update = () => {
+      const el = wrapperRef.current;
+      setIsFullscreen(!!el && document.fullscreenElement === el);
+    };
+    document.addEventListener("fullscreenchange", update);
+    return () => document.removeEventListener("fullscreenchange", update);
+  }, []);
+
+  const toggleFullscreen = React.useCallback(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      el.requestFullscreen();
+    }
+  }, []);
 
   // Live copies of callbacks so effects don't have to re-subscribe
   const onSaveRef = React.useRef(onSave);
@@ -704,14 +795,37 @@ export function GisGlobeViewport({
     });
     map.on("zoom", () => setZoomDisplay(map.getZoom()));
 
-    // ResizeObserver so the map keeps up with the resizable panel
-    const ro = new ResizeObserver(() => map.resize());
+    // During a splitter drag we avoid calling map.resize() at all — each
+    // call sets canvas.width/height, which clears the WebGL framebuffer,
+    // and the blank frame between clear and MapLibre's next render reads
+    // as a strobe. Instead the canvas is locked to 100% via CSS so it
+    // stretches with the container (slightly blurry mid-drag, but
+    // continuous), and the real resize is debounced until the drag quiets.
+    const canvasEl = map.getCanvas();
+    const stretchCanvas = () => {
+      canvasEl.style.width = "100%";
+      canvasEl.style.height = "100%";
+    };
+    stretchCanvas();
+
+    let resizeTimer: number | null = null;
+    const ro = new ResizeObserver(() => {
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        resizeTimer = null;
+        map.resize();
+        // map.resize writes explicit pixel width/height back onto the
+        // canvas style — restore the 100% lock so future drags stretch.
+        stretchCanvas();
+      }, 120);
+    });
     ro.observe(el);
 
     mapRef.current = map;
 
     return () => {
       ro.disconnect();
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       map.remove();
       mapRef.current = null;
       setStyleReady(false);
@@ -1385,11 +1499,13 @@ export function GisGlobeViewport({
   const tile = TILE_SOURCES[tileIndex];
 
   return (
-    <div className="relative h-full w-full overflow-hidden rounded-[var(--radius-md)]">
+    <div
+      ref={wrapperRef}
+      className="glb-wrapper relative h-full w-full overflow-hidden rounded-[var(--radius-md)]"
+    >
       <div ref={containerRef} className="h-full w-full" />
 
-      {/* Top-left: tile selector + zoom badge */}
-      <div className="glb-panel glb-panel--tl">
+      <DraggableToolbar wrapperRef={wrapperRef}>
         <select
           className="glb-tile-select"
           value={tileIndex}
@@ -1402,10 +1518,7 @@ export function GisGlobeViewport({
           ))}
         </select>
         <span className="glb-zoom-badge">Z {zoomDisplay.toFixed(1)}</span>
-      </div>
-
-      {/* Top-right: edit / add / save toolbar */}
-      <div className="glb-panel glb-panel--tr">
+        <div className="glb-fs-divider" />
         <ToolbarButton
           title={adding ? "Cancel add" : "Add feature"}
           icon={ADD_ICON}
@@ -1421,16 +1534,31 @@ export function GisGlobeViewport({
           onClick={() => onToggleEditRef.current()}
         />
         <ToolbarButton
-          title={saving ? "Saving…" : dirty ? "Save edits" : "No unsaved edits"}
+          title={
+            saving ? "Saving…" : dirty ? "Save edits" : "No unsaved edits"
+          }
           icon={SAVE_ICON}
           disabled={saving || !dirty}
           dirty={dirty}
           onClick={() => onSaveRef.current()}
         />
-      </div>
-
-      {/* Bottom-left: zoom + fullscreen */}
-      <NavToolbar containerRef={containerRef} map={mapRef} />
+        <div className="glb-fs-divider" />
+        <ToolbarButton
+          icon={ZOOM_IN_ICON}
+          title="Zoom in"
+          onClick={() => mapRef.current?.zoomIn()}
+        />
+        <ToolbarButton
+          icon={ZOOM_OUT_ICON}
+          title="Zoom out"
+          onClick={() => mapRef.current?.zoomOut()}
+        />
+        <ToolbarButton
+          icon={isFullscreen ? SHRINK_ICON : EXPAND_ICON}
+          title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+          onClick={toggleFullscreen}
+        />
+      </DraggableToolbar>
 
       <p
         className="glb-attribution"
@@ -1475,60 +1603,88 @@ function ToolbarButton({
   );
 }
 
-function NavToolbar({
-  containerRef,
-  map,
+// Floating pill that holds all controls. Drag the padding
+// area (or any non-interactive child) to move the toolbar; the first drag
+// promotes it from the default bottom-center CSS layout to explicit
+// absolute left/top coords via direct style mutation (no React state churn
+// during drag, no JSX `style={}` that the project lint forbids).
+function DraggableToolbar({
+  wrapperRef,
+  children,
 }: {
-  containerRef: React.RefObject<HTMLDivElement | null>;
-  map: React.RefObject<MLMap | null>;
+  wrapperRef: React.RefObject<HTMLDivElement | null>;
+  children: React.ReactNode;
 }) {
-  const wrapRef = React.useRef<HTMLDivElement>(null);
+  const toolbarRef = React.useRef<HTMLDivElement>(null);
+  const dragStateRef = React.useRef({
+    active: false,
+    startX: 0,
+    startY: 0,
+    offX: 0,
+    offY: 0,
+  });
 
-  React.useEffect(() => {
-    const wrap = wrapRef.current;
-    if (!wrap) return;
-
-    wrap.innerHTML = "";
-
-    const zoomIn = makeBtn(ZOOM_IN_ICON);
-    zoomIn.title = "Zoom in";
-    zoomIn.addEventListener("click", () => map.current?.zoomIn());
-
-    const zoomOut = makeBtn(ZOOM_OUT_ICON);
-    zoomOut.title = "Zoom out";
-    zoomOut.addEventListener("click", () => map.current?.zoomOut());
-
-    const fsBtn = makeBtn(EXPAND_ICON);
-    fsBtn.title = "Fullscreen";
-
-    const updateFs = () => {
-      const isFs = !!document.fullscreenElement;
-      fsBtn.innerHTML = isFs ? SHRINK_ICON : EXPAND_ICON;
-      fsBtn.title = isFs ? "Exit fullscreen" : "Fullscreen";
-      setTimeout(() => map.current?.resize(), 100);
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.closest("button, select, option")) return;
+    const toolbar = toolbarRef.current;
+    const wrapper = wrapperRef.current;
+    if (!toolbar || !wrapper) return;
+    e.preventDefault();
+    const tbRect = toolbar.getBoundingClientRect();
+    const wrRect = wrapper.getBoundingClientRect();
+    // Promote to absolute positioning so further drag updates use left/top
+    toolbar.style.left = `${tbRect.left - wrRect.left}px`;
+    toolbar.style.top = `${tbRect.top - wrRect.top}px`;
+    toolbar.style.bottom = "auto";
+    toolbar.style.transform = "none";
+    dragStateRef.current = {
+      active: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      offX: tbRect.left - wrRect.left,
+      offY: tbRect.top - wrRect.top,
     };
+    toolbar.classList.add("glb-fs-toolbar--dragging");
+    toolbar.setPointerCapture(e.pointerId);
+  };
 
-    fsBtn.addEventListener("click", () => {
-      const el = containerRef.current;
-      if (!el) return;
-      if (document.fullscreenElement) {
-        document.exitFullscreen();
-      } else {
-        el.requestFullscreen();
-      }
-    });
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const s = dragStateRef.current;
+    if (!s.active) return;
+    const toolbar = toolbarRef.current;
+    const wrapper = wrapperRef.current;
+    if (!toolbar || !wrapper) return;
+    const wrRect = wrapper.getBoundingClientRect();
+    const tbRect = toolbar.getBoundingClientRect();
+    const dx = e.clientX - s.startX;
+    const dy = e.clientY - s.startY;
+    const maxX = Math.max(0, wrRect.width - tbRect.width);
+    const maxY = Math.max(0, wrRect.height - tbRect.height);
+    const nx = Math.max(0, Math.min(maxX, s.offX + dx));
+    const ny = Math.max(0, Math.min(maxY, s.offY + dy));
+    toolbar.style.left = `${nx}px`;
+    toolbar.style.top = `${ny}px`;
+  };
 
-    document.addEventListener("fullscreenchange", updateFs);
+  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const s = dragStateRef.current;
+    if (!s.active) return;
+    s.active = false;
+    toolbarRef.current?.releasePointerCapture(e.pointerId);
+    toolbarRef.current?.classList.remove("glb-fs-toolbar--dragging");
+  };
 
-    wrap.appendChild(zoomIn);
-    wrap.appendChild(zoomOut);
-    wrap.appendChild(fsBtn);
-
-    return () => {
-      document.removeEventListener("fullscreenchange", updateFs);
-      wrap.innerHTML = "";
-    };
-  }, [containerRef, map]);
-
-  return <div ref={wrapRef} className="glb-panel glb-panel--bl" />;
+  return (
+    <div
+      ref={toolbarRef}
+      className="glb-fs-toolbar"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    >
+      {children}
+    </div>
+  );
 }
