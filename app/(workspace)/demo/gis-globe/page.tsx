@@ -32,6 +32,8 @@ export default function GisGlobePage() {
   const [error, setError] = React.useState<string | null>(null);
   const [editing, setEditing] = React.useState(false);
   const [adding, setAdding] = React.useState(false);
+  const [freehand, setFreehand] = React.useState(false);
+  const [simplifying, setSimplifying] = React.useState(false);
   const [dirty, setDirty] = React.useState(false);
   const [loadId, setLoadId] = React.useState(0);
 
@@ -64,6 +66,8 @@ export default function GisGlobePage() {
     setLoading(true);
     setEditing(false);
     setAdding(false);
+    setFreehand(false);
+    setSimplifying(false);
     setDirty(false);
     setError(null);
 
@@ -144,6 +148,14 @@ export default function GisGlobePage() {
     setAdding((a) => !a);
   }, []);
 
+  const handleToggleFreehand = React.useCallback(() => {
+    setFreehand((f) => !f);
+  }, []);
+
+  const handleToggleSimplify = React.useCallback(() => {
+    setSimplifying((s) => !s);
+  }, []);
+
   const handleAdded = React.useCallback((feature: GeoJSON.Feature) => {
     setData((prev) => {
       if (!prev) return prev;
@@ -157,6 +169,7 @@ export default function GisGlobePage() {
     });
     setDirty(true);
     setAdding(false);
+    setFreehand(false);
   }, []);
 
   const handleSave = React.useCallback(async () => {
@@ -227,11 +240,15 @@ export default function GisGlobePage() {
           dataKey={`${selected}:${loadId}`}
           editing={editing}
           adding={adding}
+          freehand={freehand}
+          simplifying={simplifying}
           dirty={dirty}
           saving={saving}
           geometryType={metaRef.current?.geometryType ?? "GEOMETRY"}
           onToggleEdit={handleToggleEdit}
           onToggleAdd={handleToggleAdd}
+          onToggleFreehand={handleToggleFreehand}
+          onToggleSimplify={handleToggleSimplify}
           onSave={handleSave}
           onEdited={handleEdited}
           onAdded={handleAdded}

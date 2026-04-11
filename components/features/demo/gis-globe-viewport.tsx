@@ -213,6 +213,12 @@ const EDIT_FILL_LAYER = "edit-fill";
 const EDIT_LINE_LAYER = "edit-line";
 const EDIT_CIRCLE_LAYER = "edit-circle";
 
+// Read-only vertex preview painted on top of the simplify-mode edit-source.
+// Using a circle layer (not Markers) keeps redraws cheap when the slider is
+// moving — the source's setData call is the only per-tick work.
+const SIMPLIFY_VERTS_SOURCE_ID = "simplify-verts-source";
+const SIMPLIFY_VERTS_LAYER = "simplify-verts-layer";
+
 const DEFAULT_CENTER: [number, number] = [0, 20];
 const DEFAULT_ZOOM = 1;
 
@@ -440,6 +446,200 @@ function buildDraftGeometry(
   return { type: "Polygon", coordinates: [[...coords, coords[0]]] };
 }
 
+// ---------------------------------------------------------------------------
+// Ramer–Douglas–Peucker simplification. The threshold is "perpendicular
+// distance from the segment between two kept neighbours" — when a vertex
+// falls inside that band the three points are considered nearly collinear
+// and the middle one drops out. Operates in raw lng/lat space, which is
+// fine for the interactive preview since the per-feature bbox diagonal is
+// what scales the slider.
+// ---------------------------------------------------------------------------
+
+function perpendicularDistanceSq(
+  p: GeoJSON.Position,
+  a: GeoJSON.Position,
+  b: GeoJSON.Position
+): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  if (dx === 0 && dy === 0) {
+    const ex = p[0] - a[0];
+    const ey = p[1] - a[1];
+    return ex * ex + ey * ey;
+  }
+  const t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy);
+  const cx = a[0] + t * dx;
+  const cy = a[1] + t * dy;
+  const ex = p[0] - cx;
+  const ey = p[1] - cy;
+  return ex * ex + ey * ey;
+}
+
+function rdpSimplify(
+  points: GeoJSON.Position[],
+  tolSq: number
+): GeoJSON.Position[] {
+  if (points.length < 3 || tolSq <= 0) return points.slice();
+  const keep = new Uint8Array(points.length);
+  keep[0] = 1;
+  keep[points.length - 1] = 1;
+  const stack: Array<[number, number]> = [[0, points.length - 1]];
+  while (stack.length > 0) {
+    const [i0, i1] = stack.pop()!;
+    let maxDist = 0;
+    let maxIdx = -1;
+    for (let i = i0 + 1; i < i1; i++) {
+      const d = perpendicularDistanceSq(points[i], points[i0], points[i1]);
+      if (d > maxDist) {
+        maxDist = d;
+        maxIdx = i;
+      }
+    }
+    if (maxIdx !== -1 && maxDist > tolSq) {
+      keep[maxIdx] = 1;
+      stack.push([i0, maxIdx]);
+      stack.push([maxIdx, i1]);
+    }
+  }
+  const result: GeoJSON.Position[] = [];
+  for (let i = 0; i < points.length; i++) {
+    if (keep[i]) result.push(points[i]);
+  }
+  return result;
+}
+
+function simplifyRing(
+  ring: GeoJSON.Position[],
+  tolSq: number
+): GeoJSON.Position[] {
+  if (ring.length <= 4) return ring;
+  const next = rdpSimplify(ring, tolSq);
+  // A polygon ring needs ≥4 points (3 unique + closure). Bail out if
+  // simplification would collapse it past that floor.
+  if (next.length < 4) return ring;
+  const first = next[0];
+  const last = next[next.length - 1];
+  if (first[0] !== last[0] || first[1] !== last[1]) {
+    next.push([first[0], first[1]]);
+  }
+  return next;
+}
+
+function simplifyGeometry(
+  geom: GeoJSON.Geometry,
+  tolerance: number
+): GeoJSON.Geometry {
+  if (tolerance <= 0) return geom;
+  const tolSq = tolerance * tolerance;
+  switch (geom.type) {
+    case "LineString": {
+      const next = rdpSimplify(geom.coordinates, tolSq);
+      return next.length >= 2 ? { ...geom, coordinates: next } : geom;
+    }
+    case "MultiLineString":
+      return {
+        ...geom,
+        coordinates: geom.coordinates.map((line) => {
+          const next = rdpSimplify(line, tolSq);
+          return next.length >= 2 ? next : line;
+        }),
+      };
+    case "Polygon":
+      return {
+        ...geom,
+        coordinates: geom.coordinates.map((ring) => simplifyRing(ring, tolSq)),
+      };
+    case "MultiPolygon":
+      return {
+        ...geom,
+        coordinates: geom.coordinates.map((poly) =>
+          poly.map((ring) => simplifyRing(ring, tolSq))
+        ),
+      };
+    default:
+      return geom;
+  }
+}
+
+function geomBboxDiagonal(geom: GeoJSON.Geometry): number {
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity;
+  const visit = (c: unknown): void => {
+    if (!Array.isArray(c)) return;
+    if (typeof c[0] === "number") {
+      const [x, y] = c as number[];
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    } else {
+      for (const cc of c) visit(cc);
+    }
+  };
+  visit((geom as { coordinates: unknown }).coordinates);
+  if (!isFinite(minX)) return 0;
+  return Math.hypot(maxX - minX, maxY - minY);
+}
+
+function geomVertexFC(geom: GeoJSON.Geometry): GeoJSON.FeatureCollection {
+  const positions: GeoJSON.Position[] = [];
+  const pushRing = (ring: GeoJSON.Position[]) => {
+    const last = ring.length - 1;
+    const closed =
+      ring.length > 1 &&
+      ring[0][0] === ring[last][0] &&
+      ring[0][1] === ring[last][1];
+    const stop = closed ? last : ring.length;
+    for (let i = 0; i < stop; i++) positions.push(ring[i]);
+  };
+  switch (geom.type) {
+    case "Point":
+      positions.push(geom.coordinates);
+      break;
+    case "MultiPoint":
+      for (const c of geom.coordinates) positions.push(c);
+      break;
+    case "LineString":
+      for (const c of geom.coordinates) positions.push(c);
+      break;
+    case "MultiLineString":
+      for (const line of geom.coordinates)
+        for (const c of line) positions.push(c);
+      break;
+    case "Polygon":
+      for (const ring of geom.coordinates) pushRing(ring);
+      break;
+    case "MultiPolygon":
+      for (const poly of geom.coordinates)
+        for (const ring of poly) pushRing(ring);
+      break;
+  }
+  return {
+    type: "FeatureCollection",
+    features: positions.map((p) => ({
+      type: "Feature",
+      properties: {},
+      geometry: { type: "Point", coordinates: p },
+    })),
+  };
+}
+
+function countGeomVertices(geom: GeoJSON.Geometry): number {
+  let n = 0;
+  const visit = (c: unknown): void => {
+    if (!Array.isArray(c)) return;
+    if (typeof c[0] === "number") {
+      n++;
+    } else {
+      for (const cc of c) visit(cc);
+    }
+  };
+  visit((geom as { coordinates: unknown }).coordinates);
+  return n;
+}
+
 const GLOBE_CSS = `
   .glb-btn {
     width: 34px;
@@ -535,6 +735,17 @@ const GLOBE_CSS = `
     background-color: rgba(255, 255, 255, 0.08);
     color: #e2e8f0;
   }
+  /* Force readable colors on the native dropdown list. Options inherit the
+     select's color by default, which in dark mode gives light text on the
+     browser's light popup background. */
+  .glb-tile-select option {
+    background-color: #fff;
+    color: #1e293b;
+  }
+  [data-theme="dark"] .glb-tile-select option {
+    background-color: #0f172a;
+    color: #e2e8f0;
+  }
 
   .glb-zoom-badge {
     font-size: 13px;
@@ -548,9 +759,9 @@ const GLOBE_CSS = `
     padding: 4px 9px;
     pointer-events: none;
     user-select: none;
-    align-self: flex-start;
     min-width: 54px;
     text-align: center;
+    white-space: nowrap;
   }
   .glb-fs-toolbar .glb-zoom-badge {
     background-color: rgba(15, 23, 42, 0.06);
@@ -563,24 +774,59 @@ const GLOBE_CSS = `
     color: #fff;
   }
 
-  .glb-attribution {
-    position: absolute;
-    bottom: 8px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 2;
-    font-size: 10px;
-    font-family: system-ui, sans-serif;
-    color: #fff;
-    background-color: rgba(0,0,0,0.55);
-    border-radius: 4px;
-    padding: 3px 8px;
-    pointer-events: none;
-    user-select: none;
-    max-width: 60%;
-    text-align: center;
+  /* Segmented zoom control: [+][ Z 1.2 ][-] styled as one unit. The group
+     itself draws the pill background + border; its children (the two
+     ToolbarButtons and the zoom badge) go flat and share a hairline divider. */
+  .glb-zoom-group {
+    display: inline-flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    flex-shrink: 0;
+    height: 34px;
+    border-radius: 8px;
+    overflow: hidden;
+    background-color: rgba(15, 23, 42, 0.05);
+    border: 1px solid rgba(15, 23, 42, 0.12);
   }
-  .glb-attribution a { color: #fff; text-decoration: underline; }
+  [data-theme="dark"] .glb-zoom-group {
+    background-color: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+  .glb-zoom-group > * {
+    flex: 0 0 auto;
+    height: 100%;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+  }
+  .glb-zoom-group > * + * {
+    border-left: 1px solid rgba(15, 23, 42, 0.12) !important;
+  }
+  [data-theme="dark"] .glb-zoom-group > * + * {
+    border-left-color: rgba(255, 255, 255, 0.14) !important;
+  }
+  .glb-zoom-group .glb-btn {
+    width: 32px;
+  }
+  .glb-zoom-group .glb-btn:hover:not(:disabled) {
+    background-color: rgba(15, 23, 42, 0.08) !important;
+  }
+  [data-theme="dark"] .glb-zoom-group .glb-btn:hover:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.12) !important;
+  }
+  .glb-zoom-group .glb-zoom-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 10px;
+    min-width: 58px;
+    color: #0f172a;
+  }
+  [data-theme="dark"] .glb-zoom-group .glb-zoom-badge {
+    color: #e2e8f0;
+  }
 
   /* Vertex handle (draggable) — solid white square with blue border */
   .glb-vertex {
@@ -653,6 +899,48 @@ const GLOBE_CSS = `
   }
   .glb-fs-toolbar--dragging { cursor: grabbing; }
 
+  .glb-context-menu {
+    position: absolute;
+    z-index: 4;
+    min-width: 140px;
+    padding: 4px;
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 0.96);
+    border: 1px solid rgba(15, 23, 42, 0.14);
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.22);
+    backdrop-filter: blur(8px);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-family: system-ui, sans-serif;
+    font-size: 12px;
+    color: #1e293b;
+    user-select: none;
+  }
+  [data-theme="dark"] .glb-context-menu {
+    background-color: rgba(15, 23, 42, 0.94);
+    border-color: rgba(255, 255, 255, 0.14);
+    color: #e2e8f0;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  }
+  .glb-context-menu button {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    padding: 6px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    font: inherit;
+  }
+  .glb-context-menu button:hover {
+    background-color: rgba(15, 23, 42, 0.08);
+  }
+  [data-theme="dark"] .glb-context-menu button:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+  }
+
   .glb-fs-divider {
     width: 1px;
     height: 22px;
@@ -662,15 +950,65 @@ const GLOBE_CSS = `
   [data-theme="dark"] .glb-fs-divider {
     background-color: rgba(255, 255, 255, 0.22);
   }
+
+  .glb-simplify-panel {
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    box-shadow: 0 6px 20px rgba(15, 23, 42, 0.18);
+    backdrop-filter: blur(8px);
+    font-family: system-ui, sans-serif;
+    font-size: 12px;
+    color: #1e293b;
+    user-select: none;
+  }
+  [data-theme="dark"] .glb-simplify-panel {
+    background-color: rgba(15, 23, 42, 0.82);
+    border-color: rgba(255, 255, 255, 0.12);
+    color: #e2e8f0;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  }
+  .glb-simplify-panel--idle {
+    color: #64748b;
+  }
+  [data-theme="dark"] .glb-simplify-panel--idle {
+    color: #94a3b8;
+  }
+  .glb-simplify-label {
+    font-weight: 600;
+  }
+  .glb-simplify-slider {
+    width: 200px;
+    cursor: pointer;
+    accent-color: #3b82f6;
+  }
+  .glb-simplify-count {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+    font-weight: 600;
+    min-width: 78px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
 `;
 
-let cssInjected = false;
+const GLOBE_CSS_ID = "glb-globe-viewport-css";
 function injectCss() {
-  if (cssInjected) return;
-  cssInjected = true;
-  const style = document.createElement("style");
-  style.textContent = GLOBE_CSS;
-  document.head.appendChild(style);
+  let style = document.getElementById(GLOBE_CSS_ID) as HTMLStyleElement | null;
+  if (!style) {
+    style = document.createElement("style");
+    style.id = GLOBE_CSS_ID;
+    document.head.appendChild(style);
+  }
+  if (style.textContent !== GLOBE_CSS) style.textContent = GLOBE_CSS;
 }
 
 const EDIT_ICON =
@@ -687,17 +1025,32 @@ const EXPAND_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>';
 const SHRINK_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>';
+const FREEHAND_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17c2-4 4-4 6 0s4 4 6 0 4-4 6 0"/><path d="M3 11c2-4 4-4 6 0s4 4 6 0 4-4 6 0"/></svg>';
+const SIMPLIFY_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18 L9 11 L15 14 L21 6"/><circle cx="3" cy="18" r="1.6" fill="currentColor"/><circle cx="9" cy="11" r="1.6" fill="currentColor"/><circle cx="15" cy="14" r="1.6" fill="currentColor"/><circle cx="21" cy="6" r="1.6" fill="currentColor"/></svg>';
+
+// Cursor used in simplify mode when the pointer is over a selectable feature.
+// 24×24 SVG of the simplify glyph with a white halo so it stays visible on
+// satellite imagery; falls back to `pointer` on browsers that ignore SVG
+// cursors.
+const SIMPLIFY_HOVER_CURSOR =
+  "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><path d='M5 21 L11 13 L17 16 L23 7'/><circle cx='5' cy='21' r='2.6' fill='%23ffffff'/><circle cx='11' cy='13' r='2.6' fill='%23ffffff'/><circle cx='17' cy='16' r='2.6' fill='%23ffffff'/><circle cx='23' cy='7' r='2.6' fill='%23ffffff'/><path d='M5 21 L11 13 L17 16 L23 7' stroke='%233b82f6' stroke-width='2'/><circle cx='5' cy='21' r='1.8' fill='%233b82f6'/><circle cx='11' cy='13' r='1.8' fill='%233b82f6'/><circle cx='17' cy='16' r='1.8' fill='%233b82f6'/><circle cx='23' cy='7' r='1.8' fill='%233b82f6'/></svg>\") 14 14, pointer";
 
 export function GisGlobeViewport({
   data,
   dataKey,
   editing,
   adding,
+  freehand,
+  simplifying,
   dirty,
   saving,
   geometryType,
   onToggleEdit,
   onToggleAdd,
+  onToggleFreehand,
+  onToggleSimplify,
   onSave,
   onEdited,
   onAdded,
@@ -706,11 +1059,15 @@ export function GisGlobeViewport({
   dataKey: string;
   editing: boolean;
   adding: boolean;
+  freehand: boolean;
+  simplifying: boolean;
   dirty: boolean;
   saving: boolean;
   geometryType: string;
   onToggleEdit: () => void;
   onToggleAdd: () => void;
+  onToggleFreehand: () => void;
+  onToggleSimplify: () => void;
   onSave: () => void;
   onEdited: (features: GeoJSON.Feature[]) => void;
   onAdded: (feature: GeoJSON.Feature) => void;
@@ -723,6 +1080,10 @@ export function GisGlobeViewport({
   const [zoomDisplay, setZoomDisplay] = React.useState(DEFAULT_ZOOM);
   const [isFullscreen, setIsFullscreen] = React.useState(false);
   const fittedKeyRef = React.useRef<string | null>(null);
+  const [contextMenu, setContextMenu] = React.useState<
+    { x: number; y: number; lng: number; lat: number } | null
+  >(null);
+  const contextMenuRef = React.useRef<HTMLDivElement>(null);
 
   // Track fullscreen state at the viewport level so we can swap the chrome.
   React.useEffect(() => {
@@ -733,6 +1094,87 @@ export function GisGlobeViewport({
     document.addEventListener("fullscreenchange", update);
     return () => document.removeEventListener("fullscreenchange", update);
   }, []);
+
+  // Right-click on the map → open a custom context menu. maplibregl's
+  // `contextmenu` event preventDefaults the native menu for us.
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady || freehand) return;
+    const handler = (e: maplibregl.MapMouseEvent) => {
+      setContextMenu({
+        x: e.point.x,
+        y: e.point.y,
+        lng: e.lngLat.lng,
+        lat: e.lngLat.lat,
+      });
+    };
+    map.on("contextmenu", handler);
+    return () => {
+      map.off("contextmenu", handler);
+    };
+  }, [styleReady, freehand]);
+
+  // Position the context menu imperatively — repo lint forbids JSX style props,
+  // and the click coordinates are pure runtime data so a CSS class won't do.
+  React.useEffect(() => {
+    const menu = contextMenuRef.current;
+    if (!menu || !contextMenu) return;
+    menu.style.left = `${contextMenu.x}px`;
+    menu.style.top = `${contextMenu.y}px`;
+  }, [contextMenu]);
+
+  // Dismiss the context menu on outside click, escape, or camera move.
+  React.useEffect(() => {
+    if (!contextMenu) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const menu = contextMenuRef.current;
+      if (menu && menu.contains(e.target as Node)) return;
+      setContextMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setContextMenu(null);
+    };
+    const onMove = () => setContextMenu(null);
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKey);
+    const map = mapRef.current;
+    map?.on("movestart", onMove);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKey);
+      map?.off("movestart", onMove);
+    };
+  }, [contextMenu]);
+
+  const handleViewAll = React.useCallback(() => {
+    const map = mapRef.current;
+    if (!map || !data) {
+      setContextMenu(null);
+      return;
+    }
+    const bounds = geojsonBounds(data);
+    if (bounds) {
+      map.fitBounds(bounds as LngLatBoundsLike, {
+        padding: 48,
+        duration: 800,
+      });
+    }
+    setContextMenu(null);
+  }, [data]);
+
+  const handleZoomTo = React.useCallback(
+    (zoom: number) => {
+      const map = mapRef.current;
+      if (!map || !contextMenu) return;
+      map.easeTo({
+        center: [contextMenu.lng, contextMenu.lat],
+        zoom,
+        duration: 800,
+      });
+      setContextMenu(null);
+    },
+    [contextMenu]
+  );
 
   const toggleFullscreen = React.useCallback(() => {
     const el = wrapperRef.current;
@@ -750,12 +1192,16 @@ export function GisGlobeViewport({
   const onAddedRef = React.useRef(onAdded);
   const onToggleEditRef = React.useRef(onToggleEdit);
   const onToggleAddRef = React.useRef(onToggleAdd);
+  const onToggleFreehandRef = React.useRef(onToggleFreehand);
+  const onToggleSimplifyRef = React.useRef(onToggleSimplify);
   React.useEffect(() => {
     onSaveRef.current = onSave;
     onEditedRef.current = onEdited;
     onAddedRef.current = onAdded;
     onToggleEditRef.current = onToggleEdit;
     onToggleAddRef.current = onToggleAdd;
+    onToggleFreehandRef.current = onToggleFreehand;
+    onToggleSimplifyRef.current = onToggleSimplify;
   });
 
   // Mutable working copy of the feature collection for in-session edits.
@@ -766,6 +1212,32 @@ export function GisGlobeViewport({
       ? (JSON.parse(JSON.stringify(data)) as GeoJSON.FeatureCollection)
       : null;
   }, [data, dataKey]);
+
+  // Simplify-mode selection. The slider is bound to `slider` (0–100), which
+  // is mapped through a cubic curve onto an absolute tolerance scaled by the
+  // feature's bbox diagonal — that gives fine control near zero and aggressive
+  // reduction at the top of the slider regardless of the feature's size.
+  const [simplifyState, setSimplifyState] = React.useState<{
+    id: number;
+    originalGeom: GeoJSON.Geometry;
+    diagonal: number;
+    baseVertices: number;
+    slider: number;
+  } | null>(null);
+
+  const simplifiedPreview = React.useMemo<GeoJSON.Geometry | null>(() => {
+    if (!simplifyState) return null;
+    const tol =
+      Math.pow(simplifyState.slider / 100, 3) * (simplifyState.diagonal / 4);
+    return simplifyGeometry(simplifyState.originalGeom, tol);
+  }, [simplifyState]);
+
+  const simplifyStateRef = React.useRef(simplifyState);
+  const simplifiedPreviewRef = React.useRef(simplifiedPreview);
+  React.useEffect(() => {
+    simplifyStateRef.current = simplifyState;
+    simplifiedPreviewRef.current = simplifiedPreview;
+  });
 
   React.useEffect(() => injectCss(), []);
 
@@ -779,7 +1251,7 @@ export function GisGlobeViewport({
       style: EMPTY_STYLE,
       center: DEFAULT_CENTER,
       zoom: DEFAULT_ZOOM,
-      attributionControl: { compact: true },
+      attributionControl: false,
     });
 
     // Enable real WebGL globe projection (MapLibre GL 5+)
@@ -1496,7 +1968,398 @@ export function GisGlobeViewport({
     };
   }, [adding, geometryType, styleReady]);
 
-  const tile = TILE_SOURCES[tileIndex];
+  // --------------------------------------------------------------------
+  // Freehand mode — hold the right mouse button to trace a polygon. Points
+  // are sampled at a fixed pixel distance for a moderately dense outline.
+  // Releasing the button pauses the stroke; the draft stays on screen so the
+  // user can pan/zoom and continue with another right-button drag. Toggling
+  // the freehand button off commits the shape.
+  // --------------------------------------------------------------------
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady || !freehand) return;
+
+    const SAMPLE_DIST = 10; // px between sampled vertices
+    const shape = gpkgTypeToDrawShape(geometryType);
+    const closed = shape === "Polygon";
+    const coords: [number, number][] = [];
+    let drawing = false;
+    let lastPoint: { x: number; y: number } | null = null;
+
+    // Right-button drag rotates by default — disable while freehand is active.
+    const rotateWasEnabled = map.dragRotate.isEnabled();
+    map.dragRotate.disable();
+
+    const draftEmpty: GeoJSON.FeatureCollection = {
+      type: "FeatureCollection",
+      features: [],
+    };
+    map.addSource(DRAFT_SOURCE_ID, { type: "geojson", data: draftEmpty });
+    map.addLayer({
+      id: DRAFT_FILL_LAYER,
+      type: "fill",
+      source: DRAFT_SOURCE_ID,
+      filter: ["==", ["geometry-type"], "Polygon"],
+      paint: {
+        "fill-color": SELECTED_COLOR,
+        "fill-opacity": 0.2,
+      },
+    });
+    map.addLayer({
+      id: DRAFT_LINE_LAYER,
+      type: "line",
+      source: DRAFT_SOURCE_ID,
+      filter: [
+        "any",
+        ["==", ["geometry-type"], "LineString"],
+        ["==", ["geometry-type"], "Polygon"],
+      ],
+      paint: {
+        "line-color": SELECTED_COLOR,
+        "line-width": 2,
+      },
+    });
+
+    const updateDraft = () => {
+      const src = map.getSource(DRAFT_SOURCE_ID) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      if (!src) return;
+      const geom = buildDraftGeometry(shape, coords);
+      src.setData(
+        geom
+          ? {
+              type: "FeatureCollection",
+              features: [{ type: "Feature", properties: {}, geometry: geom }],
+            }
+          : draftEmpty
+      );
+    };
+
+    const canvas = map.getCanvas();
+    canvas.style.cursor = "crosshair";
+
+    const localPoint = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    };
+
+    const pushPoint = (pt: { x: number; y: number }) => {
+      const ll = map.unproject([pt.x, pt.y]);
+      coords.push([ll.lng, ll.lat]);
+      updateDraft();
+    };
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button !== 2) return;
+      e.preventDefault();
+      e.stopPropagation();
+      drawing = true;
+      const pt = localPoint(e);
+      lastPoint = pt;
+      pushPoint(pt);
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!drawing) return;
+      const pt = localPoint(e);
+      if (lastPoint) {
+        const dx = pt.x - lastPoint.x;
+        const dy = pt.y - lastPoint.y;
+        if (Math.hypot(dx, dy) < SAMPLE_DIST) return;
+      }
+      lastPoint = pt;
+      pushPoint(pt);
+    };
+
+    const onMouseUp = (e: MouseEvent) => {
+      if (e.button !== 2 || !drawing) return;
+      drawing = false;
+      lastPoint = null;
+    };
+
+    const onContextMenu = (e: Event) => e.preventDefault();
+
+    canvas.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    canvas.addEventListener("contextmenu", onContextMenu);
+
+    return () => {
+      canvas.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      canvas.removeEventListener("contextmenu", onContextMenu);
+      canvas.style.cursor = "";
+      if (rotateWasEnabled) map.dragRotate.enable();
+
+      const minCount = closed ? 3 : 2;
+      if (coords.length >= minCount) {
+        let geom: GeoJSON.Geometry = closed
+          ? { type: "Polygon", coordinates: [[...coords, coords[0]]] }
+          : { type: "LineString", coordinates: coords };
+        geom = wrapGeomToType(geom, geometryType);
+        onAddedRef.current({
+          type: "Feature",
+          properties: {},
+          geometry: geom,
+        });
+      }
+
+      for (const layerId of [DRAFT_LINE_LAYER, DRAFT_FILL_LAYER]) {
+        if (map.getLayer(layerId)) map.removeLayer(layerId);
+      }
+      if (map.getSource(DRAFT_SOURCE_ID)) map.removeSource(DRAFT_SOURCE_ID);
+    };
+  }, [freehand, geometryType, styleReady]);
+
+  // --------------------------------------------------------------------
+  // Simplify mode — click a feature to load it into the edit-source as a
+  // preview. The slider drives RDP tolerance; moving it always restarts
+  // from the original (cloned) geometry, so the user can scrub back and
+  // forth without ever losing detail. Switching feature or toggling the
+  // mode off commits the current preview through onEdited.
+  // --------------------------------------------------------------------
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady || !simplifying) return;
+
+    if (!map.getSource(EDIT_SOURCE_ID)) {
+      map.addSource(EDIT_SOURCE_ID, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: EDIT_FILL_LAYER,
+        type: "fill",
+        source: EDIT_SOURCE_ID,
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: {
+          "fill-color": SELECTED_COLOR,
+          "fill-opacity": 0.3,
+        },
+      });
+      map.addLayer({
+        id: EDIT_LINE_LAYER,
+        type: "line",
+        source: EDIT_SOURCE_ID,
+        filter: [
+          "any",
+          ["==", ["geometry-type"], "LineString"],
+          ["==", ["geometry-type"], "Polygon"],
+        ],
+        paint: {
+          "line-color": SELECTED_COLOR,
+          "line-width": 3,
+          "line-opacity": 0.95,
+        },
+      });
+      map.addLayer({
+        id: EDIT_CIRCLE_LAYER,
+        type: "circle",
+        source: EDIT_SOURCE_ID,
+        filter: ["==", ["geometry-type"], "Point"],
+        paint: {
+          "circle-radius": 7,
+          "circle-color": SELECTED_COLOR,
+          "circle-opacity": 0.9,
+          "circle-stroke-color": "#1e3a8a",
+          "circle-stroke-width": 1,
+        },
+      });
+    }
+
+    if (!map.getSource(SIMPLIFY_VERTS_SOURCE_ID)) {
+      map.addSource(SIMPLIFY_VERTS_SOURCE_ID, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: SIMPLIFY_VERTS_LAYER,
+        type: "circle",
+        source: SIMPLIFY_VERTS_SOURCE_ID,
+        paint: {
+          "circle-radius": 4,
+          "circle-color": "#ffffff",
+          "circle-stroke-color": SELECTED_COLOR,
+          "circle-stroke-width": 2,
+        },
+      });
+    }
+
+    const commitCurrent = (): boolean => {
+      const state = simplifyStateRef.current;
+      const preview = simplifiedPreviewRef.current;
+      if (!state || !preview || !workingRef.current) return false;
+      const previewVerts = countGeomVertices(preview);
+      if (previewVerts === state.baseVertices) return false;
+      const feature = workingRef.current.features[state.id];
+      if (!feature) return false;
+      const next = { ...feature, geometry: preview };
+      workingRef.current.features[state.id] = next;
+      onEditedRef.current([next]);
+      const mainSrc = map.getSource(FEATURES_SOURCE_ID) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      mainSrc?.setData(workingRef.current);
+      return true;
+    };
+
+    const clearSelection = (clearReactState = true) => {
+      const state = simplifyStateRef.current;
+      if (state) {
+        map.setFeatureState(
+          { source: FEATURES_SOURCE_ID, id: state.id },
+          { editing: false }
+        );
+      }
+      const editSrc = map.getSource(EDIT_SOURCE_ID) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      editSrc?.setData({ type: "FeatureCollection", features: [] });
+      const vertsSrc = map.getSource(SIMPLIFY_VERTS_SOURCE_ID) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      vertsSrc?.setData({ type: "FeatureCollection", features: [] });
+      if (clearReactState) setSimplifyState(null);
+    };
+
+    const select = (id: number) => {
+      const working = workingRef.current;
+      if (!working) return;
+      const feature = working.features[id];
+      if (!feature?.geometry) return;
+      // Commit the previous selection (if any) before switching.
+      commitCurrent();
+      clearSelection(false);
+      map.setFeatureState(
+        { source: FEATURES_SOURCE_ID, id },
+        { editing: true }
+      );
+      setSimplifyState({
+        id,
+        originalGeom: cloneGeometry(feature.geometry),
+        diagonal: geomBboxDiagonal(feature.geometry),
+        baseVertices: countGeomVertices(feature.geometry),
+        slider: 0,
+      });
+    };
+
+    const HIT_TOLERANCE = 6;
+    const onMapClick = (e: maplibregl.MapMouseEvent) => {
+      const layers = [
+        FEATURES_FILL_LAYER,
+        FEATURES_LINE_LAYER,
+        FEATURES_CIRCLE_LAYER,
+        EDIT_FILL_LAYER,
+        EDIT_LINE_LAYER,
+        EDIT_CIRCLE_LAYER,
+      ].filter((id) => !!map.getLayer(id));
+      if (layers.length === 0) {
+        commitCurrent();
+        clearSelection();
+        return;
+      }
+      const bbox: [maplibregl.PointLike, maplibregl.PointLike] = [
+        [e.point.x - HIT_TOLERANCE, e.point.y - HIT_TOLERANCE],
+        [e.point.x + HIT_TOLERANCE, e.point.y + HIT_TOLERANCE],
+      ];
+      const hits = map.queryRenderedFeatures(bbox, { layers });
+      if (hits.length === 0) {
+        commitCurrent();
+        clearSelection();
+        return;
+      }
+      const first = hits[0];
+      // Click on the currently-previewed feature → keep it selected.
+      if (first.source === EDIT_SOURCE_ID) return;
+      const rawId = first.id;
+      if (rawId == null) return;
+      const id = typeof rawId === "number" ? rawId : Number(rawId);
+      if (!Number.isFinite(id)) return;
+      select(id);
+    };
+
+    const canvas = map.getCanvas();
+    // Track depth so the cursor only resets after leaving every overlapping
+    // hover layer (e.g. polygon fill + outline both fire mouseenter for the
+    // same feature; counting prevents flicker between them).
+    let hoverDepth = 0;
+    const setHoverCursor = () => {
+      hoverDepth += 1;
+      canvas.style.cursor = SIMPLIFY_HOVER_CURSOR;
+    };
+    const clearHoverCursor = () => {
+      hoverDepth = Math.max(0, hoverDepth - 1);
+      if (hoverDepth === 0) canvas.style.cursor = "";
+    };
+    // Hover both the main features (selectable) and the edit-source preview
+    // (already-selected) so the contextual cursor stays visible the entire
+    // time the pointer is over a shape.
+    const hoverLayers = [
+      FEATURES_FILL_LAYER,
+      FEATURES_LINE_LAYER,
+      FEATURES_CIRCLE_LAYER,
+      EDIT_FILL_LAYER,
+      EDIT_LINE_LAYER,
+      EDIT_CIRCLE_LAYER,
+    ].filter((id) => !!map.getLayer(id));
+    for (const layerId of hoverLayers) {
+      map.on("mouseenter", layerId, setHoverCursor);
+      map.on("mouseleave", layerId, clearHoverCursor);
+    }
+    map.on("click", onMapClick);
+
+    return () => {
+      // Final commit on teardown
+      commitCurrent();
+      clearSelection();
+
+      map.off("click", onMapClick);
+      for (const layerId of hoverLayers) {
+        map.off("mouseenter", layerId, setHoverCursor);
+        map.off("mouseleave", layerId, clearHoverCursor);
+      }
+      canvas.style.cursor = "";
+
+      if (map.getLayer(SIMPLIFY_VERTS_LAYER))
+        map.removeLayer(SIMPLIFY_VERTS_LAYER);
+      if (map.getSource(SIMPLIFY_VERTS_SOURCE_ID))
+        map.removeSource(SIMPLIFY_VERTS_SOURCE_ID);
+
+      for (const layerId of [
+        EDIT_CIRCLE_LAYER,
+        EDIT_LINE_LAYER,
+        EDIT_FILL_LAYER,
+      ]) {
+        if (map.getLayer(layerId)) map.removeLayer(layerId);
+      }
+      if (map.getSource(EDIT_SOURCE_ID)) map.removeSource(EDIT_SOURCE_ID);
+    };
+  }, [simplifying, styleReady]);
+
+  // Push the live simplified preview into the edit-source whenever the slider
+  // moves (or a new feature is selected). Lives in its own effect so that the
+  // main simplify effect doesn't re-run on every slider tick.
+  React.useEffect(() => {
+    if (!simplifying || !simplifyState || !simplifiedPreview) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const src = map.getSource(EDIT_SOURCE_ID) as
+      | maplibregl.GeoJSONSource
+      | undefined;
+    if (!src || !workingRef.current) return;
+    const feature = workingRef.current.features[simplifyState.id];
+    if (!feature) return;
+    src.setData({
+      type: "FeatureCollection",
+      features: [{ ...feature, geometry: simplifiedPreview }],
+    });
+    const vertsSrc = map.getSource(SIMPLIFY_VERTS_SOURCE_ID) as
+      | maplibregl.GeoJSONSource
+      | undefined;
+    vertsSrc?.setData(geomVertexFC(simplifiedPreview));
+  }, [simplifying, simplifyState, simplifiedPreview]);
 
   return (
     <div
@@ -1505,7 +2368,7 @@ export function GisGlobeViewport({
     >
       <div ref={containerRef} className="h-full w-full" />
 
-      <DraggableToolbar wrapperRef={wrapperRef}>
+      <DraggableToolbar wrapperRef={wrapperRef} resetKey={isFullscreen}>
         <select
           className="glb-tile-select"
           value={tileIndex}
@@ -1517,21 +2380,40 @@ export function GisGlobeViewport({
             </option>
           ))}
         </select>
-        <span className="glb-zoom-badge">Z {zoomDisplay.toFixed(1)}</span>
         <div className="glb-fs-divider" />
         <ToolbarButton
           title={adding ? "Cancel add" : "Add feature"}
           icon={ADD_ICON}
-          disabled={saving || editing}
+          disabled={saving || editing || freehand || simplifying}
           active={adding}
           onClick={() => onToggleAddRef.current()}
         />
         <ToolbarButton
+          title={
+            freehand
+              ? "Finish freehand"
+              : "Freehand draw (hold right mouse button)"
+          }
+          icon={FREEHAND_ICON}
+          disabled={saving || editing || adding || simplifying}
+          active={freehand}
+          onClick={() => onToggleFreehandRef.current()}
+        />
+        <ToolbarButton
           title={editing ? "Stop editing" : "Edit vertices"}
           icon={EDIT_ICON}
-          disabled={saving || adding}
+          disabled={saving || adding || freehand || simplifying}
           active={editing}
           onClick={() => onToggleEditRef.current()}
+        />
+        <ToolbarButton
+          title={
+            simplifying ? "Finish simplify" : "Simplify shape (click a feature)"
+          }
+          icon={SIMPLIFY_ICON}
+          disabled={saving || adding || freehand || editing}
+          active={simplifying}
+          onClick={() => onToggleSimplifyRef.current()}
         />
         <ToolbarButton
           title={
@@ -1543,16 +2425,19 @@ export function GisGlobeViewport({
           onClick={() => onSaveRef.current()}
         />
         <div className="glb-fs-divider" />
-        <ToolbarButton
-          icon={ZOOM_IN_ICON}
-          title="Zoom in"
-          onClick={() => mapRef.current?.zoomIn()}
-        />
-        <ToolbarButton
-          icon={ZOOM_OUT_ICON}
-          title="Zoom out"
-          onClick={() => mapRef.current?.zoomOut()}
-        />
+        <div className="glb-zoom-group">
+          <ToolbarButton
+            icon={ZOOM_IN_ICON}
+            title="Zoom in"
+            onClick={() => mapRef.current?.zoomIn()}
+          />
+          <span className="glb-zoom-badge">Z {zoomDisplay.toFixed(1)}</span>
+          <ToolbarButton
+            icon={ZOOM_OUT_ICON}
+            title="Zoom out"
+            onClick={() => mapRef.current?.zoomOut()}
+          />
+        </div>
         <ToolbarButton
           icon={isFullscreen ? SHRINK_ICON : EXPAND_ICON}
           title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
@@ -1560,10 +2445,58 @@ export function GisGlobeViewport({
         />
       </DraggableToolbar>
 
-      <p
-        className="glb-attribution"
-        dangerouslySetInnerHTML={{ __html: tile.attribution }}
-      />
+      {simplifying && (
+        <div
+          className={
+            simplifyState
+              ? "glb-simplify-panel"
+              : "glb-simplify-panel glb-simplify-panel--idle"
+          }
+        >
+          <span className="glb-simplify-label">Simplify</span>
+          <input
+            type="range"
+            className="glb-simplify-slider"
+            min={0}
+            max={100}
+            step={1}
+            disabled={!simplifyState}
+            value={simplifyState?.slider ?? 0}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setSimplifyState((s) => (s ? { ...s, slider: v } : s));
+            }}
+          />
+          <span className="glb-simplify-count">
+            {simplifyState
+              ? `${
+                  simplifiedPreview
+                    ? countGeomVertices(simplifiedPreview)
+                    : simplifyState.baseVertices
+                } / ${simplifyState.baseVertices} pts`
+              : "click a shape"}
+          </span>
+        </div>
+      )}
+
+      {contextMenu && (
+        <div
+          ref={contextMenuRef}
+          className="glb-context-menu"
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <button type="button" onClick={handleViewAll}>
+            View all
+          </button>
+          <button type="button" onClick={() => handleZoomTo(14)}>
+            Zoom 14
+          </button>
+          <button type="button" onClick={() => handleZoomTo(18)}>
+            Zoom 18
+          </button>
+        </div>
+      )}
+
     </div>
   );
 }
@@ -1610,9 +2543,11 @@ function ToolbarButton({
 // during drag, no JSX `style={}` that the project lint forbids).
 function DraggableToolbar({
   wrapperRef,
+  resetKey,
   children,
 }: {
   wrapperRef: React.RefObject<HTMLDivElement | null>;
+  resetKey?: unknown;
   children: React.ReactNode;
 }) {
   const toolbarRef = React.useRef<HTMLDivElement>(null);
@@ -1623,6 +2558,18 @@ function DraggableToolbar({
     offX: 0,
     offY: 0,
   });
+
+  // Snap back to the default (bottom-center) layout whenever resetKey changes
+  // — e.g. when entering or leaving fullscreen — by clearing the inline styles
+  // the drag handler writes.
+  React.useEffect(() => {
+    const toolbar = toolbarRef.current;
+    if (!toolbar) return;
+    toolbar.style.left = "";
+    toolbar.style.top = "";
+    toolbar.style.bottom = "";
+    toolbar.style.transform = "";
+  }, [resetKey]);
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
