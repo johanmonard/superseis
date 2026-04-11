@@ -257,7 +257,9 @@ export default function GisGlobePage() {
 
         <p className="text-xs text-[var(--color-text-muted)]">
           Real WebGL globe projection powered by MapLibre GL. Raster satellite
-          and basemap tiles are draped directly on the globe.
+          and basemap tiles are draped directly on the globe, with custom
+          click-to-edit vertex handles projected through MapLibre&apos;s
+          globe-correct project / unproject pipeline.
         </p>
 
         {loading && (

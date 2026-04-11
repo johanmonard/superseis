@@ -200,10 +200,24 @@ const FEATURES_FILL_LAYER = "features-fill";
 const FEATURES_LINE_LAYER = "features-line";
 const FEATURES_CIRCLE_LAYER = "features-circle";
 
+const DRAFT_SOURCE_ID = "draft-source";
+const DRAFT_FILL_LAYER = "draft-fill";
+const DRAFT_LINE_LAYER = "draft-line";
+
+// Separate source holding only the feature currently being edited. Keeping it
+// tiny means per-frame setData calls during vertex drag are cheap — the main
+// source (which may hold tens of thousands of features) is never touched
+// during a drag.
+const EDIT_SOURCE_ID = "edit-source";
+const EDIT_FILL_LAYER = "edit-fill";
+const EDIT_LINE_LAYER = "edit-line";
+const EDIT_CIRCLE_LAYER = "edit-circle";
+
 const DEFAULT_CENTER: [number, number] = [0, 20];
 const DEFAULT_ZOOM = 1;
 
 const FEATURE_COLOR = "#facc15";
+const SELECTED_COLOR = "#3b82f6";
 const EMPTY_STYLE: StyleSpecification = {
   version: 8,
   glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
@@ -257,6 +271,173 @@ function geojsonBounds(
     [minLng, minLat],
     [maxLng, maxLat],
   ];
+}
+
+// ---------------------------------------------------------------------------
+// Geometry editing helpers — index/path-addressed vertices, plus draft builder
+// ---------------------------------------------------------------------------
+
+type VertexEntry = { path: number[]; coord: [number, number] };
+type DrawShape = "Point" | "LineString" | "Polygon";
+
+function cloneGeometry<G extends GeoJSON.Geometry>(g: G): G {
+  return JSON.parse(JSON.stringify(g)) as G;
+}
+
+function enumerateVertices(geom: GeoJSON.Geometry): VertexEntry[] {
+  const out: VertexEntry[] = [];
+  const push = (path: number[], c: GeoJSON.Position) =>
+    out.push({ path, coord: [c[0], c[1]] });
+
+  switch (geom.type) {
+    case "Point":
+      push([], geom.coordinates);
+      break;
+    case "MultiPoint":
+      geom.coordinates.forEach((c, i) => push([i], c));
+      break;
+    case "LineString":
+      geom.coordinates.forEach((c, i) => push([i], c));
+      break;
+    case "MultiLineString":
+      geom.coordinates.forEach((line, li) =>
+        line.forEach((c, i) => push([li, i], c))
+      );
+      break;
+    case "Polygon":
+      geom.coordinates.forEach((ring, ri) => {
+        const last = ring.length - 1;
+        ring.forEach((c, i) => {
+          if (i === last && ring.length > 1) return;
+          push([ri, i], c);
+        });
+      });
+      break;
+    case "MultiPolygon":
+      geom.coordinates.forEach((poly, pi) =>
+        poly.forEach((ring, ri) => {
+          const last = ring.length - 1;
+          ring.forEach((c, i) => {
+            if (i === last && ring.length > 1) return;
+            push([pi, ri, i], c);
+          });
+        })
+      );
+      break;
+  }
+  return out;
+}
+
+// In-place vertex mutation. Safe to call at 60fps during drag because it does
+// no allocations — the caller owns the geometry object and must clone it
+// beforehand if they need an immutable copy.
+function mutateGeomVertex(
+  geom: GeoJSON.Geometry,
+  path: number[],
+  coord: [number, number]
+): void {
+  if (geom.type === "Point") {
+    (geom as GeoJSON.Point).coordinates = coord;
+    return;
+  }
+  let parent: unknown = (geom as { coordinates: unknown }).coordinates;
+  for (let i = 0; i < path.length - 1; i++) {
+    parent = (parent as unknown[])[path[i]];
+  }
+  (parent as unknown[])[path[path.length - 1]] = coord;
+
+  // Keep polygon rings closed when the first vertex is moved
+  if (geom.type === "Polygon" && path.length === 2 && path[1] === 0) {
+    const ring = (geom as GeoJSON.Polygon).coordinates[path[0]];
+    if (ring.length > 1) ring[ring.length - 1] = coord;
+  }
+  if (geom.type === "MultiPolygon" && path.length === 3 && path[2] === 0) {
+    const ring = (geom as GeoJSON.MultiPolygon).coordinates[path[0]][path[1]];
+    if (ring.length > 1) ring[ring.length - 1] = coord;
+  }
+}
+
+// Segment midpoints for LineString / Polygon (including closing edge) and their
+// multi variants. The returned `path` is the insertion index — splicing the new
+// vertex there yields a ring/line with the midpoint inserted at the clicked edge.
+function enumerateMidpoints(geom: GeoJSON.Geometry): VertexEntry[] {
+  const out: VertexEntry[] = [];
+  const addSegments = (coords: GeoJSON.Position[], pathPrefix: number[]) => {
+    for (let i = 0; i < coords.length - 1; i++) {
+      const a = coords[i];
+      const b = coords[i + 1];
+      out.push({
+        path: [...pathPrefix, i + 1],
+        coord: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2],
+      });
+    }
+  };
+  switch (geom.type) {
+    case "LineString":
+      addSegments(geom.coordinates, []);
+      break;
+    case "MultiLineString":
+      geom.coordinates.forEach((line, li) => addSegments(line, [li]));
+      break;
+    case "Polygon":
+      geom.coordinates.forEach((ring, ri) => addSegments(ring, [ri]));
+      break;
+    case "MultiPolygon":
+      geom.coordinates.forEach((poly, pi) =>
+        poly.forEach((ring, ri) => addSegments(ring, [pi, ri]))
+      );
+      break;
+  }
+  return out;
+}
+
+function mutateInsertGeomVertex(
+  geom: GeoJSON.Geometry,
+  path: number[],
+  coord: [number, number]
+): void {
+  let parent: unknown = (geom as { coordinates: unknown }).coordinates;
+  for (let i = 0; i < path.length - 1; i++) {
+    parent = (parent as unknown[])[path[i]];
+  }
+  (parent as unknown[]).splice(path[path.length - 1], 0, coord);
+}
+
+function gpkgTypeToDrawShape(geometryType: string): DrawShape {
+  const t = geometryType.toUpperCase().replace(/^MULTI/, "");
+  if (t.startsWith("POINT")) return "Point";
+  if (t.startsWith("LINESTRING")) return "LineString";
+  return "Polygon";
+}
+
+function wrapGeomToType(
+  geom: GeoJSON.Geometry,
+  geometryType: string
+): GeoJSON.Geometry {
+  const t = geometryType.toUpperCase();
+  if (!t.startsWith("MULTI")) return geom;
+  if (geom.type === "Point" && t === "MULTIPOINT") {
+    return { type: "MultiPoint", coordinates: [geom.coordinates] };
+  }
+  if (geom.type === "LineString" && t === "MULTILINESTRING") {
+    return { type: "MultiLineString", coordinates: [geom.coordinates] };
+  }
+  if (geom.type === "Polygon" && t === "MULTIPOLYGON") {
+    return { type: "MultiPolygon", coordinates: [geom.coordinates] };
+  }
+  return geom;
+}
+
+function buildDraftGeometry(
+  shape: DrawShape,
+  coords: [number, number][]
+): GeoJSON.Geometry | null {
+  if (coords.length === 0) return null;
+  if (shape === "Point") return { type: "Point", coordinates: coords[0] };
+  if (coords.length === 1) return { type: "Point", coordinates: coords[0] };
+  if (shape === "LineString") return { type: "LineString", coordinates: coords };
+  if (coords.length < 3) return { type: "LineString", coordinates: coords };
+  return { type: "Polygon", coordinates: [[...coords, coords[0]]] };
 }
 
 const GLOBE_CSS = `
@@ -343,20 +524,61 @@ const GLOBE_CSS = `
     align-self: flex-start;
   }
 
-  .glb-unsupported {
+  .glb-attribution {
     position: absolute;
     bottom: 8px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 2;
-    font-size: 11px;
+    font-size: 10px;
     font-family: system-ui, sans-serif;
     color: #fff;
     background-color: rgba(0,0,0,0.55);
     border-radius: 4px;
-    padding: 4px 8px;
+    padding: 3px 8px;
     pointer-events: none;
     user-select: none;
+    max-width: 60%;
+    text-align: center;
+  }
+  .glb-attribution a { color: #fff; text-decoration: underline; }
+
+  /* Vertex handle (draggable) — solid white square with blue border */
+  .glb-vertex {
+    width: 11px;
+    height: 11px;
+    background-color: #fff;
+    border: 2px solid #3b82f6;
+    border-radius: 2px;
+    box-shadow: 0 0 3px rgba(0,0,0,0.5);
+    box-sizing: border-box;
+    cursor: move;
+  }
+  .glb-vertex:hover { background-color: #dbeafe; }
+
+  /* Draft vertex (while drawing a new feature) — same look, crosshair cursor */
+  .glb-vertex--draft { cursor: crosshair; }
+
+  /* Midpoint handle — click (or drag) to insert a new vertex on the segment.
+     Never put a transition on the transform property here: maplibregl.Marker
+     repositions by writing translate() into the inline transform on every
+     move event, and a transform transition would animate those position
+     updates (making handles lag behind the globe during pan). */
+  .glb-midpoint {
+    width: 9px;
+    height: 9px;
+    background-color: #fb923c;
+    border: 1.5px solid #fff;
+    border-radius: 50%;
+    opacity: 0.75;
+    cursor: copy;
+    box-sizing: border-box;
+    box-shadow: 0 0 2px rgba(0,0,0,0.35);
+    transition: opacity 0.1s ease-out, box-shadow 0.1s ease-out;
+  }
+  .glb-midpoint:hover {
+    opacity: 1;
+    box-shadow: 0 0 0 3px rgba(251, 146, 60, 0.45);
   }
 
   @keyframes glb-pulse {
@@ -404,7 +626,12 @@ export function GisGlobeViewport({
   adding,
   dirty,
   saving,
+  geometryType,
+  onToggleEdit,
+  onToggleAdd,
   onSave,
+  onEdited,
+  onAdded,
 }: {
   data: GeoJSONFeatureCollection | null;
   dataKey: string;
@@ -425,10 +652,29 @@ export function GisGlobeViewport({
   const [styleReady, setStyleReady] = React.useState(false);
   const [zoomDisplay, setZoomDisplay] = React.useState(DEFAULT_ZOOM);
   const fittedKeyRef = React.useRef<string | null>(null);
+
+  // Live copies of callbacks so effects don't have to re-subscribe
   const onSaveRef = React.useRef(onSave);
+  const onEditedRef = React.useRef(onEdited);
+  const onAddedRef = React.useRef(onAdded);
+  const onToggleEditRef = React.useRef(onToggleEdit);
+  const onToggleAddRef = React.useRef(onToggleAdd);
   React.useEffect(() => {
     onSaveRef.current = onSave;
-  }, [onSave]);
+    onEditedRef.current = onEdited;
+    onAddedRef.current = onAdded;
+    onToggleEditRef.current = onToggleEdit;
+    onToggleAddRef.current = onToggleAdd;
+  });
+
+  // Mutable working copy of the feature collection for in-session edits.
+  // Kept in sync with upstream `data` whenever the file changes.
+  const workingRef = React.useRef<GeoJSON.FeatureCollection | null>(null);
+  React.useEffect(() => {
+    workingRef.current = data
+      ? (JSON.parse(JSON.stringify(data)) as GeoJSON.FeatureCollection)
+      : null;
+  }, [data, dataKey]);
 
   React.useEffect(() => injectCss(), []);
 
@@ -538,6 +784,7 @@ export function GisGlobeViewport({
       map.addSource(FEATURES_SOURCE_ID, {
         type: "geojson",
         data: fc,
+        generateId: true,
       });
       map.addLayer({
         id: FEATURES_FILL_LAYER,
@@ -546,7 +793,12 @@ export function GisGlobeViewport({
         filter: ["==", ["geometry-type"], "Polygon"],
         paint: {
           "fill-color": FEATURE_COLOR,
-          "fill-opacity": 0.15,
+          "fill-opacity": [
+            "case",
+            ["boolean", ["feature-state", "editing"], false],
+            0,
+            0.15,
+          ],
         },
       });
       map.addLayer({
@@ -561,7 +813,12 @@ export function GisGlobeViewport({
         paint: {
           "line-color": FEATURE_COLOR,
           "line-width": 2,
-          "line-opacity": 0.85,
+          "line-opacity": [
+            "case",
+            ["boolean", ["feature-state", "editing"], false],
+            0,
+            0.9,
+          ],
         },
       });
       map.addLayer({
@@ -572,9 +829,19 @@ export function GisGlobeViewport({
         paint: {
           "circle-radius": 5,
           "circle-color": FEATURE_COLOR,
-          "circle-opacity": 0.85,
+          "circle-opacity": [
+            "case",
+            ["boolean", ["feature-state", "editing"], false],
+            0,
+            0.85,
+          ],
           "circle-stroke-color": "#78350f",
-          "circle-stroke-width": 1,
+          "circle-stroke-width": [
+            "case",
+            ["boolean", ["feature-state", "editing"], false],
+            0,
+            1,
+          ],
         },
       });
     }
@@ -598,6 +865,523 @@ export function GisGlobeViewport({
     }
   }, [data, dataKey, styleReady]);
 
+  // --------------------------------------------------------------------
+  // Editing mode. The currently-selected feature is cloned into a dedicated
+  // single-feature source so drags only re-tessellate that one feature, not
+  // the whole collection. The main source is hidden at the selected id via
+  // feature-state.editing and re-populated at deselect time.
+  // --------------------------------------------------------------------
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady || !editing) return;
+
+    type MarkerEntry = {
+      marker: maplibregl.Marker;
+      kind: "vertex" | "mid";
+    };
+
+    const editedIds = new Set<number>();
+    let selectedId: number | null = null;
+    let editingFeature: GeoJSON.Feature | null = null;
+    let entries: MarkerEntry[] = [];
+    let skipMapClick = false;
+    let pendingDraftRender = false;
+
+    const editFC = (): GeoJSON.FeatureCollection => ({
+      type: "FeatureCollection",
+      features: editingFeature ? [editingFeature] : [],
+    });
+
+    const applyEditSourceData = () => {
+      const src = map.getSource(EDIT_SOURCE_ID) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      src?.setData(editFC());
+    };
+
+    const ensureEditSource = () => {
+      if (map.getSource(EDIT_SOURCE_ID)) return;
+      map.addSource(EDIT_SOURCE_ID, {
+        type: "geojson",
+        data: editFC(),
+      });
+      map.addLayer({
+        id: EDIT_FILL_LAYER,
+        type: "fill",
+        source: EDIT_SOURCE_ID,
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: {
+          "fill-color": SELECTED_COLOR,
+          "fill-opacity": 0.3,
+        },
+      });
+      map.addLayer({
+        id: EDIT_LINE_LAYER,
+        type: "line",
+        source: EDIT_SOURCE_ID,
+        filter: [
+          "any",
+          ["==", ["geometry-type"], "LineString"],
+          ["==", ["geometry-type"], "Polygon"],
+        ],
+        paint: {
+          "line-color": SELECTED_COLOR,
+          "line-width": 3,
+          "line-opacity": 0.95,
+        },
+      });
+      map.addLayer({
+        id: EDIT_CIRCLE_LAYER,
+        type: "circle",
+        source: EDIT_SOURCE_ID,
+        filter: ["==", ["geometry-type"], "Point"],
+        paint: {
+          "circle-radius": 7,
+          "circle-color": SELECTED_COLOR,
+          "circle-opacity": 0.9,
+          "circle-stroke-color": "#1e3a8a",
+          "circle-stroke-width": 1,
+        },
+      });
+    };
+
+    const removeEditSource = () => {
+      for (const layerId of [
+        EDIT_CIRCLE_LAYER,
+        EDIT_LINE_LAYER,
+        EDIT_FILL_LAYER,
+      ]) {
+        if (map.getLayer(layerId)) map.removeLayer(layerId);
+      }
+      if (map.getSource(EDIT_SOURCE_ID)) map.removeSource(EDIT_SOURCE_ID);
+    };
+
+    const clearMarkers = () => {
+      entries.forEach((e) => e.marker.remove());
+      entries = [];
+    };
+
+    // Surgical midpoint refresh — called on every drag frame. Paths are stable
+    // during a drag (no insert/remove) so we can index midpoint entries by
+    // position without any path matching.
+    const refreshMidpointPositions = () => {
+      if (!editingFeature?.geometry) return;
+      const mids = enumerateMidpoints(editingFeature.geometry);
+      let mi = 0;
+      for (const entry of entries) {
+        if (entry.kind === "mid") {
+          const m = mids[mi++];
+          if (m) entry.marker.setLngLat(m.coord);
+        }
+      }
+    };
+
+    const commitSelectedToWorking = () => {
+      if (selectedId === null || !editingFeature || !workingRef.current) return;
+      workingRef.current.features[selectedId] = editingFeature;
+    };
+
+    const commitSelectedToMain = () => {
+      commitSelectedToWorking();
+      if (!workingRef.current) return;
+      const src = map.getSource(FEATURES_SOURCE_ID) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      src?.setData(workingRef.current);
+    };
+
+    const deselect = () => {
+      if (selectedId === null) return;
+      const wasEdited = editedIds.has(selectedId);
+      const oldId = selectedId;
+
+      if (wasEdited) {
+        // Push the edited geometry back into the main source (single setData
+        // per deselect — not per frame).
+        commitSelectedToMain();
+      }
+
+      map.setFeatureState(
+        { source: FEATURES_SOURCE_ID, id: oldId },
+        { editing: false }
+      );
+      selectedId = null;
+      editingFeature = null;
+      clearMarkers();
+      removeEditSource();
+    };
+
+    const renderMarkers = () => {
+      clearMarkers();
+      if (!editingFeature?.geometry) return;
+
+      const vertices = enumerateVertices(editingFeature.geometry);
+      for (const v of vertices) {
+        const el = document.createElement("div");
+        el.className = "glb-vertex";
+        const marker = new maplibregl.Marker({
+          element: el,
+          draggable: true,
+        })
+          .setLngLat(v.coord)
+          .addTo(map);
+
+        const vpath = v.path;
+
+        marker.on("drag", () => {
+          if (!editingFeature?.geometry) return;
+          const ll = marker.getLngLat();
+          mutateGeomVertex(editingFeature.geometry, vpath, [ll.lng, ll.lat]);
+          // Throttle edit-source updates to rAF so multiple drag events in a
+          // single frame coalesce.
+          if (!pendingDraftRender) {
+            pendingDraftRender = true;
+            requestAnimationFrame(() => {
+              pendingDraftRender = false;
+              applyEditSourceData();
+              refreshMidpointPositions();
+            });
+          }
+        });
+
+        marker.on("dragend", () => {
+          if (selectedId !== null) editedIds.add(selectedId);
+          skipMapClick = true;
+          setTimeout(() => {
+            skipMapClick = false;
+          }, 0);
+          // Final sync in case an rAF was still pending
+          applyEditSourceData();
+          refreshMidpointPositions();
+        });
+
+        entries.push({ marker, kind: "vertex" });
+      }
+
+      const midpoints = enumerateMidpoints(editingFeature.geometry);
+      for (const m of midpoints) {
+        const el = document.createElement("div");
+        el.className = "glb-midpoint";
+        const mpath = m.path;
+        const mcoord: [number, number] = [m.coord[0], m.coord[1]];
+
+        // Drag-to-insert: on the very first drag frame, splice a new vertex
+        // into the geometry at the midpoint's insertion index and then treat
+        // this marker as the new vertex for the rest of the gesture. On
+        // dragend we rebuild markers — vertex/midpoint paths after the
+        // insertion point have all shifted.
+        let converted = false;
+        const newVertexPath = mpath;
+
+        const marker = new maplibregl.Marker({ element: el, draggable: true })
+          .setLngLat(m.coord)
+          .addTo(map);
+
+        marker.on("drag", () => {
+          if (!editingFeature?.geometry) return;
+          const ll = marker.getLngLat();
+          const coord: [number, number] = [ll.lng, ll.lat];
+          if (!converted) {
+            converted = true;
+            mutateInsertGeomVertex(editingFeature.geometry, mpath, coord);
+            if (selectedId !== null) editedIds.add(selectedId);
+          } else {
+            mutateGeomVertex(editingFeature.geometry, newVertexPath, coord);
+          }
+          if (!pendingDraftRender) {
+            pendingDraftRender = true;
+            requestAnimationFrame(() => {
+              pendingDraftRender = false;
+              applyEditSourceData();
+              // Don't refresh midpoint markers while this midpoint is
+              // becoming a vertex — the entry array length no longer matches
+              // enumerateMidpoints(). renderMarkers() on dragend restores.
+            });
+          }
+        });
+
+        marker.on("dragend", () => {
+          skipMapClick = true;
+          setTimeout(() => {
+            skipMapClick = false;
+          }, 0);
+          if (converted) {
+            applyEditSourceData();
+            renderMarkers();
+          }
+        });
+
+        // Pure click (no drag movement): insert at the midpoint centroid and
+        // rebuild. `converted` stays false because the drag handler never
+        // fired.
+        el.addEventListener("click", (ev) => {
+          if (converted) return;
+          ev.stopPropagation();
+          if (!editingFeature?.geometry) return;
+          mutateInsertGeomVertex(editingFeature.geometry, mpath, mcoord);
+          if (selectedId !== null) editedIds.add(selectedId);
+          applyEditSourceData();
+          renderMarkers();
+        });
+
+        entries.push({ marker, kind: "mid" });
+      }
+    };
+
+    const select = (id: number) => {
+      if (selectedId === id) return;
+      deselect();
+      const working = workingRef.current;
+      if (!working) return;
+      const feature = working.features[id];
+      if (!feature?.geometry) return;
+
+      selectedId = id;
+      editingFeature = {
+        ...feature,
+        geometry: cloneGeometry(feature.geometry),
+      };
+
+      // Hide the feature in the main source; the edit-source shows it live
+      map.setFeatureState(
+        { source: FEATURES_SOURCE_ID, id },
+        { editing: true }
+      );
+      ensureEditSource();
+      applyEditSourceData();
+      renderMarkers();
+    };
+
+    const mainQueryLayers = () =>
+      [FEATURES_FILL_LAYER, FEATURES_LINE_LAYER, FEATURES_CIRCLE_LAYER].filter(
+        (id) => !!map.getLayer(id)
+      );
+    const editQueryLayers = () =>
+      [EDIT_FILL_LAYER, EDIT_LINE_LAYER, EDIT_CIRCLE_LAYER].filter(
+        (id) => !!map.getLayer(id)
+      );
+
+    const HIT_TOLERANCE = 6;
+
+    const onMapClick = (e: maplibregl.MapMouseEvent) => {
+      if (skipMapClick) return;
+      const bbox: [maplibregl.PointLike, maplibregl.PointLike] = [
+        [e.point.x - HIT_TOLERANCE, e.point.y - HIT_TOLERANCE],
+        [e.point.x + HIT_TOLERANCE, e.point.y + HIT_TOLERANCE],
+      ];
+      const layers = [...mainQueryLayers(), ...editQueryLayers()];
+      if (layers.length === 0) {
+        deselect();
+        return;
+      }
+      const hits = map.queryRenderedFeatures(bbox, { layers });
+      if (hits.length === 0) {
+        deselect();
+        return;
+      }
+      // If the first hit is the edit-source, we clicked the currently-selected
+      // feature — keep the selection as-is.
+      const first = hits[0];
+      if (first.source === EDIT_SOURCE_ID) return;
+      const rawId = first.id;
+      if (rawId == null) return;
+      const id = typeof rawId === "number" ? rawId : Number(rawId);
+      if (!Number.isFinite(id)) return;
+      select(id);
+    };
+
+    const canvas = map.getCanvas();
+    const setHoverCursor = () => {
+      canvas.style.cursor = "pointer";
+    };
+    const clearHoverCursor = () => {
+      canvas.style.cursor = "";
+    };
+
+    const hoverLayers = mainQueryLayers();
+    for (const layerId of hoverLayers) {
+      map.on("mouseenter", layerId, setHoverCursor);
+      map.on("mouseleave", layerId, clearHoverCursor);
+    }
+
+    map.on("click", onMapClick);
+
+    return () => {
+      deselect();
+      map.off("click", onMapClick);
+      for (const layerId of hoverLayers) {
+        map.off("mouseenter", layerId, setHoverCursor);
+        map.off("mouseleave", layerId, clearHoverCursor);
+      }
+      canvas.style.cursor = "";
+
+      if (editedIds.size > 0 && workingRef.current) {
+        const features: GeoJSON.Feature[] = [];
+        for (const id of editedIds) {
+          const f = workingRef.current.features[id];
+          if (f) features.push(f);
+        }
+        if (features.length > 0) onEditedRef.current(features);
+      }
+    };
+  }, [editing, styleReady]);
+
+  // --------------------------------------------------------------------
+  // Adding mode — click to place vertices, double-click to finish.
+  // Single click for Point, ≥2 for LineString, ≥3 for Polygon.
+  // --------------------------------------------------------------------
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady || !adding) return;
+
+    const shape = gpkgTypeToDrawShape(geometryType);
+    let coords: [number, number][] = [];
+    let vertexMarkers: maplibregl.Marker[] = [];
+    let clickTimer: number | null = null;
+
+    const dblZoomWasEnabled = map.doubleClickZoom.isEnabled();
+    map.doubleClickZoom.disable();
+
+    const draftEmpty: GeoJSON.FeatureCollection = {
+      type: "FeatureCollection",
+      features: [],
+    };
+    map.addSource(DRAFT_SOURCE_ID, { type: "geojson", data: draftEmpty });
+    map.addLayer({
+      id: DRAFT_FILL_LAYER,
+      type: "fill",
+      source: DRAFT_SOURCE_ID,
+      filter: ["==", ["geometry-type"], "Polygon"],
+      paint: {
+        "fill-color": SELECTED_COLOR,
+        "fill-opacity": 0.2,
+      },
+    });
+    map.addLayer({
+      id: DRAFT_LINE_LAYER,
+      type: "line",
+      source: DRAFT_SOURCE_ID,
+      filter: [
+        "any",
+        ["==", ["geometry-type"], "LineString"],
+        ["==", ["geometry-type"], "Polygon"],
+      ],
+      paint: {
+        "line-color": SELECTED_COLOR,
+        "line-width": 2,
+        "line-dasharray": [2, 2],
+      },
+    });
+
+    const updateDraftSource = () => {
+      const src = map.getSource(DRAFT_SOURCE_ID) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      if (!src) return;
+      const geom = buildDraftGeometry(shape, coords);
+      src.setData(
+        geom
+          ? {
+              type: "FeatureCollection",
+              features: [
+                { type: "Feature", properties: {}, geometry: geom },
+              ],
+            }
+          : draftEmpty
+      );
+    };
+
+    const clearVertexMarkers = () => {
+      vertexMarkers.forEach((m) => m.remove());
+      vertexMarkers = [];
+    };
+
+    const addVertexMarker = (coord: [number, number]) => {
+      const el = document.createElement("div");
+      el.className = "glb-vertex glb-vertex--draft";
+      const marker = new maplibregl.Marker({ element: el, draggable: false })
+        .setLngLat(coord)
+        .addTo(map);
+      vertexMarkers.push(marker);
+    };
+
+    const commit = () => {
+      const minCount =
+        shape === "Point" ? 1 : shape === "LineString" ? 2 : 3;
+      if (coords.length < minCount) return;
+
+      let geom: GeoJSON.Geometry;
+      if (shape === "Point") {
+        geom = { type: "Point", coordinates: coords[0] };
+      } else if (shape === "LineString") {
+        geom = { type: "LineString", coordinates: coords };
+      } else {
+        geom = { type: "Polygon", coordinates: [[...coords, coords[0]]] };
+      }
+      geom = wrapGeomToType(geom, geometryType);
+
+      const feature: GeoJSON.Feature = {
+        type: "Feature",
+        properties: {},
+        geometry: geom,
+      };
+      onAddedRef.current(feature);
+
+      coords = [];
+      clearVertexMarkers();
+      updateDraftSource();
+    };
+
+    const placeVertex = (lngLat: maplibregl.LngLat) => {
+      const c: [number, number] = [lngLat.lng, lngLat.lat];
+      coords.push(c);
+      addVertexMarker(c);
+      updateDraftSource();
+      if (shape === "Point") commit();
+    };
+
+    const onClick = (e: maplibregl.MapMouseEvent) => {
+      if (shape === "Point") {
+        placeVertex(e.lngLat);
+        return;
+      }
+      // Delay for a possible dblclick
+      if (clickTimer !== null) return;
+      const lngLat = e.lngLat;
+      clickTimer = window.setTimeout(() => {
+        clickTimer = null;
+        placeVertex(lngLat);
+      }, 220);
+    };
+
+    const onDblClick = (e: maplibregl.MapMouseEvent) => {
+      e.preventDefault();
+      if (clickTimer !== null) {
+        clearTimeout(clickTimer);
+        clickTimer = null;
+      }
+      commit();
+    };
+
+    map.on("click", onClick);
+    map.on("dblclick", onDblClick);
+    const canvas = map.getCanvas();
+    canvas.style.cursor = "crosshair";
+
+    return () => {
+      if (clickTimer !== null) clearTimeout(clickTimer);
+      map.off("click", onClick);
+      map.off("dblclick", onDblClick);
+      canvas.style.cursor = "";
+      clearVertexMarkers();
+      for (const layerId of [DRAFT_LINE_LAYER, DRAFT_FILL_LAYER]) {
+        if (map.getLayer(layerId)) map.removeLayer(layerId);
+      }
+      if (map.getSource(DRAFT_SOURCE_ID)) map.removeSource(DRAFT_SOURCE_ID);
+      if (dblZoomWasEnabled) map.doubleClickZoom.enable();
+    };
+  }, [adding, geometryType, styleReady]);
+
   const tile = TILE_SOURCES[tileIndex];
 
   return (
@@ -620,19 +1404,21 @@ export function GisGlobeViewport({
         <span className="glb-zoom-badge">Z {zoomDisplay.toFixed(1)}</span>
       </div>
 
-      {/* Top-right: edit / add / save toolbar (edit & add disabled on globe) */}
+      {/* Top-right: edit / add / save toolbar */}
       <div className="glb-panel glb-panel--tr">
         <ToolbarButton
-          title="Add feature (unsupported on globe)"
+          title={adding ? "Cancel add" : "Add feature"}
           icon={ADD_ICON}
-          disabled
+          disabled={saving || editing}
           active={adding}
+          onClick={() => onToggleAddRef.current()}
         />
         <ToolbarButton
-          title="Edit vertices (unsupported on globe)"
+          title={editing ? "Stop editing" : "Edit vertices"}
           icon={EDIT_ICON}
-          disabled
+          disabled={saving || adding}
           active={editing}
+          onClick={() => onToggleEditRef.current()}
         />
         <ToolbarButton
           title={saving ? "Saving…" : dirty ? "Save edits" : "No unsaved edits"}
@@ -646,10 +1432,10 @@ export function GisGlobeViewport({
       {/* Bottom-left: zoom + fullscreen */}
       <NavToolbar containerRef={containerRef} map={mapRef} />
 
-      <p className="glb-unsupported">
-        Vertex editing disabled on globe projection · Attribution:{" "}
-        <span dangerouslySetInnerHTML={{ __html: tile.attribution }} />
-      </p>
+      <p
+        className="glb-attribution"
+        dangerouslySetInnerHTML={{ __html: tile.attribution }}
+      />
     </div>
   );
 }
