@@ -6,5 +6,6 @@ const GIS_DIR = join(process.cwd(), "share", "gis");
 export async function GET() {
   const entries = await readdir(GIS_DIR).catch(() => [] as string[]);
   const files = entries.filter((f) => f.endsWith(".gpkg"));
-  return Response.json({ files });
+  const dems = entries.filter((f) => f.endsWith(".tif"));
+  return Response.json({ files, dems });
 }

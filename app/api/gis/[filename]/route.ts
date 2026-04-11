@@ -9,7 +9,9 @@ export async function GET(
 ) {
   const { filename } = await params;
 
-  if (!filename.endsWith(".gpkg") || filename.includes("..")) {
+  const isAllowed =
+    filename.endsWith(".gpkg") || filename.endsWith(".tif");
+  if (!isAllowed || filename.includes("..")) {
     return new Response("Not found", { status: 404 });
   }
 

@@ -14,6 +14,7 @@ import {
   exportDatabase,
 } from "@/lib/gpkg";
 import type { GeoJSONFeatureCollection, GpkgMeta } from "@/lib/gpkg";
+import type { RampName } from "@/components/features/demo/gis-globe-viewport";
 
 const GisGlobeViewport = dynamic(
   () =>
@@ -25,7 +26,14 @@ const GisGlobeViewport = dynamic(
 
 export default function GisGlobePage() {
   const [files, setFiles] = React.useState<string[]>([]);
+  const [dems, setDems] = React.useState<string[]>([]);
   const [selected, setSelected] = React.useState<string>("");
+  const [selectedDem, setSelectedDem] = React.useState<string>("");
+  const [terrainOn, setTerrainOn] = React.useState(false);
+  const [terrainExaggeration, setTerrainExaggeration] = React.useState(1.4);
+  const [demOpacity, setDemOpacity] = React.useState(0.85);
+  const [demColorRamp, setDemColorRamp] =
+    React.useState<RampName>("hypsometric");
   const [data, setData] = React.useState<GeoJSONFeatureCollection | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
@@ -34,22 +42,36 @@ export default function GisGlobePage() {
   const [adding, setAdding] = React.useState(false);
   const [freehand, setFreehand] = React.useState(false);
   const [simplifying, setSimplifying] = React.useState(false);
+  const [importingDem, setImportingDem] = React.useState(false);
+  const [demStatus, setDemStatus] = React.useState<
+    | { kind: "idle" }
+    | { kind: "fetching" }
+    | { kind: "ok"; file: string; tiles: number; zoom: number }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
   const [dirty, setDirty] = React.useState(false);
   const [loadId, setLoadId] = React.useState(0);
 
   const dbRef = React.useRef<Database | null>(null);
   const metaRef = React.useRef<GpkgMeta | null>(null);
 
-  // Fetch file list
-  React.useEffect(() => {
+  const refreshFileList = React.useCallback(() => {
     fetch("/api/gis")
       .then((r) => r.json())
-      .then((json: { files: string[] }) => {
+      .then((json: { files: string[]; dems: string[] }) => {
         setFiles(json.files);
-        if (json.files.length === 1) setSelected(json.files[0]);
+        setDems(json.dems ?? []);
+        if (json.files.length === 1) {
+          setSelected((cur) => cur || json.files[0]);
+        }
       })
       .catch(() => setError("Failed to list GIS files"));
   }, []);
+
+  // Fetch file list once on mount
+  React.useEffect(() => {
+    refreshFileList();
+  }, [refreshFileList]);
 
   // Load selected GPKG — keep DB alive for edits
   React.useEffect(() => {
@@ -68,6 +90,8 @@ export default function GisGlobePage() {
     setAdding(false);
     setFreehand(false);
     setSimplifying(false);
+    setImportingDem(false);
+    setDemStatus({ kind: "idle" });
     setDirty(false);
     setError(null);
 
@@ -132,6 +156,10 @@ export default function GisGlobePage() {
           updated.features[idx] = {
             ...updated.features[idx],
             geometry: edited.geometry as GeoJSONFeatureCollection["features"][0]["geometry"],
+            properties: {
+              ...updated.features[idx].properties,
+              __dirty: 1,
+            },
           };
         }
       }
@@ -156,15 +184,74 @@ export default function GisGlobePage() {
     setSimplifying((s) => !s);
   }, []);
 
+  const handleToggleImportDem = React.useCallback(() => {
+    setImportingDem((v) => {
+      if (v) setDemStatus({ kind: "idle" });
+      return !v;
+    });
+  }, []);
+
+  const handleConfirmDemDownload = React.useCallback(
+    async (params: {
+      bbox: [number, number, number, number];
+      name: string;
+      maxZoom: number;
+    }) => {
+      setDemStatus({ kind: "fetching" });
+      try {
+        const res = await fetch("/api/gis/dem", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(params),
+        });
+        if (!res.ok) {
+          const msg = await res.text();
+          throw new Error(msg || `HTTP ${res.status}`);
+        }
+        const json = (await res.json()) as {
+          file: string;
+          tiles: number;
+          zoom: number;
+        };
+        setDemStatus({
+          kind: "ok",
+          file: json.file,
+          tiles: json.tiles,
+          zoom: json.zoom,
+        });
+        setImportingDem(false);
+        refreshFileList();
+        setSelectedDem(json.file);
+      } catch (e) {
+        setDemStatus({ kind: "error", message: String(e) });
+      }
+    },
+    [refreshFileList]
+  );
+
+  const demNameSuggestion = React.useMemo(() => {
+    const base = (selected || "dem").replace(/\.gpkg$/i, "");
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[:T]/g, "-")
+      .slice(0, 19);
+    return `${base}_dem_${stamp}.tif`;
+  }, [selected]);
+
+  const handleToggleTerrain = React.useCallback(() => {
+    setTerrainOn((v) => !v);
+  }, []);
+
   const handleAdded = React.useCallback((feature: GeoJSON.Feature) => {
+    const stamped = {
+      ...feature,
+      properties: { ...(feature.properties ?? {}), __dirty: 1 },
+    } as GeoJSONFeatureCollection["features"][0];
     setData((prev) => {
       if (!prev) return prev;
       return {
         ...prev,
-        features: [
-          ...prev.features,
-          feature as GeoJSONFeatureCollection["features"][0],
-        ],
+        features: [...prev.features, stamped],
       };
     });
     setDirty(true);
@@ -197,28 +284,29 @@ export default function GisGlobePage() {
 
       if (!res.ok) throw new Error("Save failed");
 
-      if (newPks.length > 0) {
-        setData((prev) => {
-          if (!prev) return prev;
-          const updated = { ...prev, features: prev.features.slice() };
-          let pkIdx = 0;
-          for (let i = 0; i < updated.features.length; i++) {
-            if (
-              updated.features[i].properties[meta.pkCol] == null &&
-              pkIdx < newPks.length
-            ) {
-              updated.features[i] = {
-                ...updated.features[i],
-                properties: {
-                  ...updated.features[i].properties,
-                  [meta.pkCol]: newPks[pkIdx++],
-                },
-              };
+      setData((prev) => {
+        if (!prev) return prev;
+        const updated = { ...prev, features: prev.features.slice() };
+        let pkIdx = 0;
+        for (let i = 0; i < updated.features.length; i++) {
+          const f = updated.features[i];
+          const needsPk =
+            f.properties[meta.pkCol] == null && pkIdx < newPks.length;
+          if (needsPk || f.properties.__dirty) {
+            const rest: Record<string, unknown> = {};
+            for (const k in f.properties) {
+              if (k !== "__dirty") rest[k] = f.properties[k];
             }
+            updated.features[i] = {
+              ...f,
+              properties: needsPk
+                ? { ...rest, [meta.pkCol]: newPks[pkIdx++] }
+                : rest,
+            };
           }
-          return updated;
-        });
-      }
+        }
+        return updated;
+      });
 
       setDirty(false);
     } catch (e) {
@@ -242,6 +330,12 @@ export default function GisGlobePage() {
           adding={adding}
           freehand={freehand}
           simplifying={simplifying}
+          importingDem={importingDem}
+          demFile={selectedDem}
+          demOpacity={demOpacity}
+          demColorRamp={demColorRamp}
+          terrainOn={terrainOn}
+          terrainExaggeration={terrainExaggeration}
           dirty={dirty}
           saving={saving}
           geometryType={metaRef.current?.geometryType ?? "GEOMETRY"}
@@ -249,6 +343,13 @@ export default function GisGlobePage() {
           onToggleAdd={handleToggleAdd}
           onToggleFreehand={handleToggleFreehand}
           onToggleSimplify={handleToggleSimplify}
+          onToggleImportDem={handleToggleImportDem}
+          onToggleTerrain={handleToggleTerrain}
+          onSetTerrainExaggeration={setTerrainExaggeration}
+          onSetDemOpacity={setDemOpacity}
+          onSetDemColorRamp={setDemColorRamp}
+          demNameSuggestion={demNameSuggestion}
+          onConfirmDemDownload={handleConfirmDemDownload}
           onSave={handleSave}
           onEdited={handleEdited}
           onAdded={handleAdded}
@@ -272,6 +373,22 @@ export default function GisGlobePage() {
           </Select>
         </Field>
 
+        <Field label="DEM Overlay" htmlFor="dem-file">
+          <Select
+            id="dem-file"
+            value={selectedDem}
+            onChange={(e) => setSelectedDem(e.target.value)}
+          >
+            <option value="">None</option>
+            {dems.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </Select>
+        </Field>
+
+
         <p className="text-xs text-[var(--color-text-muted)]">
           Real WebGL globe projection powered by MapLibre GL. Raster satellite
           and basemap tiles are draped directly on the globe, with custom
@@ -288,6 +405,27 @@ export default function GisGlobePage() {
         {data && !loading && (
           <p className="text-xs text-[var(--color-text-muted)]">
             {featureCount} feature{featureCount !== 1 ? "s" : ""} loaded
+          </p>
+        )}
+        {importingDem && demStatus.kind === "idle" && (
+          <p className="text-xs text-[var(--color-text-muted)]">
+            DEM import: click a feature to fetch its terrain.
+          </p>
+        )}
+        {demStatus.kind === "fetching" && (
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Fetching DEM tiles…
+          </p>
+        )}
+        {demStatus.kind === "ok" && (
+          <p className="text-xs text-[var(--color-text-muted)]">
+            DEM saved: {demStatus.file} (z{demStatus.zoom},{" "}
+            {demStatus.tiles} tile{demStatus.tiles !== 1 ? "s" : ""})
+          </p>
+        )}
+        {demStatus.kind === "error" && (
+          <p className="text-xs text-[var(--color-text-danger)]">
+            DEM error: {demStatus.message}
           </p>
         )}
       </div>

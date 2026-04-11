@@ -8,6 +8,7 @@ import maplibregl, {
   type RasterSourceSpecification,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { fromArrayBuffer } from "geotiff";
 import type { GeoJSONFeatureCollection } from "@/lib/gpkg";
 
 type TileSource = {
@@ -219,10 +220,32 @@ const EDIT_CIRCLE_LAYER = "edit-circle";
 const SIMPLIFY_VERTS_SOURCE_ID = "simplify-verts-source";
 const SIMPLIFY_VERTS_LAYER = "simplify-verts-layer";
 
+// Colored 2D overlay rendered from a saved DEM .tif. The image is decoded
+// from a Float32 GeoTIFF on the client and added as an `image` source.
+const DEM_OVERLAY_SOURCE_ID = "dem-overlay-source";
+const DEM_OVERLAY_LAYER = "dem-overlay-layer";
+
+// Live raster-dem source used for MapLibre's 3D terrain. Two modes:
+// - No DEM selected → tiles fetched directly from AWS Terrarium.
+// - DEM selected → tiles fetched from /api/gis/dem-tiles/<name>/{z}/{x}/{y},
+//   which serves the local terrain-rgb pyramid where it has data and
+//   transparently proxies AWS Terrarium for tiles outside that area.
+const AWS_TERRAIN_SOURCE_ID = "aws-terrain-source";
+const LOCAL_TERRAIN_SOURCE_ID = "local-terrain-source";
+const AWS_TERRAIN_TILES =
+  "https://elevation-tiles-prod.s3.amazonaws.com/terrarium/{z}/{x}/{y}.png";
+
+// Live preview rectangle drawn while the user is configuring a DEM
+// download in the modal — updates as the padding slider moves.
+const DEM_PREVIEW_SOURCE_ID = "dem-preview-source";
+const DEM_PREVIEW_FILL_LAYER = "dem-preview-fill";
+const DEM_PREVIEW_LINE_LAYER = "dem-preview-line";
+
 const DEFAULT_CENTER: [number, number] = [0, 20];
 const DEFAULT_ZOOM = 1;
 
 const FEATURE_COLOR = "#facc15";
+const DIRTY_COLOR = "#f97316";
 const SELECTED_COLOR = "#3b82f6";
 const EMPTY_STYLE: StyleSpecification = {
   version: 8,
@@ -245,6 +268,155 @@ function rasterSourceFor(tile: TileSource): RasterSourceSpecification {
     attribution: tile.attribution,
     maxzoom: tile.maxZoom,
   };
+}
+
+// Spherical-Mercator → lng/lat (used to map a saved DEM's pixel extent
+// back to a MapLibre `image` source's lng/lat coordinates).
+const MERC_HALF = 20037508.342789244;
+function mercToLngLat(x: number, y: number): [number, number] {
+  const lng = (x / MERC_HALF) * 180;
+  const lat =
+    (Math.atan(Math.exp((y / MERC_HALF) * Math.PI)) * 360) / Math.PI - 90;
+  return [lng, lat];
+}
+
+// Swappable color ramps. Each is a sorted list of (t, [r,g,b]) stops
+// keyed on a normalized 0..1 elevation value, sampled by `ramp()`.
+type RampStops = ReadonlyArray<readonly [number, readonly [number, number, number]]>;
+export type RampName =
+  | "hypsometric"
+  | "viridis"
+  | "grayscale"
+  | "magma"
+  | "plasma"
+  | "cividis"
+  | "turbo"
+  | "spectral"
+  | "terrain";
+const RAMPS: Record<RampName, RampStops> = {
+  // Blue (water) → green (lowlands) → yellow → brown → white (peaks).
+  hypsometric: [
+    [0.0, [56, 96, 168]],
+    [0.05, [110, 158, 200]],
+    [0.2, [120, 180, 110]],
+    [0.45, [220, 200, 120]],
+    [0.75, [150, 100, 70]],
+    [1.0, [255, 255, 255]],
+  ],
+  // Perceptually-uniform purple → blue → green → yellow.
+  viridis: [
+    [0.0, [68, 1, 84]],
+    [0.25, [59, 82, 139]],
+    [0.5, [33, 144, 141]],
+    [0.75, [94, 201, 98]],
+    [1.0, [253, 231, 37]],
+  ],
+  grayscale: [
+    [0.0, [20, 20, 20]],
+    [1.0, [240, 240, 240]],
+  ],
+  // Perceptually-uniform black → purple → red → orange → yellow.
+  magma: [
+    [0.0, [0, 0, 4]],
+    [0.25, [80, 18, 123]],
+    [0.5, [182, 54, 121]],
+    [0.75, [251, 136, 97]],
+    [1.0, [252, 253, 191]],
+  ],
+  // Perceptually-uniform dark purple → magenta → orange → yellow.
+  plasma: [
+    [0.0, [13, 8, 135]],
+    [0.25, [126, 3, 168]],
+    [0.5, [204, 71, 120]],
+    [0.75, [248, 149, 64]],
+    [1.0, [240, 249, 33]],
+  ],
+  // Colorblind-friendly perceptually-uniform dark blue → tan → yellow.
+  cividis: [
+    [0.0, [0, 32, 76]],
+    [0.25, [55, 75, 110]],
+    [0.5, [124, 124, 120]],
+    [0.75, [186, 178, 100]],
+    [1.0, [254, 232, 56]],
+  ],
+  // Google's improved rainbow (perceptually better than Jet).
+  turbo: [
+    [0.0, [48, 18, 59]],
+    [0.13, [70, 107, 227]],
+    [0.25, [54, 170, 248]],
+    [0.38, [26, 219, 196]],
+    [0.5, [88, 250, 95]],
+    [0.63, [201, 233, 47]],
+    [0.75, [254, 165, 49]],
+    [0.88, [233, 76, 31]],
+    [1.0, [122, 4, 3]],
+  ],
+  // Diverging blue → white → red, oriented low→high (cool→warm).
+  spectral: [
+    [0.0, [94, 79, 162]],
+    [0.1, [50, 136, 189]],
+    [0.2, [102, 194, 165]],
+    [0.3, [171, 221, 164]],
+    [0.4, [230, 245, 152]],
+    [0.5, [255, 255, 191]],
+    [0.6, [254, 224, 139]],
+    [0.7, [253, 174, 97]],
+    [0.8, [244, 109, 67]],
+    [0.9, [213, 62, 79]],
+    [1.0, [158, 1, 66]],
+  ],
+  // Matplotlib-style "terrain" with bathymetric blues at the bottom.
+  terrain: [
+    [0.0, [51, 51, 153]],
+    [0.15, [51, 102, 204]],
+    [0.25, [102, 204, 204]],
+    [0.4, [102, 204, 102]],
+    [0.55, [204, 204, 102]],
+    [0.7, [204, 102, 51]],
+    [0.85, [153, 102, 51]],
+    [1.0, [255, 255, 255]],
+  ],
+};
+
+// Ramp render order for the inline picker — most useful first.
+const RAMP_ORDER: ReadonlyArray<RampName> = [
+  "hypsometric",
+  "terrain",
+  "spectral",
+  "viridis",
+  "magma",
+  "plasma",
+  "cividis",
+  "turbo",
+  "grayscale",
+];
+
+function rampToCssGradient(name: RampName): string {
+  const stops = RAMPS[name];
+  const parts = stops.map(
+    ([t, [r, g, b]]) => `rgb(${r},${g},${b}) ${(t * 100).toFixed(1)}%`
+  );
+  return `linear-gradient(to right, ${parts.join(", ")})`;
+}
+
+function ramp(t: number, name: keyof typeof RAMPS): [number, number, number] {
+  const stops = RAMPS[name];
+  if (t <= stops[0][0]) return [...stops[0][1]] as [number, number, number];
+  const last = stops[stops.length - 1];
+  if (t >= last[0]) return [...last[1]] as [number, number, number];
+  for (let i = 1; i < stops.length; i++) {
+    const [tA, cA] = stops[i - 1];
+    const [tB, cB] = stops[i];
+    if (t <= tB) {
+      const f = (t - tA) / (tB - tA);
+      return [
+        cA[0] + (cB[0] - cA[0]) * f,
+        cA[1] + (cB[1] - cA[1]) * f,
+        cA[2] + (cB[2] - cA[2]) * f,
+      ];
+    }
+  }
+  return [...last[1]] as [number, number, number];
 }
 
 function geojsonBounds(
@@ -899,6 +1071,128 @@ const GLOBE_CSS = `
   }
   .glb-fs-toolbar--dragging { cursor: grabbing; }
 
+  /* Small follow-on slider pill, positioned below the toolbar and
+     centered on the 3D Terrain button. Lives inside the toolbar so it
+     drags with it. The left offset is set inline from the button. */
+  .glb-terrain-slider-wrap {
+    position: absolute;
+    top: 100%;
+    margin-top: 8px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.18);
+    backdrop-filter: blur(8px);
+    font-family: system-ui, sans-serif;
+    font-size: 11px;
+    color: #1e293b;
+    cursor: default;
+    white-space: nowrap;
+  }
+  [data-theme="dark"] .glb-terrain-slider-wrap {
+    background-color: rgba(15, 23, 42, 0.82);
+    border-color: rgba(255, 255, 255, 0.12);
+    color: #e2e8f0;
+  }
+  .glb-terrain-slider-wrap__label {
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 10px;
+  }
+  [data-theme="dark"] .glb-terrain-slider-wrap__label { color: #94a3b8; }
+  .glb-terrain-slider-wrap input[type="range"] {
+    width: 110px;
+    accent-color: #3b82f6;
+    cursor: pointer;
+  }
+  .glb-terrain-slider-wrap__value {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    min-width: 26px;
+    text-align: right;
+  }
+  .glb-ramp-picker {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+  .glb-ramp-picker__trigger {
+    width: 36px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(15, 23, 42, 0.25);
+    cursor: pointer;
+    padding: 0;
+    background-clip: padding-box;
+  }
+  [data-theme="dark"] .glb-ramp-picker__trigger {
+    border-color: rgba(255, 255, 255, 0.25);
+  }
+  .glb-ramp-picker__trigger:hover { filter: brightness(1.05); }
+  .glb-ramp-picker__popover {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 6;
+    padding: 6px;
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 0.96);
+    border: 1px solid rgba(15, 23, 42, 0.14);
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.25);
+    backdrop-filter: blur(8px);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 140px;
+  }
+  [data-theme="dark"] .glb-ramp-picker__popover {
+    background-color: rgba(15, 23, 42, 0.94);
+    border-color: rgba(255, 255, 255, 0.14);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  }
+  .glb-ramp-picker__option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-family: system-ui, sans-serif;
+    font-size: 11px;
+    color: inherit;
+    text-align: left;
+  }
+  .glb-ramp-picker__option:hover {
+    background-color: rgba(15, 23, 42, 0.07);
+  }
+  [data-theme="dark"] .glb-ramp-picker__option:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+  .glb-ramp-picker__option--active {
+    background-color: rgba(59, 130, 246, 0.18) !important;
+    font-weight: 600;
+  }
+  .glb-ramp-picker__swatch {
+    width: 36px;
+    height: 12px;
+    border-radius: 2px;
+    border: 1px solid rgba(15, 23, 42, 0.2);
+    flex-shrink: 0;
+  }
+  [data-theme="dark"] .glb-ramp-picker__swatch {
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
   .glb-context-menu {
     position: absolute;
     z-index: 4;
@@ -998,6 +1292,143 @@ const GLOBE_CSS = `
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
+
+  .glb-dem-modal {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 5;
+    width: 320px;
+    padding: 16px 18px;
+    border-radius: 12px;
+    background-color: rgba(255, 255, 255, 0.96);
+    border: 1px solid rgba(15, 23, 42, 0.14);
+    box-shadow: 0 20px 50px rgba(15, 23, 42, 0.28);
+    backdrop-filter: blur(8px);
+    font-family: system-ui, sans-serif;
+    font-size: 12px;
+    color: #1e293b;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    user-select: none;
+  }
+  [data-theme="dark"] .glb-dem-modal {
+    background-color: rgba(15, 23, 42, 0.94);
+    border-color: rgba(255, 255, 255, 0.14);
+    color: #e2e8f0;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+  }
+  .glb-dem-modal__title {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0;
+  }
+  .glb-dem-modal__row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .glb-dem-modal__label {
+    font-size: 11px;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  [data-theme="dark"] .glb-dem-modal__label { color: #94a3b8; }
+  .glb-dem-modal__value {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+  }
+  .glb-dem-modal__input,
+  .glb-dem-modal__select {
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(15, 23, 42, 0.18);
+    background-color: rgba(255, 255, 255, 0.9);
+    color: inherit;
+    font-size: 12px;
+    font-family: inherit;
+  }
+  [data-theme="dark"] .glb-dem-modal__input,
+  [data-theme="dark"] .glb-dem-modal__select {
+    background-color: rgba(30, 41, 59, 0.9);
+    border-color: rgba(255, 255, 255, 0.16);
+  }
+  .glb-dem-modal__slider {
+    width: 100%;
+    accent-color: #3b82f6;
+    cursor: pointer;
+  }
+  .glb-dem-modal__actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 4px;
+  }
+  .glb-dem-modal__btn {
+    height: 28px;
+    padding: 0 14px;
+    border-radius: 6px;
+    border: 1px solid rgba(15, 23, 42, 0.18);
+    background-color: rgba(255, 255, 255, 0.9);
+    color: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .glb-dem-modal__btn--primary {
+    background-color: #3b82f6;
+    border-color: #2563eb;
+    color: #ffffff;
+  }
+  .glb-dem-modal__btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  [data-theme="dark"] .glb-dem-modal__btn {
+    background-color: rgba(30, 41, 59, 0.9);
+    border-color: rgba(255, 255, 255, 0.16);
+  }
+  [data-theme="dark"] .glb-dem-modal__btn--primary {
+    background-color: #3b82f6;
+    border-color: #1d4ed8;
+  }
+
+  .glb-cursor-readout {
+    position: absolute;
+    bottom: 10px;
+    right: 10px;
+    z-index: 4;
+    pointer-events: none;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+    backdrop-filter: blur(6px);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    line-height: 1.45;
+    color: #1e293b;
+    user-select: none;
+    white-space: nowrap;
+  }
+  [data-theme="dark"] .glb-cursor-readout {
+    background-color: rgba(15, 23, 42, 0.85);
+    border-color: rgba(255, 255, 255, 0.12);
+    color: #e2e8f0;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  }
+  .glb-cursor-readout__label {
+    color: #64748b;
+    margin-right: 4px;
+  }
+  [data-theme="dark"] .glb-cursor-readout__label { color: #94a3b8; }
 `;
 
 const GLOBE_CSS_ID = "glb-globe-viewport-css";
@@ -1029,6 +1460,12 @@ const FREEHAND_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17c2-4 4-4 6 0s4 4 6 0 4-4 6 0"/><path d="M3 11c2-4 4-4 6 0s4 4 6 0 4-4 6 0"/></svg>';
 const SIMPLIFY_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18 L9 11 L15 14 L21 6"/><circle cx="3" cy="18" r="1.6" fill="currentColor"/><circle cx="9" cy="11" r="1.6" fill="currentColor"/><circle cx="15" cy="14" r="1.6" fill="currentColor"/><circle cx="21" cy="6" r="1.6" fill="currentColor"/></svg>';
+const TILT_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 L21 9 L12 15 L3 9 Z"/><path d="M3 9 L3 14 L12 20 L21 14 L21 9"/></svg>';
+const DEM_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 19 L9 9 L13 15 L16 11 L21 19 Z"/><circle cx="17" cy="6" r="1.5" fill="currentColor"/></svg>';
+const TERRAIN_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20 L8 8 L12 14 L15 9 L22 20 Z"/><path d="M8 8 L10 11 M15 9 L17 12"/></svg>';
 
 // Cursor used in simplify mode when the pointer is over a selectable feature.
 // 24×24 SVG of the simplify glyph with a white halo so it stays visible on
@@ -1044,6 +1481,12 @@ export function GisGlobeViewport({
   adding,
   freehand,
   simplifying,
+  importingDem,
+  demFile,
+  demOpacity,
+  demColorRamp,
+  terrainOn,
+  terrainExaggeration,
   dirty,
   saving,
   geometryType,
@@ -1051,6 +1494,13 @@ export function GisGlobeViewport({
   onToggleAdd,
   onToggleFreehand,
   onToggleSimplify,
+  onToggleImportDem,
+  onToggleTerrain,
+  onSetTerrainExaggeration,
+  onSetDemOpacity,
+  onSetDemColorRamp,
+  demNameSuggestion,
+  onConfirmDemDownload,
   onSave,
   onEdited,
   onAdded,
@@ -1061,6 +1511,12 @@ export function GisGlobeViewport({
   adding: boolean;
   freehand: boolean;
   simplifying: boolean;
+  importingDem: boolean;
+  demFile: string;
+  demOpacity: number;
+  demColorRamp: RampName;
+  terrainOn: boolean;
+  terrainExaggeration: number;
   dirty: boolean;
   saving: boolean;
   geometryType: string;
@@ -1068,6 +1524,17 @@ export function GisGlobeViewport({
   onToggleAdd: () => void;
   onToggleFreehand: () => void;
   onToggleSimplify: () => void;
+  onToggleImportDem: () => void;
+  onToggleTerrain: () => void;
+  onSetTerrainExaggeration: (value: number) => void;
+  onSetDemOpacity: (value: number) => void;
+  onSetDemColorRamp: (value: RampName) => void;
+  demNameSuggestion: string;
+  onConfirmDemDownload: (params: {
+    bbox: [number, number, number, number];
+    name: string;
+    maxZoom: number;
+  }) => void;
   onSave: () => void;
   onEdited: (features: GeoJSON.Feature[]) => void;
   onAdded: (feature: GeoJSON.Feature) => void;
@@ -1078,6 +1545,25 @@ export function GisGlobeViewport({
   const [tileIndex, setTileIndex] = React.useState(0);
   const [styleReady, setStyleReady] = React.useState(false);
   const [zoomDisplay, setZoomDisplay] = React.useState(DEFAULT_ZOOM);
+  const [pitchDisplay, setPitchDisplay] = React.useState(0);
+  const [pendingDem, setPendingDem] = React.useState<{
+    rawBbox: [number, number, number, number];
+    padding: number; // 0..0.5 fractional padding per side
+    maxZoom: number;
+    name: string;
+  } | null>(null);
+  const [cursorReadout, setCursorReadout] = React.useState<{
+    lng: number;
+    lat: number;
+    alt: number | null;
+  } | null>(null);
+  const toolbarRef = React.useRef<HTMLDivElement>(null);
+  const terrainBtnRef = React.useRef<HTMLButtonElement>(null);
+  const demBtnRef = React.useRef<HTMLButtonElement>(null);
+  const [terrainSliderLeft, setTerrainSliderLeft] = React.useState<number | null>(null);
+  const [demSliderLeft, setDemSliderLeft] = React.useState<number | null>(null);
+  const [rampPickerOpen, setRampPickerOpen] = React.useState(false);
+  const rampPickerRef = React.useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = React.useState(false);
   const fittedKeyRef = React.useRef<string | null>(null);
   const [contextMenu, setContextMenu] = React.useState<
@@ -1194,6 +1680,14 @@ export function GisGlobeViewport({
   const onToggleAddRef = React.useRef(onToggleAdd);
   const onToggleFreehandRef = React.useRef(onToggleFreehand);
   const onToggleSimplifyRef = React.useRef(onToggleSimplify);
+  const onToggleImportDemRef = React.useRef(onToggleImportDem);
+  const onToggleTerrainRef = React.useRef(onToggleTerrain);
+  const onConfirmDemDownloadRef = React.useRef(onConfirmDemDownload);
+  const demNameSuggestionRef = React.useRef(demNameSuggestion);
+  const demOpacityRef = React.useRef(demOpacity);
+  const onSetTerrainExaggerationRef = React.useRef(onSetTerrainExaggeration);
+  const onSetDemOpacityRef = React.useRef(onSetDemOpacity);
+  const onSetDemColorRampRef = React.useRef(onSetDemColorRamp);
   React.useEffect(() => {
     onSaveRef.current = onSave;
     onEditedRef.current = onEdited;
@@ -1202,6 +1696,13 @@ export function GisGlobeViewport({
     onToggleAddRef.current = onToggleAdd;
     onToggleFreehandRef.current = onToggleFreehand;
     onToggleSimplifyRef.current = onToggleSimplify;
+    onToggleImportDemRef.current = onToggleImportDem;
+    onToggleTerrainRef.current = onToggleTerrain;
+    onConfirmDemDownloadRef.current = onConfirmDemDownload;
+    demNameSuggestionRef.current = demNameSuggestion;
+    onSetTerrainExaggerationRef.current = onSetTerrainExaggeration;
+    onSetDemOpacityRef.current = onSetDemOpacity;
+    onSetDemColorRampRef.current = onSetDemColorRamp;
   });
 
   // Mutable working copy of the feature collection for in-session edits.
@@ -1264,8 +1765,10 @@ export function GisGlobeViewport({
     map.on("load", () => {
       setStyleReady(true);
       setZoomDisplay(map.getZoom());
+      setPitchDisplay(map.getPitch());
     });
     map.on("zoom", () => setZoomDisplay(map.getZoom()));
+    map.on("pitch", () => setPitchDisplay(map.getPitch()));
 
     // During a splitter drag we avoid calling map.resize() at all — each
     // call sets canvas.width/height, which clears the WebGL framebuffer,
@@ -1372,17 +1875,25 @@ export function GisGlobeViewport({
         data: fc,
         generateId: true,
       });
+      const dirtyExpr = [
+        "case",
+        ["==", ["coalesce", ["get", "__dirty"], 0], 1],
+        DIRTY_COLOR,
+        FEATURE_COLOR,
+      ] as unknown as maplibregl.ExpressionSpecification;
       map.addLayer({
         id: FEATURES_FILL_LAYER,
         type: "fill",
         source: FEATURES_SOURCE_ID,
         filter: ["==", ["geometry-type"], "Polygon"],
         paint: {
-          "fill-color": FEATURE_COLOR,
+          "fill-color": dirtyExpr,
           "fill-opacity": [
             "case",
             ["boolean", ["feature-state", "editing"], false],
             0,
+            ["==", ["coalesce", ["get", "__dirty"], 0], 1],
+            0.3,
             0.15,
           ],
         },
@@ -1397,8 +1908,13 @@ export function GisGlobeViewport({
           ["==", ["geometry-type"], "Polygon"],
         ],
         paint: {
-          "line-color": FEATURE_COLOR,
-          "line-width": 2,
+          "line-color": dirtyExpr,
+          "line-width": [
+            "case",
+            ["==", ["coalesce", ["get", "__dirty"], 0], 1],
+            3,
+            2,
+          ],
           "line-opacity": [
             "case",
             ["boolean", ["feature-state", "editing"], false],
@@ -1413,19 +1929,31 @@ export function GisGlobeViewport({
         source: FEATURES_SOURCE_ID,
         filter: ["==", ["geometry-type"], "Point"],
         paint: {
-          "circle-radius": 5,
-          "circle-color": FEATURE_COLOR,
+          "circle-radius": [
+            "case",
+            ["==", ["coalesce", ["get", "__dirty"], 0], 1],
+            6,
+            5,
+          ],
+          "circle-color": dirtyExpr,
           "circle-opacity": [
             "case",
             ["boolean", ["feature-state", "editing"], false],
             0,
             0.85,
           ],
-          "circle-stroke-color": "#78350f",
+          "circle-stroke-color": [
+            "case",
+            ["==", ["coalesce", ["get", "__dirty"], 0], 1],
+            "#7c2d12",
+            "#78350f",
+          ],
           "circle-stroke-width": [
             "case",
             ["boolean", ["feature-state", "editing"], false],
             0,
+            ["==", ["coalesce", ["get", "__dirty"], 0], 1],
+            2,
             1,
           ],
         },
@@ -2361,6 +2889,517 @@ export function GisGlobeViewport({
     vertsSrc?.setData(geomVertexFC(simplifiedPreview));
   }, [simplifying, simplifyState, simplifiedPreview]);
 
+  // ------------------------------------------------------------------
+  // DEM-import mode: click a feature → compute its lng/lat bbox and
+  // hand it back to the page, which POSTs to /api/gis/dem.
+  // ------------------------------------------------------------------
+  React.useEffect(() => {
+    if (!importingDem) setPendingDem(null);
+  }, [importingDem]);
+
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady || !importingDem) return;
+
+    const HIT_TOLERANCE = 6;
+    const onMapClick = (e: maplibregl.MapMouseEvent) => {
+      const layers = [
+        FEATURES_FILL_LAYER,
+        FEATURES_LINE_LAYER,
+        FEATURES_CIRCLE_LAYER,
+      ].filter((id) => !!map.getLayer(id));
+      if (layers.length === 0) return;
+      const bbox: [maplibregl.PointLike, maplibregl.PointLike] = [
+        [e.point.x - HIT_TOLERANCE, e.point.y - HIT_TOLERANCE],
+        [e.point.x + HIT_TOLERANCE, e.point.y + HIT_TOLERANCE],
+      ];
+      const hits = map.queryRenderedFeatures(bbox, { layers });
+      if (hits.length === 0) return;
+      const rawId = hits[0].id;
+      if (rawId == null) return;
+      const id = typeof rawId === "number" ? rawId : Number(rawId);
+      if (!Number.isFinite(id)) return;
+      const feature = workingRef.current?.features[id];
+      if (!feature?.geometry) return;
+      let minLng = Infinity,
+        minLat = Infinity,
+        maxLng = -Infinity,
+        maxLat = -Infinity;
+      const visit = (coords: unknown) => {
+        if (!Array.isArray(coords)) return;
+        if (typeof coords[0] === "number") {
+          const [lng, lat] = coords as number[];
+          if (lng < minLng) minLng = lng;
+          if (lng > maxLng) maxLng = lng;
+          if (lat < minLat) minLat = lat;
+          if (lat > maxLat) maxLat = lat;
+        } else {
+          for (const c of coords) visit(c);
+        }
+      };
+      visit(
+        (feature.geometry as GeoJSON.Geometry & { coordinates: unknown })
+          .coordinates
+      );
+      if (!isFinite(minLng)) return;
+      setPendingDem({
+        rawBbox: [minLng, minLat, maxLng, maxLat],
+        padding: 0.1,
+        maxZoom: 14,
+        name: demNameSuggestionRef.current,
+      });
+    };
+
+    const canvas = map.getCanvas();
+    let hoverDepth = 0;
+    const setHoverCursor = () => {
+      hoverDepth += 1;
+      canvas.style.cursor = "crosshair";
+    };
+    const clearHoverCursor = () => {
+      hoverDepth = Math.max(0, hoverDepth - 1);
+      if (hoverDepth === 0) canvas.style.cursor = "";
+    };
+    const hoverLayers = [
+      FEATURES_FILL_LAYER,
+      FEATURES_LINE_LAYER,
+      FEATURES_CIRCLE_LAYER,
+    ].filter((id) => !!map.getLayer(id));
+    for (const layerId of hoverLayers) {
+      map.on("mouseenter", layerId, setHoverCursor);
+      map.on("mouseleave", layerId, clearHoverCursor);
+    }
+    map.on("click", onMapClick);
+
+    return () => {
+      map.off("click", onMapClick);
+      for (const layerId of hoverLayers) {
+        map.off("mouseenter", layerId, setHoverCursor);
+        map.off("mouseleave", layerId, clearHoverCursor);
+      }
+      canvas.style.cursor = "";
+    };
+  }, [importingDem, styleReady]);
+
+  // ------------------------------------------------------------------
+  // DEM overlay: read the selected .tif client-side, render it as a
+  // hypsometric-tinted PNG and add it as an `image` source covering the
+  // file's actual bbox. The .tif is in EPSG:3857 (Web Mercator) so we
+  // unproject the corners back to lng/lat for MapLibre.
+  // ------------------------------------------------------------------
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady) return;
+
+    // Tear down any previous overlay first; an empty demFile means
+    // "show nothing".
+    const cleanup = () => {
+      if (map.getLayer(DEM_OVERLAY_LAYER)) map.removeLayer(DEM_OVERLAY_LAYER);
+      if (map.getSource(DEM_OVERLAY_SOURCE_ID))
+        map.removeSource(DEM_OVERLAY_SOURCE_ID);
+    };
+    cleanup();
+    if (!demFile) return;
+
+    let cancelled = false;
+    (async () => {
+      const res = await fetch(`/api/gis/${encodeURIComponent(demFile)}`);
+      if (!res.ok) return;
+      const buf = await res.arrayBuffer();
+      if (cancelled) return;
+      const tiff = await fromArrayBuffer(buf);
+      const img = await tiff.getImage();
+      const w = img.getWidth();
+      const h = img.getHeight();
+      const [originX, originY] = img.getOrigin();
+      const [resX, resY] = img.getResolution();
+      const left = originX;
+      const top = originY;
+      const right = originX + resX * w;
+      const bottom = originY + resY * h;
+      const rasters = await img.readRasters();
+      if (cancelled) return;
+      const elev = rasters[0] as ArrayLike<number>;
+
+      let mn = Infinity;
+      let mx = -Infinity;
+      for (let i = 0; i < elev.length; i++) {
+        const v = elev[i];
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+      const range = mx - mn || 1;
+
+      // Hypsometric ramp + Lambertian-ish hillshade combined into one RGBA
+      // canvas. Hillshade adds the visual relief that flat coloring lacks.
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const imgData = ctx.createImageData(w, h);
+      const px = imgData.data;
+      const sample = (col: number, row: number) =>
+        elev[
+          Math.max(0, Math.min(h - 1, row)) * w +
+            Math.max(0, Math.min(w - 1, col))
+        ];
+      // Treat resolution as meters per pixel (true for EPSG:3857).
+      const cellSize = Math.abs(resX) || 1;
+      const sunAz = (315 * Math.PI) / 180;
+      const sunAlt = (45 * Math.PI) / 180;
+      const cosAlt = Math.cos(sunAlt);
+      const sinAlt = Math.sin(sunAlt);
+      for (let row = 0; row < h; row++) {
+        for (let col = 0; col < w; col++) {
+          const v = elev[row * w + col];
+          const t = (v - mn) / range;
+          const [rr, gg, bb] = ramp(t, demColorRamp);
+
+          // Horn's slope/aspect, scaled so the relief shows even for
+          // flat mosaics; clamped to avoid black pits.
+          const dzdx =
+            (sample(col + 1, row - 1) +
+              2 * sample(col + 1, row) +
+              sample(col + 1, row + 1) -
+              sample(col - 1, row - 1) -
+              2 * sample(col - 1, row) -
+              sample(col - 1, row + 1)) /
+            (8 * cellSize);
+          const dzdy =
+            (sample(col - 1, row + 1) +
+              2 * sample(col, row + 1) +
+              sample(col + 1, row + 1) -
+              sample(col - 1, row - 1) -
+              2 * sample(col, row - 1) -
+              sample(col + 1, row - 1)) /
+            (8 * cellSize);
+          const slope = Math.atan(2 * Math.hypot(dzdx, dzdy));
+          const aspect = Math.atan2(dzdy, -dzdx);
+          const lit =
+            cosAlt * Math.cos(slope) +
+            sinAlt * Math.sin(slope) * Math.cos(sunAz - aspect);
+          const shade = Math.max(0.4, Math.min(1.15, isFinite(lit) ? lit : 1));
+
+          const idx = (row * w + col) * 4;
+          px[idx] = Math.max(0, Math.min(255, rr * shade));
+          px[idx + 1] = Math.max(0, Math.min(255, gg * shade));
+          px[idx + 2] = Math.max(0, Math.min(255, bb * shade));
+          px[idx + 3] = 255;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+      const blob: Blob | null = await new Promise((resolve) =>
+        canvas.toBlob((b) => resolve(b), "image/png")
+      );
+      if (cancelled || !blob) return;
+      const url = URL.createObjectURL(blob);
+
+      const [tlLng, tlLat] = mercToLngLat(left, top);
+      const [trLng, trLat] = mercToLngLat(right, top);
+      const [brLng, brLat] = mercToLngLat(right, bottom);
+      const [blLng, blLat] = mercToLngLat(left, bottom);
+
+      // Replace any overlay added during the await window.
+      if (map.getLayer(DEM_OVERLAY_LAYER)) map.removeLayer(DEM_OVERLAY_LAYER);
+      if (map.getSource(DEM_OVERLAY_SOURCE_ID))
+        map.removeSource(DEM_OVERLAY_SOURCE_ID);
+
+      map.addSource(DEM_OVERLAY_SOURCE_ID, {
+        type: "image",
+        url,
+        coordinates: [
+          [tlLng, tlLat],
+          [trLng, trLat],
+          [brLng, brLat],
+          [blLng, blLat],
+        ],
+      });
+      const beforeId = map.getLayer(FEATURES_FILL_LAYER)
+        ? FEATURES_FILL_LAYER
+        : undefined;
+      map.addLayer(
+        {
+          id: DEM_OVERLAY_LAYER,
+          type: "raster",
+          source: DEM_OVERLAY_SOURCE_ID,
+          paint: {
+            "raster-opacity": demOpacityRef.current,
+            "raster-fade-duration": 0,
+          },
+        },
+        beforeId
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+      cleanup();
+    };
+  }, [demFile, demColorRamp, styleReady]);
+
+  // Light effect: opacity-only updates avoid the expensive re-render of
+  // the canvas / image source — just push the new value to the layer.
+  React.useEffect(() => {
+    demOpacityRef.current = demOpacity;
+    const map = mapRef.current;
+    if (!map || !styleReady) return;
+    if (!map.getLayer(DEM_OVERLAY_LAYER)) return;
+    map.setPaintProperty(DEM_OVERLAY_LAYER, "raster-opacity", demOpacity);
+  }, [demOpacity, styleReady]);
+
+  // Compute the padded bbox once per pendingDem change. Memoised so the
+  // preview rectangle, modal display, and the eventual download payload all
+  // see the same numbers.
+  const paddedDemBbox = React.useMemo<
+    [number, number, number, number] | null
+  >(() => {
+    if (!pendingDem) return null;
+    const [w, s, e, n] = pendingDem.rawBbox;
+    const dx = (e - w) * pendingDem.padding;
+    const dy = (n - s) * pendingDem.padding;
+    return [w - dx, s - dy, e + dx, n + dy];
+  }, [pendingDem]);
+
+  // Draw the live preview rectangle on the map. The rectangle uses the
+  // padded bbox so the user sees the actual download extent as they drag
+  // the padding slider.
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady) return;
+
+    const cleanup = () => {
+      if (map.getLayer(DEM_PREVIEW_LINE_LAYER))
+        map.removeLayer(DEM_PREVIEW_LINE_LAYER);
+      if (map.getLayer(DEM_PREVIEW_FILL_LAYER))
+        map.removeLayer(DEM_PREVIEW_FILL_LAYER);
+      if (map.getSource(DEM_PREVIEW_SOURCE_ID))
+        map.removeSource(DEM_PREVIEW_SOURCE_ID);
+    };
+
+    if (!paddedDemBbox) {
+      cleanup();
+      return;
+    }
+
+    const [w, s, e, n] = paddedDemBbox;
+    const fc: GeoJSON.FeatureCollection = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: {},
+          geometry: {
+            type: "Polygon",
+            coordinates: [
+              [
+                [w, s],
+                [e, s],
+                [e, n],
+                [w, n],
+                [w, s],
+              ],
+            ],
+          },
+        },
+      ],
+    };
+
+    const src = map.getSource(DEM_PREVIEW_SOURCE_ID) as
+      | maplibregl.GeoJSONSource
+      | undefined;
+    if (src) {
+      src.setData(fc);
+    } else {
+      map.addSource(DEM_PREVIEW_SOURCE_ID, { type: "geojson", data: fc });
+      map.addLayer({
+        id: DEM_PREVIEW_FILL_LAYER,
+        type: "fill",
+        source: DEM_PREVIEW_SOURCE_ID,
+        paint: {
+          "fill-color": "#f97316",
+          "fill-opacity": 0.18,
+        },
+      });
+      map.addLayer({
+        id: DEM_PREVIEW_LINE_LAYER,
+        type: "line",
+        source: DEM_PREVIEW_SOURCE_ID,
+        paint: {
+          "line-color": "#f97316",
+          "line-width": 2.5,
+          "line-dasharray": [2, 2],
+        },
+      });
+    }
+
+    return cleanup;
+  }, [paddedDemBbox, styleReady]);
+
+  // ------------------------------------------------------------------
+  // Live AWS Terrarium 3D terrain (option 3 from the docs example).
+  // ------------------------------------------------------------------
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady) return;
+
+    let cancelled = false;
+
+    const removeBoth = () => {
+      try {
+        map.setTerrain(null);
+      } catch {
+        // map may already be torn down
+      }
+      if (map.getSource(AWS_TERRAIN_SOURCE_ID))
+        map.removeSource(AWS_TERRAIN_SOURCE_ID);
+      if (map.getSource(LOCAL_TERRAIN_SOURCE_ID))
+        map.removeSource(LOCAL_TERRAIN_SOURCE_ID);
+    };
+
+    if (!terrainOn) {
+      removeBoth();
+      return;
+    }
+
+    (async () => {
+      // Default fallback: AWS-only.
+      let sourceId = AWS_TERRAIN_SOURCE_ID;
+      let tilesUrl = AWS_TERRAIN_TILES;
+      let maxzoom = 15;
+
+      // If a local DEM is selected, prefer its pyramid (which falls back
+      // to AWS server-side for tiles outside the file's bounds).
+      if (demFile) {
+        const baseName = demFile.replace(/\.tif$/i, "");
+        try {
+          const res = await fetch(
+            `/api/gis/dem-tiles/${encodeURIComponent(baseName)}/manifest`
+          );
+          if (res.ok) {
+            const manifest = (await res.json()) as { maxZoom?: number };
+            sourceId = LOCAL_TERRAIN_SOURCE_ID;
+            tilesUrl = `/api/gis/dem-tiles/${encodeURIComponent(
+              baseName
+            )}/{z}/{x}/{y}`;
+            maxzoom = Math.max(15, manifest.maxZoom ?? 15);
+          }
+        } catch {
+          // Manifest fetch failed — silently fall through to AWS.
+        }
+      }
+      if (cancelled) return;
+
+      // Replace any prior source so a switch (AWS↔local) is clean.
+      removeBoth();
+
+      map.addSource(sourceId, {
+        type: "raster-dem",
+        tiles: [tilesUrl],
+        tileSize: 256,
+        encoding: "terrarium",
+        maxzoom,
+      });
+      map.setTerrain({
+        source: sourceId,
+        exaggeration: terrainExaggeration,
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+      removeBoth();
+    };
+  }, [terrainOn, terrainExaggeration, demFile, styleReady]);
+
+  // Cursor readout: lng/lat under the pointer plus a queryTerrainElevation
+  // sample when 3D terrain is active. Throttled to one update per animation
+  // frame so a fast mouse drag doesn't flood React with state churn.
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady) return;
+
+    let frame: number | null = null;
+    let pending: { lng: number; lat: number } | null = null;
+
+    const flush = () => {
+      frame = null;
+      if (!pending) return;
+      const { lng, lat } = pending;
+      let alt: number | null = null;
+      if (terrainOn) {
+        try {
+          const v = map.queryTerrainElevation([lng, lat]);
+          alt = typeof v === "number" ? v : null;
+        } catch {
+          alt = null;
+        }
+      }
+      setCursorReadout({ lng, lat, alt });
+    };
+
+    const onMove = (e: maplibregl.MapMouseEvent) => {
+      pending = { lng: e.lngLat.lng, lat: e.lngLat.lat };
+      if (frame === null) frame = requestAnimationFrame(flush);
+    };
+    const onLeave = () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = null;
+      pending = null;
+      setCursorReadout(null);
+    };
+
+    map.on("mousemove", onMove);
+    map.on("mouseout", onLeave);
+
+    return () => {
+      map.off("mousemove", onMove);
+      map.off("mouseout", onLeave);
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, [styleReady, terrainOn]);
+
+  // Cache the horizontal centre of the terrain and DEM toolbar buttons
+  // (relative to the toolbar's content box) so the follow-on slider pills
+  // can anchor under them. Recomputed whenever the toolbar resizes — e.g.
+  // a fullscreen toggle that changes its layout — but not on every render.
+  React.useLayoutEffect(() => {
+    const tb = toolbarRef.current;
+    if (!tb) return;
+    const recompute = () => {
+      const t = terrainBtnRef.current;
+      const d = demBtnRef.current;
+      if (t && t.offsetWidth > 0)
+        setTerrainSliderLeft(t.offsetLeft + t.offsetWidth / 2);
+      if (d && d.offsetWidth > 0)
+        setDemSliderLeft(d.offsetLeft + d.offsetWidth / 2);
+    };
+    recompute();
+    const ro = new ResizeObserver(recompute);
+    ro.observe(tb);
+    return () => ro.disconnect();
+  }, [isFullscreen]);
+
+  // Outside-click + Escape to dismiss the inline ramp picker popover.
+  React.useEffect(() => {
+    if (!rampPickerOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const root = rampPickerRef.current;
+      if (root && !root.contains(e.target as Node)) {
+        setRampPickerOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setRampPickerOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [rampPickerOpen]);
+
   return (
     <div
       ref={wrapperRef}
@@ -2368,7 +3407,11 @@ export function GisGlobeViewport({
     >
       <div ref={containerRef} className="h-full w-full" />
 
-      <DraggableToolbar wrapperRef={wrapperRef} resetKey={isFullscreen}>
+      <DraggableToolbar
+        wrapperRef={wrapperRef}
+        resetKey={isFullscreen}
+        toolbarRef={toolbarRef}
+      >
         <select
           className="glb-tile-select"
           value={tileIndex}
@@ -2384,7 +3427,7 @@ export function GisGlobeViewport({
         <ToolbarButton
           title={adding ? "Cancel add" : "Add feature"}
           icon={ADD_ICON}
-          disabled={saving || editing || freehand || simplifying}
+          disabled={saving || editing || freehand || simplifying || importingDem}
           active={adding}
           onClick={() => onToggleAddRef.current()}
         />
@@ -2395,14 +3438,14 @@ export function GisGlobeViewport({
               : "Freehand draw (hold right mouse button)"
           }
           icon={FREEHAND_ICON}
-          disabled={saving || editing || adding || simplifying}
+          disabled={saving || editing || adding || simplifying || importingDem}
           active={freehand}
           onClick={() => onToggleFreehandRef.current()}
         />
         <ToolbarButton
           title={editing ? "Stop editing" : "Edit vertices"}
           icon={EDIT_ICON}
-          disabled={saving || adding || freehand || simplifying}
+          disabled={saving || adding || freehand || simplifying || importingDem}
           active={editing}
           onClick={() => onToggleEditRef.current()}
         />
@@ -2411,9 +3454,21 @@ export function GisGlobeViewport({
             simplifying ? "Finish simplify" : "Simplify shape (click a feature)"
           }
           icon={SIMPLIFY_ICON}
-          disabled={saving || adding || freehand || editing}
+          disabled={saving || adding || freehand || editing || importingDem}
           active={simplifying}
           onClick={() => onToggleSimplifyRef.current()}
+        />
+        <ToolbarButton
+          ref={demBtnRef}
+          title={
+            importingDem
+              ? "Cancel DEM import"
+              : "Import 3D terrain (click a feature)"
+          }
+          icon={DEM_ICON}
+          disabled={saving || adding || freehand || editing || simplifying}
+          active={importingDem}
+          onClick={() => onToggleImportDemRef.current()}
         />
         <ToolbarButton
           title={
@@ -2439,10 +3494,114 @@ export function GisGlobeViewport({
           />
         </div>
         <ToolbarButton
+          ref={terrainBtnRef}
+          title={terrainOn ? "Disable 3D terrain" : "Enable 3D terrain (live)"}
+          icon={TERRAIN_ICON}
+          active={terrainOn}
+          onClick={() => onToggleTerrainRef.current()}
+        />
+        <ToolbarButton
+          icon={TILT_ICON}
+          title={pitchDisplay > 1 ? "Reset tilt" : "Tilt 3D view"}
+          active={pitchDisplay > 1}
+          onClick={() => {
+            const map = mapRef.current;
+            if (!map) return;
+            if (map.getPitch() > 1) {
+              map.easeTo({ pitch: 0, bearing: 0, duration: 500 });
+            } else {
+              map.easeTo({ pitch: 60, bearing: -20, duration: 500 });
+            }
+          }}
+        />
+        <ToolbarButton
           icon={isFullscreen ? SHRINK_ICON : EXPAND_ICON}
           title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
           onClick={toggleFullscreen}
         />
+
+        {terrainOn && terrainSliderLeft != null && (
+          <div
+            className="glb-terrain-slider-wrap"
+            // eslint-disable-next-line template/no-jsx-style-prop -- runtime offset from button position
+            style={{ left: `${terrainSliderLeft}px` }}
+          >
+            <span className="glb-terrain-slider-wrap__label">3D ×</span>
+            <input
+              type="range"
+              min={0}
+              max={5}
+              step={0.1}
+              value={terrainExaggeration}
+              onChange={(e) =>
+                onSetTerrainExaggerationRef.current(Number(e.target.value))
+              }
+            />
+            <span className="glb-terrain-slider-wrap__value">
+              {terrainExaggeration.toFixed(1)}
+            </span>
+          </div>
+        )}
+
+        {demFile && demSliderLeft != null && (
+          <div
+            className="glb-terrain-slider-wrap"
+            // eslint-disable-next-line template/no-jsx-style-prop -- runtime offset from button position
+            style={{ left: `${demSliderLeft}px` }}
+          >
+            <span className="glb-terrain-slider-wrap__label">DEM α</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={demOpacity}
+              onChange={(e) =>
+                onSetDemOpacityRef.current(Number(e.target.value))
+              }
+            />
+            <span className="glb-terrain-slider-wrap__value">
+              {Math.round(demOpacity * 100)}
+            </span>
+            <div className="glb-ramp-picker" ref={rampPickerRef}>
+              <button
+                type="button"
+                title={`Color ramp: ${demColorRamp}`}
+                className="glb-ramp-picker__trigger"
+                // eslint-disable-next-line template/no-jsx-style-prop -- gradient string varies per ramp
+                style={{ backgroundImage: rampToCssGradient(demColorRamp) }}
+                onClick={() => setRampPickerOpen((v) => !v)}
+              />
+              {rampPickerOpen && (
+                <div className="glb-ramp-picker__popover">
+                  {RAMP_ORDER.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      className={
+                        "glb-ramp-picker__option" +
+                        (name === demColorRamp
+                          ? " glb-ramp-picker__option--active"
+                          : "")
+                      }
+                      onClick={() => {
+                        onSetDemColorRampRef.current(name);
+                        setRampPickerOpen(false);
+                      }}
+                    >
+                      <span
+                        className="glb-ramp-picker__swatch"
+                        // eslint-disable-next-line template/no-jsx-style-prop -- gradient string varies per ramp
+                        style={{ backgroundImage: rampToCssGradient(name) }}
+                      />
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </DraggableToolbar>
 
       {simplifying && (
@@ -2479,6 +3638,98 @@ export function GisGlobeViewport({
         </div>
       )}
 
+      {pendingDem && paddedDemBbox && (
+        <div className="glb-dem-modal">
+          <h3 className="glb-dem-modal__title">Import 3D Terrain</h3>
+
+          <div className="glb-dem-modal__row">
+            <span className="glb-dem-modal__label">
+              Bounding box (lng/lat)
+            </span>
+            <span className="glb-dem-modal__value">
+              W {paddedDemBbox[0].toFixed(5)} · S {paddedDemBbox[1].toFixed(5)}
+              <br />
+              E {paddedDemBbox[2].toFixed(5)} · N {paddedDemBbox[3].toFixed(5)}
+            </span>
+          </div>
+
+          <div className="glb-dem-modal__row">
+            <span className="glb-dem-modal__label">
+              Padding · {Math.round(pendingDem.padding * 100)}%
+            </span>
+            <input
+              type="range"
+              className="glb-dem-modal__slider"
+              min={0}
+              max={50}
+              step={1}
+              value={Math.round(pendingDem.padding * 100)}
+              onChange={(e) =>
+                setPendingDem((p) =>
+                  p ? { ...p, padding: Number(e.target.value) / 100 } : p
+                )
+              }
+            />
+          </div>
+
+          <div className="glb-dem-modal__row">
+            <span className="glb-dem-modal__label">Resolution</span>
+            <select
+              className="glb-dem-modal__select"
+              value={pendingDem.maxZoom}
+              onChange={(e) =>
+                setPendingDem((p) =>
+                  p ? { ...p, maxZoom: Number(e.target.value) } : p
+                )
+              }
+            >
+              <option value={10}>Coarse (z10)</option>
+              <option value={12}>Medium (z12)</option>
+              <option value={14}>Fine (z14)</option>
+            </select>
+          </div>
+
+          <div className="glb-dem-modal__row">
+            <span className="glb-dem-modal__label">Filename</span>
+            <input
+              type="text"
+              className="glb-dem-modal__input"
+              value={pendingDem.name}
+              onChange={(e) =>
+                setPendingDem((p) =>
+                  p ? { ...p, name: e.target.value } : p
+                )
+              }
+            />
+          </div>
+
+          <div className="glb-dem-modal__actions">
+            <button
+              type="button"
+              className="glb-dem-modal__btn"
+              onClick={() => setPendingDem(null)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="glb-dem-modal__btn glb-dem-modal__btn--primary"
+              disabled={!pendingDem.name.trim()}
+              onClick={() => {
+                onConfirmDemDownloadRef.current({
+                  bbox: paddedDemBbox,
+                  name: pendingDem.name.trim(),
+                  maxZoom: pendingDem.maxZoom,
+                });
+                setPendingDem(null);
+              }}
+            >
+              Download
+            </button>
+          </div>
+        </div>
+      )}
+
       {contextMenu && (
         <div
           ref={contextMenuRef}
@@ -2497,6 +3748,25 @@ export function GisGlobeViewport({
         </div>
       )}
 
+      {cursorReadout && (
+        <div className="glb-cursor-readout">
+          <div>
+            <span className="glb-cursor-readout__label">Lat</span>
+            {cursorReadout.lat.toFixed(5)}
+            {"  "}
+            <span className="glb-cursor-readout__label">Lng</span>
+            {cursorReadout.lng.toFixed(5)}
+          </div>
+          {terrainOn && (
+            <div>
+              <span className="glb-cursor-readout__label">Alt</span>
+              {cursorReadout.alt != null
+                ? `${Math.round(cursorReadout.alt)} m`
+                : "—"}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -2508,6 +3778,7 @@ function ToolbarButton({
   disabled,
   active,
   dirty,
+  ref,
 }: {
   icon: string;
   title: string;
@@ -2515,6 +3786,7 @@ function ToolbarButton({
   disabled?: boolean;
   active?: boolean;
   dirty?: boolean;
+  ref?: React.Ref<HTMLButtonElement>;
 }) {
   const cls = [
     "glb-btn",
@@ -2527,6 +3799,7 @@ function ToolbarButton({
   return (
     <button
       type="button"
+      ref={ref}
       title={title}
       className={cls}
       disabled={disabled}
@@ -2544,13 +3817,16 @@ function ToolbarButton({
 function DraggableToolbar({
   wrapperRef,
   resetKey,
+  toolbarRef: externalToolbarRef,
   children,
 }: {
   wrapperRef: React.RefObject<HTMLDivElement | null>;
   resetKey?: unknown;
+  toolbarRef?: React.RefObject<HTMLDivElement | null>;
   children: React.ReactNode;
 }) {
-  const toolbarRef = React.useRef<HTMLDivElement>(null);
+  const localToolbarRef = React.useRef<HTMLDivElement>(null);
+  const toolbarRef = externalToolbarRef ?? localToolbarRef;
   const dragStateRef = React.useRef({
     active: false,
     startX: 0,
@@ -2569,11 +3845,14 @@ function DraggableToolbar({
     toolbar.style.top = "";
     toolbar.style.bottom = "";
     toolbar.style.transform = "";
+    // toolbarRef is stable across renders (either the external prop or
+    // the local ref) — including it would be a no-op.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey]);
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
-    if (target.closest("button, select, option")) return;
+    if (target.closest("button, select, option, input")) return;
     const toolbar = toolbarRef.current;
     const wrapper = wrapperRef.current;
     if (!toolbar || !wrapper) return;
