@@ -8,8 +8,11 @@ declare module "sql.js" {
     values: unknown[][];
   }
 
+  type BindParams = ReadonlyArray<string | number | Uint8Array | null>;
+
   interface Database {
     exec(sql: string): QueryExecResult[];
+    run(sql: string, params?: BindParams): Database;
     export(): Uint8Array;
     close(): void;
   }

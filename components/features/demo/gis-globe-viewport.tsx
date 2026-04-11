@@ -1606,6 +1606,40 @@ const GLOBE_CSS = `
     opacity: 0.55;
     text-decoration: line-through;
   }
+  .glb-legend__name-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .glb-legend__name-btn:hover .glb-legend__name {
+    text-decoration: underline;
+  }
+  .glb-legend__row--hidden .glb-legend__name-btn:hover .glb-legend__name {
+    text-decoration: line-through underline;
+  }
+  .glb-legend__caret {
+    display: inline-block;
+    width: 10px;
+    font-size: 10px;
+    line-height: 1;
+    color: #64748b;
+    transition: transform 120ms;
+    flex-shrink: 0;
+  }
+  [data-theme="dark"] .glb-legend__caret { color: #94a3b8; }
+  .glb-legend__caret--collapsed {
+    transform: rotate(-90deg);
+  }
   .glb-legend__fclasses {
     display: flex;
     flex-direction: column;
@@ -1728,6 +1762,8 @@ const TERRAIN_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20 L8 8 L12 14 L15 9 L22 20 Z"/><path d="M8 8 L10 11 M15 9 L17 12"/></svg>';
 const DELETE_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>';
+const RECLASSIFY_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41 13.41 20.59a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.5" fill="currentColor"/></svg>';
 const DISCARD_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M3 13a9 9 0 1 0 3-7"/></svg>';
 
@@ -1772,6 +1808,7 @@ export function GisGlobeViewport({
   simplifying,
   importingDem,
   deleting,
+  reclassifying,
   demFile,
   demOpacity,
   demColorRamp,
@@ -1787,6 +1824,7 @@ export function GisGlobeViewport({
   onToggleSimplify,
   onToggleImportDem,
   onToggleDelete,
+  onToggleReclassify,
   onToggleTerrain,
   onSetTerrainExaggeration,
   onSetDemOpacity,
@@ -1798,6 +1836,7 @@ export function GisGlobeViewport({
   onEdited,
   onAdded,
   onDeleted,
+  onReclassify,
 }: {
   data: GeoJSONFeatureCollection | null;
   layers?: ReadonlyArray<LayerStyle>;
@@ -1810,6 +1849,7 @@ export function GisGlobeViewport({
   simplifying: boolean;
   importingDem: boolean;
   deleting: boolean;
+  reclassifying: boolean;
   demFile: string;
   demOpacity: number;
   demColorRamp: RampName;
@@ -1825,6 +1865,7 @@ export function GisGlobeViewport({
   onToggleSimplify: () => void;
   onToggleImportDem: () => void;
   onToggleDelete: () => void;
+  onToggleReclassify: () => void;
   onToggleTerrain: () => void;
   onSetTerrainExaggeration: (value: number) => void;
   onSetDemOpacity: (value: number) => void;
@@ -1840,6 +1881,7 @@ export function GisGlobeViewport({
   onEdited: (features: GeoJSON.Feature[]) => void;
   onAdded: (feature: GeoJSON.Feature) => void;
   onDeleted: (feature: GeoJSON.Feature) => void;
+  onReclassify: (feature: GeoJSON.Feature, newFclass: string) => void;
 }) {
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -1851,6 +1893,9 @@ export function GisGlobeViewport({
   // When non-null, new features committed by add/freehand are stamped with
   // `properties.fclass = activeFclass`. Only one can be active at a time;
   // the pencil button next to each fclass in the legend toggles it.
+  const [collapsedLayers, setCollapsedLayers] = React.useState<Set<string>>(
+    () => new Set()
+  );
   const [activeFclass, setActiveFclass] = React.useState<string | null>(null);
   const activeFclassRef = React.useRef(activeFclass);
   React.useEffect(() => {
@@ -1997,12 +2042,14 @@ export function GisGlobeViewport({
   const onEditedRef = React.useRef(onEdited);
   const onAddedRef = React.useRef(onAdded);
   const onDeletedRef = React.useRef(onDeleted);
+  const onReclassifyRef = React.useRef(onReclassify);
   const onToggleEditRef = React.useRef(onToggleEdit);
   const onToggleAddRef = React.useRef(onToggleAdd);
   const onToggleFreehandRef = React.useRef(onToggleFreehand);
   const onToggleSimplifyRef = React.useRef(onToggleSimplify);
   const onToggleImportDemRef = React.useRef(onToggleImportDem);
   const onToggleDeleteRef = React.useRef(onToggleDelete);
+  const onToggleReclassifyRef = React.useRef(onToggleReclassify);
   const onToggleTerrainRef = React.useRef(onToggleTerrain);
   const onToggleLayerVisibilityRef = React.useRef(onToggleLayerVisibility);
   const onToggleFclassVisibilityRef = React.useRef(onToggleFclassVisibility);
@@ -2018,12 +2065,14 @@ export function GisGlobeViewport({
     onEditedRef.current = onEdited;
     onAddedRef.current = onAdded;
     onDeletedRef.current = onDeleted;
+    onReclassifyRef.current = onReclassify;
     onToggleEditRef.current = onToggleEdit;
     onToggleAddRef.current = onToggleAdd;
     onToggleFreehandRef.current = onToggleFreehand;
     onToggleSimplifyRef.current = onToggleSimplify;
     onToggleImportDemRef.current = onToggleImportDem;
     onToggleDeleteRef.current = onToggleDelete;
+    onToggleReclassifyRef.current = onToggleReclassify;
     onToggleTerrainRef.current = onToggleTerrain;
     onToggleLayerVisibilityRef.current = onToggleLayerVisibility;
     onToggleFclassVisibilityRef.current = onToggleFclassVisibility;
@@ -3400,6 +3449,81 @@ export function GisGlobeViewport({
   }, [importingDem, styleReady]);
 
   // ------------------------------------------------------------------
+  // Reclassify mode — click a feature, prompt for a new fclass, and
+  // forward the (feature, newFclass) to the parent. The page-level
+  // handler performs the actual move into the matching edit file.
+  // ------------------------------------------------------------------
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady || !reclassifying) return;
+
+    const HIT_TOLERANCE = 6;
+    const onMapClick = (e: maplibregl.MapMouseEvent) => {
+      const layers = [
+        FEATURES_FILL_LAYER,
+        FEATURES_LINE_LAYER,
+        FEATURES_CIRCLE_LAYER,
+      ].filter((id) => !!map.getLayer(id));
+      if (layers.length === 0) return;
+      const bbox: [maplibregl.PointLike, maplibregl.PointLike] = [
+        [e.point.x - HIT_TOLERANCE, e.point.y - HIT_TOLERANCE],
+        [e.point.x + HIT_TOLERANCE, e.point.y + HIT_TOLERANCE],
+      ];
+      const hits = map.queryRenderedFeatures(bbox, { layers });
+      if (hits.length === 0) return;
+      const rawId = hits[0].id;
+      if (rawId == null) return;
+      const id = typeof rawId === "number" ? rawId : Number(rawId);
+      if (!Number.isFinite(id)) return;
+      const working = workingRef.current;
+      if (!working) return;
+      const feature = working.features[id];
+      if (!feature) return;
+
+      const current =
+        (feature.properties?.fclass as string | null | undefined) ?? "";
+      const next = window.prompt(
+        "Class name for this feature (fclass):",
+        current
+      );
+      if (next === null) return;
+      const trimmed = next.trim();
+      if (trimmed === current) return;
+      onReclassifyRef.current(feature, trimmed);
+    };
+
+    const canvas = map.getCanvas();
+    let hoverDepth = 0;
+    const setHoverCursor = () => {
+      hoverDepth += 1;
+      canvas.style.cursor = "crosshair";
+    };
+    const clearHoverCursor = () => {
+      hoverDepth = Math.max(0, hoverDepth - 1);
+      if (hoverDepth === 0) canvas.style.cursor = "";
+    };
+    const hoverLayers = [
+      FEATURES_FILL_LAYER,
+      FEATURES_LINE_LAYER,
+      FEATURES_CIRCLE_LAYER,
+    ].filter((id) => !!map.getLayer(id));
+    for (const layerId of hoverLayers) {
+      map.on("mouseenter", layerId, setHoverCursor);
+      map.on("mouseleave", layerId, clearHoverCursor);
+    }
+    map.on("click", onMapClick);
+
+    return () => {
+      map.off("click", onMapClick);
+      for (const layerId of hoverLayers) {
+        map.off("mouseenter", layerId, setHoverCursor);
+        map.off("mouseleave", layerId, clearHoverCursor);
+      }
+      canvas.style.cursor = "";
+    };
+  }, [reclassifying, styleReady]);
+
+  // ------------------------------------------------------------------
   // Delete mode — click a feature to remove it. The feature is pulled
   // from workingRef, reported to the parent via onDeleted, and the main
   // source is immediately refreshed so the shape vanishes without a
@@ -3903,13 +4027,15 @@ export function GisGlobeViewport({
         <div className="glb-legend">
           <div className="glb-legend__title">Layers</div>
           {layers.map((l) => {
+            const collapsed = collapsedLayers.has(l.id);
             const rowClass =
               "glb-legend__row" +
               (l.visible ? "" : " glb-legend__row--hidden");
             const fclasses = l.fclasses ?? [];
+            const canCollapse = fclasses.length > 0;
             return (
               <React.Fragment key={l.id}>
-                <label className={rowClass}>
+                <div className={rowClass}>
                   <input
                     type="checkbox"
                     className="glb-legend__checkbox"
@@ -3923,11 +4049,41 @@ export function GisGlobeViewport({
                     // eslint-disable-next-line template/no-jsx-style-prop -- per-layer color is runtime data
                     style={{ backgroundColor: l.color }}
                   />
-                  <span className="glb-legend__name" title={l.id}>
-                    {l.id}
-                  </span>
-                </label>
-                {fclasses.length > 0 && l.visible && (
+                  <button
+                    type="button"
+                    className="glb-legend__name-btn"
+                    title={
+                      canCollapse
+                        ? collapsed
+                          ? `Expand ${l.id}`
+                          : `Collapse ${l.id}`
+                        : l.id
+                    }
+                    onClick={() => {
+                      if (!canCollapse) return;
+                      setCollapsedLayers((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(l.id)) next.delete(l.id);
+                        else next.add(l.id);
+                        return next;
+                      });
+                    }}
+                  >
+                    {canCollapse && (
+                      <span
+                        className={
+                          "glb-legend__caret" +
+                          (collapsed ? " glb-legend__caret--collapsed" : "")
+                        }
+                        aria-hidden="true"
+                      >
+                        ▾
+                      </span>
+                    )}
+                    <span className="glb-legend__name">{l.id}</span>
+                  </button>
+                </div>
+                {fclasses.length > 0 && l.visible && !collapsed && (
                   <div className="glb-legend__fclasses">
                     {fclasses.map((fc) => {
                       const isActive = activeFclass === fc.value;
@@ -4133,10 +4289,30 @@ export function GisGlobeViewport({
             freehand ||
             editing ||
             simplifying ||
-            importingDem
+            importingDem ||
+            reclassifying
           }
           active={deleting}
           onClick={() => onToggleDeleteRef.current()}
+        />
+        <ToolbarButton
+          title={
+            reclassifying
+              ? "Finish reclassify"
+              : "Reclassify feature (click a feature)"
+          }
+          icon={RECLASSIFY_ICON}
+          disabled={
+            saving ||
+            adding ||
+            freehand ||
+            editing ||
+            simplifying ||
+            importingDem ||
+            deleting
+          }
+          active={reclassifying}
+          onClick={() => onToggleReclassifyRef.current()}
         />
         <ToolbarButton
           ref={demBtnRef}

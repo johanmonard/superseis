@@ -512,6 +512,10 @@ export function updateGpkgFeatures(
   }
 }
 
+// Runtime-only properties added by the UI layer that should never be
+// written to the GeoPackage. Also filtered out of column inference.
+const RUNTIME_PROPS = new Set(["__dirty", "__layer"]);
+
 export function insertGpkgFeatures(
   db: Database,
   meta: GpkgMeta,
@@ -540,9 +544,50 @@ export function insertGpkgFeatures(
     if (inverse) geom = reprojectGeometry(geom, inverse);
 
     const blob = encodeGpkgGeometry(geom, meta.srsId);
-    db.exec(
-      `INSERT INTO "${meta.tableName}" ("${meta.geomCol}") VALUES (x'${uint8ToHex(blob)}')`
-    );
+
+    // Collect writable property columns, skipping runtime markers and
+    // the geom/pk columns. Unknown columns are ALTER-added on first use
+    // so union-schema edit files can accept any source's attributes.
+    // Null-valued properties still need their column — fall back to
+    // TEXT affinity when we can't infer from the value (SQLite is loose
+    // about types so this is safe for later non-null writes).
+    const writable: [string, unknown][] = [];
+    const needed = new Map<string, string>();
+    for (const [key, value] of Object.entries(feature.properties ?? {})) {
+      if (key === meta.pkCol || key === meta.geomCol) continue;
+      if (RUNTIME_PROPS.has(key)) continue;
+      if (value === undefined) continue;
+      if (!IDENT_RE.test(key)) continue;
+      writable.push([key, value]);
+      needed.set(key, value !== null ? inferSqlType(value) : "TEXT");
+    }
+    ensureGpkgColumns(db, meta.tableName, needed);
+
+    const cols = [`"${meta.geomCol}"`];
+    const placeholders = [`x'${uint8ToHex(blob)}'`];
+    const params: (string | number | null)[] = [];
+    for (const [key, value] of writable) {
+      cols.push(`"${key}"`);
+      if (value === null) {
+        placeholders.push("NULL");
+      } else if (typeof value === "boolean") {
+        placeholders.push("?");
+        params.push(value ? 1 : 0);
+      } else if (typeof value === "number" || typeof value === "string") {
+        placeholders.push("?");
+        params.push(value);
+      } else {
+        placeholders.push("?");
+        params.push(JSON.stringify(value));
+      }
+    }
+
+    const sql = `INSERT INTO "${meta.tableName}" (${cols.join(",")}) VALUES (${placeholders.join(",")})`;
+    if (params.length > 0) {
+      db.run(sql, params);
+    } else {
+      db.exec(sql);
+    }
     const res = db.exec("SELECT last_insert_rowid()");
     pks.push(res[0].values[0][0] as number);
   }
@@ -552,6 +597,143 @@ export function insertGpkgFeatures(
   }
 
   return pks;
+}
+
+// ==========================================================================
+// Dynamic schema helpers — used by the "user edits" GPKG files so that
+// features transferred from different source layers can carry their full
+// set of attribute columns (new columns are ALTER-added on first use).
+// ==========================================================================
+
+const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function inferSqlType(v: unknown): string {
+  if (typeof v === "number") {
+    return Number.isInteger(v) ? "INTEGER" : "REAL";
+  }
+  if (typeof v === "boolean") return "INTEGER";
+  return "TEXT";
+}
+
+export function ensureGpkgColumns(
+  db: Database,
+  tableName: string,
+  columns: ReadonlyMap<string, string>
+): void {
+  if (columns.size === 0) return;
+  const info = db.exec(`PRAGMA table_info("${tableName}")`);
+  const existing = new Set<string>();
+  if (info.length) {
+    for (const row of info[0].values) existing.add(row[1] as string);
+  }
+  for (const [name, sqlType] of columns) {
+    if (existing.has(name)) continue;
+    if (!IDENT_RE.test(name)) continue;
+    db.exec(`ALTER TABLE "${tableName}" ADD COLUMN "${name}" ${sqlType}`);
+  }
+}
+
+const WGS84_WKT =
+  'GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AUTHORITY["EPSG","4326"]]';
+
+export type GpkgInitGeomType =
+  | "POINT"
+  | "LINESTRING"
+  | "POLYGON"
+  | "MULTIPOINT"
+  | "MULTILINESTRING"
+  | "MULTIPOLYGON"
+  | "GEOMETRY";
+
+export function initializeGpkgSchema(
+  db: Database,
+  opts: {
+    tableName: string;
+    geometryType: GpkgInitGeomType;
+    srsId?: number;
+  }
+): GpkgMeta {
+  const srsId = opts.srsId ?? 4326;
+  if (!IDENT_RE.test(opts.tableName)) {
+    throw new Error(`Invalid GPKG table name: ${opts.tableName}`);
+  }
+
+  db.exec(`PRAGMA application_id = 1196444487`); // 'GPKG'
+  db.exec(`PRAGMA user_version = 10200`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS gpkg_spatial_ref_sys (
+      srs_name TEXT NOT NULL,
+      srs_id INTEGER NOT NULL PRIMARY KEY,
+      organization TEXT NOT NULL,
+      organization_coordsys_id INTEGER NOT NULL,
+      definition TEXT NOT NULL,
+      description TEXT
+    )
+  `);
+  db.exec(
+    `INSERT OR IGNORE INTO gpkg_spatial_ref_sys VALUES
+      ('Undefined cartesian SRS', -1, 'NONE', -1, 'undefined', 'undefined cartesian coordinate reference system')`
+  );
+  db.exec(
+    `INSERT OR IGNORE INTO gpkg_spatial_ref_sys VALUES
+      ('Undefined geographic SRS', 0, 'NONE', 0, 'undefined', 'undefined geographic coordinate reference system')`
+  );
+  db.exec(
+    `INSERT OR IGNORE INTO gpkg_spatial_ref_sys VALUES
+      ('WGS 84', 4326, 'EPSG', 4326, '${WGS84_WKT.replace(/'/g, "''")}', 'WGS 84 / Geodetic lat/lng')`
+  );
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS gpkg_contents (
+      table_name TEXT NOT NULL PRIMARY KEY,
+      data_type TEXT NOT NULL,
+      identifier TEXT UNIQUE,
+      description TEXT DEFAULT '',
+      last_change DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      min_x DOUBLE,
+      min_y DOUBLE,
+      max_x DOUBLE,
+      max_y DOUBLE,
+      srs_id INTEGER
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS gpkg_geometry_columns (
+      table_name TEXT NOT NULL,
+      column_name TEXT NOT NULL,
+      geometry_type_name TEXT NOT NULL,
+      srs_id INTEGER NOT NULL,
+      z TINYINT NOT NULL,
+      m TINYINT NOT NULL,
+      PRIMARY KEY (table_name, column_name)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE "${opts.tableName}" (
+      fid INTEGER PRIMARY KEY AUTOINCREMENT,
+      geom BLOB
+    )
+  `);
+
+  db.exec(
+    `INSERT INTO gpkg_contents (table_name, data_type, identifier, srs_id)
+     VALUES ('${opts.tableName}', 'features', '${opts.tableName}', ${srsId})`
+  );
+  db.exec(
+    `INSERT INTO gpkg_geometry_columns
+     VALUES ('${opts.tableName}', 'geom', '${opts.geometryType}', ${srsId}, 0, 0)`
+  );
+
+  return {
+    tableName: opts.tableName,
+    geomCol: "geom",
+    srsId,
+    pkCol: "fid",
+    geometryType: opts.geometryType,
+  };
 }
 
 export function deleteGpkgFeatures(
