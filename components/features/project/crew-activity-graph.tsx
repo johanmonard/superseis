@@ -110,8 +110,8 @@ export const DEFAULT_GRAPH_CONFIG: GraphConfig = {
   nodeSpacing: 40,
   rankSpacing: 60,
   animated: false,
-  connectorEnd: "none",
-  showHandles: true,
+  connectorEnd: "arrowclosed",
+  showHandles: false,
 };
 
 // ---------------------------------------------------------------------------

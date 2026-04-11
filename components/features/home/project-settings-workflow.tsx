@@ -67,9 +67,9 @@ const DEFAULT_CONFIG: WorkflowConfig = {
   rankDirection: "TB",
   connectorEnd: "none",
   nodeSpacing: 40,
-  rankSpacing: 60,
+  rankSpacing: 20,
   animated: false,
-  showHandles: true,
+  showHandles: false,
 };
 
 // ---------------------------------------------------------------------------
