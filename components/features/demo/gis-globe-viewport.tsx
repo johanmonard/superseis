@@ -11,13 +11,30 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { fromArrayBuffer } from "geotiff";
 import type { GeoJSONFeatureCollection } from "@/lib/gpkg";
 
+type TileGroup = "Satellite" | "Color" | "LightNoColor" | "Dark";
+
 type TileSource = {
   name: string;
   tiles: string[];
   attribution: string;
   maxZoom: number;
   tileSize?: number;
+  group: TileGroup;
 };
+
+const TILE_GROUP_LABEL: Record<TileGroup, string> = {
+  Satellite: "Satellite",
+  Color: "Color maps",
+  LightNoColor: "Light maps",
+  Dark: "Dark maps",
+};
+
+const TILE_GROUP_ORDER: TileGroup[] = [
+  "Satellite",
+  "Color",
+  "LightNoColor",
+  "Dark",
+];
 
 const TILE_SOURCES: TileSource[] = [
   {
@@ -28,6 +45,7 @@ const TILE_SOURCES: TileSource[] = [
     attribution:
       "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics",
     maxZoom: 18,
+    group: "Satellite",
   },
   {
     name: "Esri Satellite + Labels",
@@ -36,18 +54,21 @@ const TILE_SOURCES: TileSource[] = [
     ],
     attribution: "Tiles &copy; Esri",
     maxZoom: 18,
+    group: "Satellite",
   },
   {
     name: "Google Satellite",
     tiles: ["https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}"],
     attribution: "&copy; Google",
     maxZoom: 22,
+    group: "Satellite",
   },
   {
     name: "Google Hybrid",
     tiles: ["https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"],
     attribution: "&copy; Google",
     maxZoom: 22,
+    group: "Satellite",
   },
   {
     name: "OpenStreetMap",
@@ -59,18 +80,21 @@ const TILE_SOURCES: TileSource[] = [
     attribution:
       "&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors",
     maxZoom: 19,
+    group: "Color",
   },
   {
     name: "Google Streets",
     tiles: ["https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}"],
     attribution: "&copy; Google",
     maxZoom: 22,
+    group: "Color",
   },
   {
     name: "Google Terrain",
     tiles: ["https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}"],
     attribution: "&copy; Google",
     maxZoom: 22,
+    group: "Color",
   },
   {
     name: "Esri Street",
@@ -79,6 +103,7 @@ const TILE_SOURCES: TileSource[] = [
     ],
     attribution: "Tiles &copy; Esri",
     maxZoom: 19,
+    group: "Color",
   },
   {
     name: "OpenTopoMap",
@@ -89,6 +114,7 @@ const TILE_SOURCES: TileSource[] = [
     ],
     attribution: "&copy; OpenTopoMap (CC-BY-SA)",
     maxZoom: 17,
+    group: "Color",
   },
   {
     name: "Esri Topo",
@@ -97,6 +123,7 @@ const TILE_SOURCES: TileSource[] = [
     ],
     attribution: "Tiles &copy; Esri",
     maxZoom: 19,
+    group: "Color",
   },
   {
     name: "Esri NatGeo",
@@ -105,6 +132,7 @@ const TILE_SOURCES: TileSource[] = [
     ],
     attribution: "Tiles &copy; Esri &mdash; National Geographic",
     maxZoom: 16,
+    group: "Color",
   },
   {
     name: "Esri Ocean",
@@ -113,6 +141,7 @@ const TILE_SOURCES: TileSource[] = [
     ],
     attribution: "Tiles &copy; Esri",
     maxZoom: 13,
+    group: "Color",
   },
   {
     name: "Esri Light Gray",
@@ -121,6 +150,7 @@ const TILE_SOURCES: TileSource[] = [
     ],
     attribution: "Tiles &copy; Esri",
     maxZoom: 16,
+    group: "LightNoColor",
   },
   {
     name: "Esri Dark Gray",
@@ -129,6 +159,7 @@ const TILE_SOURCES: TileSource[] = [
     ],
     attribution: "Tiles &copy; Esri",
     maxZoom: 16,
+    group: "Dark",
   },
   {
     name: "CartoDB Positron",
@@ -140,6 +171,7 @@ const TILE_SOURCES: TileSource[] = [
     ],
     attribution: "&copy; <a href='https://carto.com/'>CARTO</a>",
     maxZoom: 20,
+    group: "LightNoColor",
   },
   {
     name: "CartoDB Dark",
@@ -151,6 +183,7 @@ const TILE_SOURCES: TileSource[] = [
     ],
     attribution: "&copy; <a href='https://carto.com/'>CARTO</a>",
     maxZoom: 20,
+    group: "Dark",
   },
   {
     name: "CartoDB Voyager",
@@ -162,6 +195,7 @@ const TILE_SOURCES: TileSource[] = [
     ],
     attribution: "&copy; <a href='https://carto.com/'>CARTO</a>",
     maxZoom: 20,
+    group: "LightNoColor",
   },
   {
     name: "USGS Imagery",
@@ -170,6 +204,7 @@ const TILE_SOURCES: TileSource[] = [
     ],
     attribution: "Tiles &copy; USGS",
     maxZoom: 16,
+    group: "Satellite",
   },
   {
     name: "USGS Topo",
@@ -178,6 +213,7 @@ const TILE_SOURCES: TileSource[] = [
     ],
     attribution: "Tiles &copy; USGS",
     maxZoom: 16,
+    group: "Color",
   },
   {
     name: "Wikimedia",
@@ -185,6 +221,7 @@ const TILE_SOURCES: TileSource[] = [
     attribution:
       "&copy; <a href='https://wikimediafoundation.org/'>Wikimedia</a>, &copy; OpenStreetMap contributors",
     maxZoom: 19,
+    group: "Color",
   },
 ];
 
@@ -247,6 +284,53 @@ const DEFAULT_ZOOM = 1;
 const FEATURE_COLOR = "#facc15";
 const DIRTY_COLOR = "#f97316";
 const SELECTED_COLOR = "#3b82f6";
+
+// Build a paint-color expression that picks per-feature color from:
+//   1. `fclass` property (when any layer supplies an fclass palette)
+//   2. `__layer` property (falls back to per-layer color)
+//   3. FEATURE_COLOR default
+// DIRTY_COLOR overrides all when `__dirty` is set.
+function buildLayerColorExpression(
+  layers: ReadonlyArray<LayerStyle> | undefined
+): maplibregl.ExpressionSpecification {
+  const byLayer =
+    layers && layers.length > 0
+      ? ([
+          "match",
+          ["coalesce", ["get", "__layer"], "__none__"],
+          ...layers.flatMap((l) => [l.id, l.color]),
+          FEATURE_COLOR,
+        ] as unknown as maplibregl.ExpressionSpecification)
+      : (FEATURE_COLOR as unknown as maplibregl.ExpressionSpecification);
+
+  const fclassPairs: string[] = [];
+  const seen = new Set<string>();
+  for (const l of layers ?? []) {
+    for (const fc of l.fclasses ?? []) {
+      if (seen.has(fc.value)) continue;
+      seen.add(fc.value);
+      fclassPairs.push(fc.value, fc.color);
+    }
+  }
+
+  const byFclass =
+    fclassPairs.length > 0
+      ? ([
+          "match",
+          ["to-string", ["coalesce", ["get", "fclass"], "__none__"]],
+          ...fclassPairs,
+          byLayer,
+        ] as unknown as maplibregl.ExpressionSpecification)
+      : byLayer;
+
+  return [
+    "case",
+    ["==", ["coalesce", ["get", "__dirty"], 0], 1],
+    DIRTY_COLOR,
+    byFclass,
+  ] as unknown as maplibregl.ExpressionSpecification;
+}
+
 const EMPTY_STYLE: StyleSpecification = {
   version: 8,
   glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
@@ -853,6 +937,10 @@ const GLOBE_CSS = `
     border-color: #f59e0b !important;
     animation: glb-pulse 2s ease-in-out infinite;
   }
+  .glb-btn--dirty-outline {
+    border-color: #f59e0b !important;
+    box-shadow: 0 0 0 1px #f59e0b inset;
+  }
   [data-theme="dark"] .glb-btn {
     background-color: var(--color-bg-surface);
     color: var(--color-text-primary);
@@ -917,6 +1005,18 @@ const GLOBE_CSS = `
   [data-theme="dark"] .glb-tile-select option {
     background-color: #0f172a;
     color: #e2e8f0;
+  }
+  .glb-tile-select option.glb-tile-select__header {
+    background-color: #f1f5f9;
+    color: #64748b;
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  [data-theme="dark"] .glb-tile-select option.glb-tile-select__header {
+    background-color: #1e293b;
+    color: #94a3b8;
   }
 
   .glb-zoom-badge {
@@ -1247,8 +1347,8 @@ const GLOBE_CSS = `
 
   .glb-simplify-panel {
     position: absolute;
-    top: 8px;
-    left: 50%;
+    top: 100%;
+    margin-top: 8px;
     transform: translateX(-50%);
     z-index: 4;
     display: flex;
@@ -1264,6 +1364,7 @@ const GLOBE_CSS = `
     font-size: 12px;
     color: #1e293b;
     user-select: none;
+    white-space: nowrap;
   }
   [data-theme="dark"] .glb-simplify-panel {
     background-color: rgba(15, 23, 42, 0.82);
@@ -1400,7 +1501,7 @@ const GLOBE_CSS = `
 
   .glb-cursor-readout {
     position: absolute;
-    bottom: 10px;
+    top: 10px;
     right: 10px;
     z-index: 4;
     pointer-events: none;
@@ -1429,6 +1530,165 @@ const GLOBE_CSS = `
     margin-right: 4px;
   }
   [data-theme="dark"] .glb-cursor-readout__label { color: #94a3b8; }
+
+  .glb-legend {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px 8px 8px;
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+    backdrop-filter: blur(6px);
+    font-family: system-ui, sans-serif;
+    font-size: 12px;
+    color: #1e293b;
+    max-width: 280px;
+    max-height: calc(100% - 20px);
+    overflow-y: auto;
+    user-select: none;
+  }
+  [data-theme="dark"] .glb-legend {
+    background-color: rgba(15, 23, 42, 0.85);
+    border-color: rgba(255, 255, 255, 0.12);
+    color: #e2e8f0;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  }
+  .glb-legend__title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #64748b;
+    margin: 0 0 2px 2px;
+  }
+  [data-theme="dark"] .glb-legend__title { color: #94a3b8; }
+  .glb-legend__row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 4px;
+  }
+  .glb-legend__row:hover {
+    background-color: rgba(15, 23, 42, 0.06);
+  }
+  [data-theme="dark"] .glb-legend__row:hover {
+    background-color: rgba(255, 255, 255, 0.06);
+  }
+  .glb-legend__checkbox {
+    margin: 0;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .glb-legend__swatch {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(15, 23, 42, 0.25);
+    flex-shrink: 0;
+    transition: opacity 120ms;
+  }
+  [data-theme="dark"] .glb-legend__swatch {
+    border-color: rgba(255, 255, 255, 0.25);
+  }
+  .glb-legend__row--hidden .glb-legend__swatch {
+    opacity: 0.3;
+  }
+  .glb-legend__row--hidden .glb-legend__name {
+    opacity: 0.55;
+    text-decoration: line-through;
+  }
+  .glb-legend__fclasses {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0 0 2px 16px;
+    padding-left: 8px;
+    border-left: 1px solid rgba(15, 23, 42, 0.12);
+  }
+  [data-theme="dark"] .glb-legend__fclasses {
+    border-left-color: rgba(255, 255, 255, 0.12);
+  }
+  .glb-legend__row--fclass {
+    font-size: 11px;
+  }
+  .glb-legend__row--fclass .glb-legend__swatch {
+    width: 11px;
+    height: 11px;
+  }
+  .glb-legend__fclass-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    flex: 1;
+    min-width: 0;
+  }
+  .glb-legend__edit-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border-radius: 3px;
+    border: 1px solid rgba(15, 23, 42, 0.18);
+    background-color: rgba(255, 255, 255, 0.6);
+    color: #64748b;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 120ms, background-color 120ms, border-color 120ms;
+  }
+  .glb-legend__edit-btn:hover {
+    color: #1e293b;
+    border-color: rgba(15, 23, 42, 0.4);
+  }
+  [data-theme="dark"] .glb-legend__edit-btn {
+    background-color: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.18);
+    color: #94a3b8;
+  }
+  [data-theme="dark"] .glb-legend__edit-btn:hover {
+    color: #e2e8f0;
+    border-color: rgba(255, 255, 255, 0.4);
+  }
+  .glb-legend__edit-btn--active {
+    background-color: #3b82f6;
+    border-color: #3b82f6;
+    color: #fff;
+  }
+  .glb-legend__edit-btn--active:hover {
+    background-color: #2563eb;
+    border-color: #2563eb;
+    color: #fff;
+  }
+  [data-theme="dark"] .glb-legend__edit-btn--active,
+  [data-theme="dark"] .glb-legend__edit-btn--active:hover {
+    background-color: #3b82f6;
+    border-color: #3b82f6;
+    color: #fff;
+  }
+  .glb-legend__row--active {
+    background-color: rgba(59, 130, 246, 0.12);
+  }
+  [data-theme="dark"] .glb-legend__row--active {
+    background-color: rgba(59, 130, 246, 0.2);
+  }
+  .glb-legend__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 200px;
+    font-variant-numeric: tabular-nums;
+  }
 `;
 
 const GLOBE_CSS_ID = "glb-globe-viewport-css";
@@ -1466,22 +1726,52 @@ const DEM_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 19 L9 9 L13 15 L16 11 L21 19 Z"/><circle cx="17" cy="6" r="1.5" fill="currentColor"/></svg>';
 const TERRAIN_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20 L8 8 L12 14 L15 9 L22 20 Z"/><path d="M8 8 L10 11 M15 9 L17 12"/></svg>';
+const DELETE_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>';
+const DISCARD_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M3 13a9 9 0 1 0 3-7"/></svg>';
 
-// Cursor used in simplify mode when the pointer is over a selectable feature.
-// 24×24 SVG of the simplify glyph with a white halo so it stays visible on
-// satellite imagery; falls back to `pointer` on browsers that ignore SVG
-// cursors.
+// Contextual cursors used when the pointer is over a selectable feature in
+// the corresponding mode. Each is a 28×28 SVG with a white halo so the glyph
+// stays visible on satellite imagery; falls back to `pointer` on browsers
+// that ignore SVG cursors.
 const SIMPLIFY_HOVER_CURSOR =
   "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><path d='M5 21 L11 13 L17 16 L23 7'/><circle cx='5' cy='21' r='2.6' fill='%23ffffff'/><circle cx='11' cy='13' r='2.6' fill='%23ffffff'/><circle cx='17' cy='16' r='2.6' fill='%23ffffff'/><circle cx='23' cy='7' r='2.6' fill='%23ffffff'/><path d='M5 21 L11 13 L17 16 L23 7' stroke='%233b82f6' stroke-width='2'/><circle cx='5' cy='21' r='1.8' fill='%233b82f6'/><circle cx='11' cy='13' r='1.8' fill='%233b82f6'/><circle cx='17' cy='16' r='1.8' fill='%233b82f6'/><circle cx='23' cy='7' r='1.8' fill='%233b82f6'/></svg>\") 14 14, pointer";
 
+const EDIT_HOVER_CURSOR =
+  "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><path d='M14 5 l4 4 -9 9 H5 v-4 z'/><path d='M19.5 4.5 a2.12 2.12 0 0 1 3 3 L9 21 l-4 1 1 -4 z'/><path d='M14 5 l4 4 -9 9 H5 v-4 z' stroke='%233b82f6' stroke-width='2'/><path d='M19.5 4.5 a2.12 2.12 0 0 1 3 3 L9 21 l-4 1 1 -4 z' stroke='%233b82f6' stroke-width='2'/></svg>\") 14 14, pointer";
+
+const DEM_HOVER_CURSOR =
+  "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><path d='M5 21 L11 11 L15 17 L18 13 L23 21 Z'/><circle cx='19' cy='8' r='2.6' fill='%23ffffff'/><path d='M5 21 L11 11 L15 17 L18 13 L23 21 Z' stroke='%233b82f6' stroke-width='2'/><circle cx='19' cy='8' r='1.6' fill='%233b82f6' stroke='%233b82f6' stroke-width='1'/></svg>\") 14 14, pointer";
+
+const DELETE_HOVER_CURSOR =
+  "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><polyline points='5 8 7 8 23 8'/><path d='M21 8 l-1 14 a2 2 0 0 1 -2 2 H10 a2 2 0 0 1 -2 -2 L7 8'/><path d='M12 13 v6'/><path d='M16 13 v6'/><path d='M11 8 V6 a2 2 0 0 1 2 -2 h2 a2 2 0 0 1 2 2 v2'/><polyline points='5 8 7 8 23 8' stroke='%23ef4444' stroke-width='2'/><path d='M21 8 l-1 14 a2 2 0 0 1 -2 2 H10 a2 2 0 0 1 -2 -2 L7 8' stroke='%23ef4444' stroke-width='2'/><path d='M12 13 v6' stroke='%23ef4444' stroke-width='2'/><path d='M16 13 v6' stroke='%23ef4444' stroke-width='2'/><path d='M11 8 V6 a2 2 0 0 1 2 -2 h2 a2 2 0 0 1 2 2 v2' stroke='%23ef4444' stroke-width='2'/></svg>\") 14 14, pointer";
+
+export type LayerFclass = {
+  value: string;
+  color: string;
+  visible: boolean;
+};
+
+export type LayerStyle = {
+  id: string;
+  color: string;
+  visible: boolean;
+  fclasses?: ReadonlyArray<LayerFclass>;
+};
+
 export function GisGlobeViewport({
   data,
+  layers,
+  onToggleLayerVisibility,
+  onToggleFclassVisibility,
   dataKey,
   editing,
   adding,
   freehand,
   simplifying,
   importingDem,
+  deleting,
   demFile,
   demOpacity,
   demColorRamp,
@@ -1489,12 +1779,14 @@ export function GisGlobeViewport({
   terrainExaggeration,
   dirty,
   saving,
+  canEdit,
   geometryType,
   onToggleEdit,
   onToggleAdd,
   onToggleFreehand,
   onToggleSimplify,
   onToggleImportDem,
+  onToggleDelete,
   onToggleTerrain,
   onSetTerrainExaggeration,
   onSetDemOpacity,
@@ -1502,16 +1794,22 @@ export function GisGlobeViewport({
   demNameSuggestion,
   onConfirmDemDownload,
   onSave,
+  onDiscard,
   onEdited,
   onAdded,
+  onDeleted,
 }: {
   data: GeoJSONFeatureCollection | null;
+  layers?: ReadonlyArray<LayerStyle>;
+  onToggleLayerVisibility?: (id: string) => void;
+  onToggleFclassVisibility?: (id: string, fclass: string) => void;
   dataKey: string;
   editing: boolean;
   adding: boolean;
   freehand: boolean;
   simplifying: boolean;
   importingDem: boolean;
+  deleting: boolean;
   demFile: string;
   demOpacity: number;
   demColorRamp: RampName;
@@ -1519,12 +1817,14 @@ export function GisGlobeViewport({
   terrainExaggeration: number;
   dirty: boolean;
   saving: boolean;
+  canEdit?: boolean;
   geometryType: string;
   onToggleEdit: () => void;
   onToggleAdd: () => void;
   onToggleFreehand: () => void;
   onToggleSimplify: () => void;
   onToggleImportDem: () => void;
+  onToggleDelete: () => void;
   onToggleTerrain: () => void;
   onSetTerrainExaggeration: (value: number) => void;
   onSetDemOpacity: (value: number) => void;
@@ -1536,8 +1836,10 @@ export function GisGlobeViewport({
     maxZoom: number;
   }) => void;
   onSave: () => void;
+  onDiscard: () => void;
   onEdited: (features: GeoJSON.Feature[]) => void;
   onAdded: (feature: GeoJSON.Feature) => void;
+  onDeleted: (feature: GeoJSON.Feature) => void;
 }) {
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -1546,6 +1848,21 @@ export function GisGlobeViewport({
   const [styleReady, setStyleReady] = React.useState(false);
   const [zoomDisplay, setZoomDisplay] = React.useState(DEFAULT_ZOOM);
   const [pitchDisplay, setPitchDisplay] = React.useState(0);
+  // When non-null, new features committed by add/freehand are stamped with
+  // `properties.fclass = activeFclass`. Only one can be active at a time;
+  // the pencil button next to each fclass in the legend toggles it.
+  const [activeFclass, setActiveFclass] = React.useState<string | null>(null);
+  const activeFclassRef = React.useRef(activeFclass);
+  React.useEffect(() => {
+    activeFclassRef.current = activeFclass;
+  }, [activeFclass]);
+  React.useEffect(() => {
+    if (activeFclass == null) return;
+    const stillExists = (layers ?? []).some((l) =>
+      (l.fclasses ?? []).some((fc) => fc.value === activeFclass)
+    );
+    if (!stillExists) setActiveFclass(null);
+  }, [layers, activeFclass]);
   const [pendingDem, setPendingDem] = React.useState<{
     rawBbox: [number, number, number, number];
     padding: number; // 0..0.5 fractional padding per side
@@ -1560,8 +1877,10 @@ export function GisGlobeViewport({
   const toolbarRef = React.useRef<HTMLDivElement>(null);
   const terrainBtnRef = React.useRef<HTMLButtonElement>(null);
   const demBtnRef = React.useRef<HTMLButtonElement>(null);
+  const simplifyBtnRef = React.useRef<HTMLButtonElement>(null);
   const [terrainSliderLeft, setTerrainSliderLeft] = React.useState<number | null>(null);
   const [demSliderLeft, setDemSliderLeft] = React.useState<number | null>(null);
+  const [simplifySliderLeft, setSimplifySliderLeft] = React.useState<number | null>(null);
   const [rampPickerOpen, setRampPickerOpen] = React.useState(false);
   const rampPickerRef = React.useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = React.useState(false);
@@ -1674,14 +1993,19 @@ export function GisGlobeViewport({
 
   // Live copies of callbacks so effects don't have to re-subscribe
   const onSaveRef = React.useRef(onSave);
+  const onDiscardRef = React.useRef(onDiscard);
   const onEditedRef = React.useRef(onEdited);
   const onAddedRef = React.useRef(onAdded);
+  const onDeletedRef = React.useRef(onDeleted);
   const onToggleEditRef = React.useRef(onToggleEdit);
   const onToggleAddRef = React.useRef(onToggleAdd);
   const onToggleFreehandRef = React.useRef(onToggleFreehand);
   const onToggleSimplifyRef = React.useRef(onToggleSimplify);
   const onToggleImportDemRef = React.useRef(onToggleImportDem);
+  const onToggleDeleteRef = React.useRef(onToggleDelete);
   const onToggleTerrainRef = React.useRef(onToggleTerrain);
+  const onToggleLayerVisibilityRef = React.useRef(onToggleLayerVisibility);
+  const onToggleFclassVisibilityRef = React.useRef(onToggleFclassVisibility);
   const onConfirmDemDownloadRef = React.useRef(onConfirmDemDownload);
   const demNameSuggestionRef = React.useRef(demNameSuggestion);
   const demOpacityRef = React.useRef(demOpacity);
@@ -1690,14 +2014,19 @@ export function GisGlobeViewport({
   const onSetDemColorRampRef = React.useRef(onSetDemColorRamp);
   React.useEffect(() => {
     onSaveRef.current = onSave;
+    onDiscardRef.current = onDiscard;
     onEditedRef.current = onEdited;
     onAddedRef.current = onAdded;
+    onDeletedRef.current = onDeleted;
     onToggleEditRef.current = onToggleEdit;
     onToggleAddRef.current = onToggleAdd;
     onToggleFreehandRef.current = onToggleFreehand;
     onToggleSimplifyRef.current = onToggleSimplify;
     onToggleImportDemRef.current = onToggleImportDem;
+    onToggleDeleteRef.current = onToggleDelete;
     onToggleTerrainRef.current = onToggleTerrain;
+    onToggleLayerVisibilityRef.current = onToggleLayerVisibility;
+    onToggleFclassVisibilityRef.current = onToggleFclassVisibility;
     onConfirmDemDownloadRef.current = onConfirmDemDownload;
     demNameSuggestionRef.current = demNameSuggestion;
     onSetTerrainExaggerationRef.current = onSetTerrainExaggeration;
@@ -1875,12 +2204,7 @@ export function GisGlobeViewport({
         data: fc,
         generateId: true,
       });
-      const dirtyExpr = [
-        "case",
-        ["==", ["coalesce", ["get", "__dirty"], 0], 1],
-        DIRTY_COLOR,
-        FEATURE_COLOR,
-      ] as unknown as maplibregl.ExpressionSpecification;
+      const dirtyExpr = buildLayerColorExpression(layers);
       map.addLayer({
         id: FEATURES_FILL_LAYER,
         type: "fill",
@@ -1977,7 +2301,95 @@ export function GisGlobeViewport({
     } else if (!data) {
       fittedKeyRef.current = null;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, dataKey, styleReady]);
+
+  // Re-color and re-filter the feature layers whenever the layers list
+  // changes (selection, visibility, palette). This runs independently of
+  // the data-sync effect so toggling visibility never re-fits the map or
+  // touches the GeoJSON source.
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady) return;
+    if (!map.getLayer(FEATURES_FILL_LAYER)) return;
+
+    const colorExpr = buildLayerColorExpression(layers);
+    map.setPaintProperty(FEATURES_FILL_LAYER, "fill-color", colorExpr);
+    map.setPaintProperty(FEATURES_LINE_LAYER, "line-color", colorExpr);
+    map.setPaintProperty(FEATURES_CIRCLE_LAYER, "circle-color", colorExpr);
+
+    const hasLayers = layers && layers.length > 0;
+    const visibleIds = hasLayers
+      ? layers!.filter((l) => l.visible).map((l) => l.id)
+      : [];
+    const visibleLayersFilter = hasLayers
+      ? ([
+          "in",
+          ["coalesce", ["get", "__layer"], "__none__"],
+          ["literal", visibleIds],
+        ] as unknown as maplibregl.FilterSpecification)
+      : null;
+
+    // Exclude any (layer, fclass) pair that the user has toggled off in the
+    // legend. Matching on both __layer and fclass means hiding "forest" in
+    // layer A does not hide "forest" in layer B.
+    const hiddenFclassClauses: unknown[] = [];
+    for (const l of layers ?? []) {
+      for (const fc of l.fclasses ?? []) {
+        if (fc.visible) continue;
+        hiddenFclassClauses.push([
+          "all",
+          ["==", ["coalesce", ["get", "__layer"], "__none__"], l.id],
+          ["==", ["to-string", ["coalesce", ["get", "fclass"], "__none__"]], fc.value],
+        ]);
+      }
+    }
+    const hiddenFclassFilter =
+      hiddenFclassClauses.length > 0
+        ? (["!", ["any", ...hiddenFclassClauses]] as unknown as maplibregl.FilterSpecification)
+        : null;
+
+    const combinedVisibility =
+      visibleLayersFilter && hiddenFclassFilter
+        ? (["all", visibleLayersFilter, hiddenFclassFilter] as unknown as maplibregl.FilterSpecification)
+        : visibleLayersFilter ?? hiddenFclassFilter;
+    const visibleFilter = combinedVisibility;
+
+    const fillBase: maplibregl.FilterSpecification = [
+      "==",
+      ["geometry-type"],
+      "Polygon",
+    ] as unknown as maplibregl.FilterSpecification;
+    const lineBase: maplibregl.FilterSpecification = [
+      "any",
+      ["==", ["geometry-type"], "LineString"],
+      ["==", ["geometry-type"], "Polygon"],
+    ] as unknown as maplibregl.FilterSpecification;
+    const circleBase: maplibregl.FilterSpecification = [
+      "==",
+      ["geometry-type"],
+      "Point",
+    ] as unknown as maplibregl.FilterSpecification;
+
+    map.setFilter(
+      FEATURES_FILL_LAYER,
+      visibleFilter
+        ? (["all", fillBase, visibleFilter] as unknown as maplibregl.FilterSpecification)
+        : fillBase
+    );
+    map.setFilter(
+      FEATURES_LINE_LAYER,
+      visibleFilter
+        ? (["all", lineBase, visibleFilter] as unknown as maplibregl.FilterSpecification)
+        : lineBase
+    );
+    map.setFilter(
+      FEATURES_CIRCLE_LAYER,
+      visibleFilter
+        ? (["all", circleBase, visibleFilter] as unknown as maplibregl.FilterSpecification)
+        : circleBase
+    );
+  }, [layers, styleReady, data]);
 
   // --------------------------------------------------------------------
   // Editing mode. The currently-selected feature is cloned into a dedicated
@@ -2305,11 +2717,16 @@ export function GisGlobeViewport({
     };
 
     const canvas = map.getCanvas();
+    // Depth counter avoids flicker between overlapping fill+outline layers
+    // firing mouseenter/mouseleave for the same feature.
+    let hoverDepth = 0;
     const setHoverCursor = () => {
-      canvas.style.cursor = "pointer";
+      hoverDepth += 1;
+      canvas.style.cursor = EDIT_HOVER_CURSOR;
     };
     const clearHoverCursor = () => {
-      canvas.style.cursor = "";
+      hoverDepth = Math.max(0, hoverDepth - 1);
+      if (hoverDepth === 0) canvas.style.cursor = "";
     };
 
     const hoverLayers = mainQueryLayers();
@@ -2351,7 +2768,6 @@ export function GisGlobeViewport({
     const shape = gpkgTypeToDrawShape(geometryType);
     let coords: [number, number][] = [];
     let vertexMarkers: maplibregl.Marker[] = [];
-    let clickTimer: number | null = null;
 
     const dblZoomWasEnabled = map.doubleClickZoom.isEnabled();
     map.doubleClickZoom.disable();
@@ -2434,9 +2850,10 @@ export function GisGlobeViewport({
       }
       geom = wrapGeomToType(geom, geometryType);
 
+      const fc = activeFclassRef.current;
       const feature: GeoJSON.Feature = {
         type: "Feature",
-        properties: {},
+        properties: fc ? { fclass: fc } : {},
         geometry: geom,
       };
       onAddedRef.current(feature);
@@ -2454,26 +2871,27 @@ export function GisGlobeViewport({
       if (shape === "Point") commit();
     };
 
+    // Pop the last vertex — used on dblclick to discard the duplicate
+    // click that preceded the dblclick event.
+    const popVertex = () => {
+      if (coords.length === 0) return;
+      coords.pop();
+      const last = vertexMarkers.pop();
+      last?.remove();
+      updateDraftSource();
+    };
+
     const onClick = (e: maplibregl.MapMouseEvent) => {
-      if (shape === "Point") {
-        placeVertex(e.lngLat);
-        return;
-      }
-      // Delay for a possible dblclick
-      if (clickTimer !== null) return;
-      const lngLat = e.lngLat;
-      clickTimer = window.setTimeout(() => {
-        clickTimer = null;
-        placeVertex(lngLat);
-      }, 220);
+      placeVertex(e.lngLat);
     };
 
     const onDblClick = (e: maplibregl.MapMouseEvent) => {
       e.preventDefault();
-      if (clickTimer !== null) {
-        clearTimeout(clickTimer);
-        clickTimer = null;
-      }
+      // MapLibre fires click→click→dblclick for a double click, so the
+      // second click has already added a duplicate vertex. Drop it before
+      // committing so the user's double click is "finish", not "finish
+      // with two overlapping vertices".
+      popVertex();
       commit();
     };
 
@@ -2483,7 +2901,6 @@ export function GisGlobeViewport({
     canvas.style.cursor = "crosshair";
 
     return () => {
-      if (clickTimer !== null) clearTimeout(clickTimer);
       map.off("click", onClick);
       map.off("dblclick", onDblClick);
       canvas.style.cursor = "";
@@ -2627,9 +3044,10 @@ export function GisGlobeViewport({
           ? { type: "Polygon", coordinates: [[...coords, coords[0]]] }
           : { type: "LineString", coordinates: coords };
         geom = wrapGeomToType(geom, geometryType);
+        const fc = activeFclassRef.current;
         onAddedRef.current({
           type: "Feature",
-          properties: {},
+          properties: fc ? { fclass: fc } : {},
           geometry: geom,
         });
       }
@@ -2954,7 +3372,7 @@ export function GisGlobeViewport({
     let hoverDepth = 0;
     const setHoverCursor = () => {
       hoverDepth += 1;
-      canvas.style.cursor = "crosshair";
+      canvas.style.cursor = DEM_HOVER_CURSOR;
     };
     const clearHoverCursor = () => {
       hoverDepth = Math.max(0, hoverDepth - 1);
@@ -2980,6 +3398,77 @@ export function GisGlobeViewport({
       canvas.style.cursor = "";
     };
   }, [importingDem, styleReady]);
+
+  // ------------------------------------------------------------------
+  // Delete mode — click a feature to remove it. The feature is pulled
+  // from workingRef, reported to the parent via onDeleted, and the main
+  // source is immediately refreshed so the shape vanishes without a
+  // round-trip through the data prop.
+  // ------------------------------------------------------------------
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady || !deleting) return;
+
+    const HIT_TOLERANCE = 6;
+    const onMapClick = (e: maplibregl.MapMouseEvent) => {
+      const layers = [
+        FEATURES_FILL_LAYER,
+        FEATURES_LINE_LAYER,
+        FEATURES_CIRCLE_LAYER,
+      ].filter((id) => !!map.getLayer(id));
+      if (layers.length === 0) return;
+      const bbox: [maplibregl.PointLike, maplibregl.PointLike] = [
+        [e.point.x - HIT_TOLERANCE, e.point.y - HIT_TOLERANCE],
+        [e.point.x + HIT_TOLERANCE, e.point.y + HIT_TOLERANCE],
+      ];
+      const hits = map.queryRenderedFeatures(bbox, { layers });
+      if (hits.length === 0) return;
+      const rawId = hits[0].id;
+      if (rawId == null) return;
+      const id = typeof rawId === "number" ? rawId : Number(rawId);
+      if (!Number.isFinite(id)) return;
+      const working = workingRef.current;
+      if (!working) return;
+      const feature = working.features[id];
+      if (!feature) return;
+      working.features.splice(id, 1);
+      const src = map.getSource(FEATURES_SOURCE_ID) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      src?.setData(working);
+      onDeletedRef.current(feature);
+    };
+
+    const canvas = map.getCanvas();
+    let hoverDepth = 0;
+    const setHoverCursor = () => {
+      hoverDepth += 1;
+      canvas.style.cursor = DELETE_HOVER_CURSOR;
+    };
+    const clearHoverCursor = () => {
+      hoverDepth = Math.max(0, hoverDepth - 1);
+      if (hoverDepth === 0) canvas.style.cursor = "";
+    };
+    const hoverLayers = [
+      FEATURES_FILL_LAYER,
+      FEATURES_LINE_LAYER,
+      FEATURES_CIRCLE_LAYER,
+    ].filter((id) => !!map.getLayer(id));
+    for (const layerId of hoverLayers) {
+      map.on("mouseenter", layerId, setHoverCursor);
+      map.on("mouseleave", layerId, clearHoverCursor);
+    }
+    map.on("click", onMapClick);
+
+    return () => {
+      map.off("click", onMapClick);
+      for (const layerId of hoverLayers) {
+        map.off("mouseenter", layerId, setHoverCursor);
+        map.off("mouseleave", layerId, clearHoverCursor);
+      }
+      canvas.style.cursor = "";
+    };
+  }, [deleting, styleReady]);
 
   // ------------------------------------------------------------------
   // DEM overlay: read the selected .tif client-side, render it as a
@@ -3369,10 +3858,13 @@ export function GisGlobeViewport({
     const recompute = () => {
       const t = terrainBtnRef.current;
       const d = demBtnRef.current;
+      const s = simplifyBtnRef.current;
       if (t && t.offsetWidth > 0)
         setTerrainSliderLeft(t.offsetLeft + t.offsetWidth / 2);
       if (d && d.offsetWidth > 0)
         setDemSliderLeft(d.offsetLeft + d.offsetWidth / 2);
+      if (s && s.offsetWidth > 0)
+        setSimplifySliderLeft(s.offsetLeft + s.offsetWidth / 2);
     };
     recompute();
     const ro = new ResizeObserver(recompute);
@@ -3407,6 +3899,113 @@ export function GisGlobeViewport({
     >
       <div ref={containerRef} className="h-full w-full" />
 
+      {layers && layers.length > 0 && (
+        <div className="glb-legend">
+          <div className="glb-legend__title">Layers</div>
+          {layers.map((l) => {
+            const rowClass =
+              "glb-legend__row" +
+              (l.visible ? "" : " glb-legend__row--hidden");
+            const fclasses = l.fclasses ?? [];
+            return (
+              <React.Fragment key={l.id}>
+                <label className={rowClass}>
+                  <input
+                    type="checkbox"
+                    className="glb-legend__checkbox"
+                    checked={l.visible}
+                    onChange={() =>
+                      onToggleLayerVisibilityRef.current?.(l.id)
+                    }
+                  />
+                  <span
+                    className="glb-legend__swatch"
+                    // eslint-disable-next-line template/no-jsx-style-prop -- per-layer color is runtime data
+                    style={{ backgroundColor: l.color }}
+                  />
+                  <span className="glb-legend__name" title={l.id}>
+                    {l.id}
+                  </span>
+                </label>
+                {fclasses.length > 0 && l.visible && (
+                  <div className="glb-legend__fclasses">
+                    {fclasses.map((fc) => {
+                      const isActive = activeFclass === fc.value;
+                      const fcRowClass =
+                        "glb-legend__row glb-legend__row--fclass" +
+                        (fc.visible ? "" : " glb-legend__row--hidden") +
+                        (isActive ? " glb-legend__row--active" : "");
+                      return (
+                        <div key={fc.value} className={fcRowClass}>
+                          <button
+                            type="button"
+                            className={
+                              "glb-legend__edit-btn" +
+                              (isActive
+                                ? " glb-legend__edit-btn--active"
+                                : "")
+                            }
+                            title={
+                              isActive
+                                ? `Stop adding as "${fc.value}"`
+                                : `Add new features as "${fc.value}"`
+                            }
+                            onClick={() =>
+                              setActiveFclass((cur) =>
+                                cur === fc.value ? null : fc.value,
+                              )
+                            }
+                            aria-pressed={isActive}
+                          >
+                            <svg
+                              width="11"
+                              height="11"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M12 20h9" />
+                              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                            </svg>
+                          </button>
+                          <label className="glb-legend__fclass-label">
+                            <input
+                              type="checkbox"
+                              className="glb-legend__checkbox"
+                              checked={fc.visible}
+                              onChange={() =>
+                                onToggleFclassVisibilityRef.current?.(
+                                  l.id,
+                                  fc.value,
+                                )
+                              }
+                            />
+                            <span
+                              className="glb-legend__swatch"
+                              // eslint-disable-next-line template/no-jsx-style-prop -- per-fclass color is runtime data
+                              style={{ backgroundColor: fc.color }}
+                            />
+                            <span
+                              className="glb-legend__name"
+                              title={fc.value}
+                            >
+                              {fc.value}
+                            </span>
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      )}
+
       <DraggableToolbar
         wrapperRef={wrapperRef}
         resetKey={isFullscreen}
@@ -3417,46 +4016,127 @@ export function GisGlobeViewport({
           value={tileIndex}
           onChange={(e) => setTileIndex(Number(e.target.value))}
         >
-          {TILE_SOURCES.map((src, i) => (
-            <option key={src.name} value={i}>
-              {src.name}
-            </option>
+          {TILE_GROUP_ORDER.map((group) => (
+            <React.Fragment key={group}>
+              <option disabled className="glb-tile-select__header">
+                {`— ${TILE_GROUP_LABEL[group]} —`}
+              </option>
+              {TILE_SOURCES.map((src, i) =>
+                src.group === group ? (
+                  <option key={src.name} value={i}>
+                    {src.name}
+                  </option>
+                ) : null,
+              )}
+            </React.Fragment>
           ))}
         </select>
         <div className="glb-fs-divider" />
         <ToolbarButton
-          title={adding ? "Cancel add" : "Add feature"}
+          title={
+            canEdit === false
+              ? "Select a single layer to edit"
+              : adding
+                ? "Cancel add"
+                : "Add feature"
+          }
           icon={ADD_ICON}
-          disabled={saving || editing || freehand || simplifying || importingDem}
+          disabled={
+            canEdit === false ||
+            saving ||
+            editing ||
+            freehand ||
+            simplifying ||
+            importingDem ||
+            deleting
+          }
           active={adding}
           onClick={() => onToggleAddRef.current()}
         />
         <ToolbarButton
           title={
-            freehand
-              ? "Finish freehand"
-              : "Freehand draw (hold right mouse button)"
+            canEdit === false
+              ? "Select a single layer to edit"
+              : freehand
+                ? "Finish freehand"
+                : "Freehand draw (hold right mouse button)"
           }
           icon={FREEHAND_ICON}
-          disabled={saving || editing || adding || simplifying || importingDem}
+          disabled={
+            canEdit === false ||
+            saving ||
+            editing ||
+            adding ||
+            simplifying ||
+            importingDem ||
+            deleting
+          }
           active={freehand}
           onClick={() => onToggleFreehandRef.current()}
         />
         <ToolbarButton
-          title={editing ? "Stop editing" : "Edit vertices"}
+          title={
+            canEdit === false
+              ? "Select a single layer to edit"
+              : editing
+                ? "Stop editing"
+                : "Edit vertices"
+          }
           icon={EDIT_ICON}
-          disabled={saving || adding || freehand || simplifying || importingDem}
+          disabled={
+            canEdit === false ||
+            saving ||
+            adding ||
+            freehand ||
+            simplifying ||
+            importingDem ||
+            deleting
+          }
           active={editing}
           onClick={() => onToggleEditRef.current()}
         />
         <ToolbarButton
+          ref={simplifyBtnRef}
           title={
-            simplifying ? "Finish simplify" : "Simplify shape (click a feature)"
+            canEdit === false
+              ? "Select a single layer to edit"
+              : simplifying
+                ? "Finish simplify"
+                : "Simplify shape (click a feature)"
           }
           icon={SIMPLIFY_ICON}
-          disabled={saving || adding || freehand || editing || importingDem}
+          disabled={
+            canEdit === false ||
+            saving ||
+            adding ||
+            freehand ||
+            editing ||
+            importingDem ||
+            deleting
+          }
           active={simplifying}
           onClick={() => onToggleSimplifyRef.current()}
+        />
+        <ToolbarButton
+          title={
+            canEdit === false
+              ? "Select a single layer to edit"
+              : deleting
+                ? "Finish delete"
+                : "Delete feature (click a feature)"
+          }
+          icon={DELETE_ICON}
+          disabled={
+            canEdit === false ||
+            saving ||
+            adding ||
+            freehand ||
+            editing ||
+            simplifying ||
+            importingDem
+          }
+          active={deleting}
+          onClick={() => onToggleDeleteRef.current()}
         />
         <ToolbarButton
           ref={demBtnRef}
@@ -3466,9 +4146,23 @@ export function GisGlobeViewport({
               : "Import 3D terrain (click a feature)"
           }
           icon={DEM_ICON}
-          disabled={saving || adding || freehand || editing || simplifying}
+          disabled={
+            saving ||
+            adding ||
+            freehand ||
+            editing ||
+            simplifying ||
+            deleting
+          }
           active={importingDem}
           onClick={() => onToggleImportDemRef.current()}
+        />
+        <ToolbarButton
+          title={dirty ? "Discard changes" : "No unsaved edits"}
+          icon={DISCARD_ICON}
+          disabled={saving || !dirty}
+          dirtyOutline={dirty}
+          onClick={() => onDiscardRef.current()}
         />
         <ToolbarButton
           title={
@@ -3543,6 +4237,42 @@ export function GisGlobeViewport({
           </div>
         )}
 
+        {simplifying && simplifySliderLeft != null && (
+          <div
+            className={
+              simplifyState
+                ? "glb-simplify-panel"
+                : "glb-simplify-panel glb-simplify-panel--idle"
+            }
+            // eslint-disable-next-line template/no-jsx-style-prop -- runtime offset from button position
+            style={{ left: `${simplifySliderLeft}px` }}
+          >
+            <span className="glb-simplify-label">Simplify</span>
+            <input
+              type="range"
+              className="glb-simplify-slider"
+              min={0}
+              max={100}
+              step={1}
+              disabled={!simplifyState}
+              value={simplifyState?.slider ?? 0}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setSimplifyState((s) => (s ? { ...s, slider: v } : s));
+              }}
+            />
+            <span className="glb-simplify-count">
+              {simplifyState
+                ? `${
+                    simplifiedPreview
+                      ? countGeomVertices(simplifiedPreview)
+                      : simplifyState.baseVertices
+                  } / ${simplifyState.baseVertices} pts`
+                : "click a shape"}
+            </span>
+          </div>
+        )}
+
         {demFile && demSliderLeft != null && (
           <div
             className="glb-terrain-slider-wrap"
@@ -3603,40 +4333,6 @@ export function GisGlobeViewport({
           </div>
         )}
       </DraggableToolbar>
-
-      {simplifying && (
-        <div
-          className={
-            simplifyState
-              ? "glb-simplify-panel"
-              : "glb-simplify-panel glb-simplify-panel--idle"
-          }
-        >
-          <span className="glb-simplify-label">Simplify</span>
-          <input
-            type="range"
-            className="glb-simplify-slider"
-            min={0}
-            max={100}
-            step={1}
-            disabled={!simplifyState}
-            value={simplifyState?.slider ?? 0}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              setSimplifyState((s) => (s ? { ...s, slider: v } : s));
-            }}
-          />
-          <span className="glb-simplify-count">
-            {simplifyState
-              ? `${
-                  simplifiedPreview
-                    ? countGeomVertices(simplifiedPreview)
-                    : simplifyState.baseVertices
-                } / ${simplifyState.baseVertices} pts`
-              : "click a shape"}
-          </span>
-        </div>
-      )}
 
       {pendingDem && paddedDemBbox && (
         <div className="glb-dem-modal">
@@ -3778,6 +4474,7 @@ function ToolbarButton({
   disabled,
   active,
   dirty,
+  dirtyOutline,
   ref,
 }: {
   icon: string;
@@ -3786,12 +4483,14 @@ function ToolbarButton({
   disabled?: boolean;
   active?: boolean;
   dirty?: boolean;
+  dirtyOutline?: boolean;
   ref?: React.Ref<HTMLButtonElement>;
 }) {
   const cls = [
     "glb-btn",
     active ? "glb-btn--active" : "",
     dirty ? "glb-btn--dirty" : "",
+    dirtyOutline ? "glb-btn--dirty-outline" : "",
   ]
     .filter(Boolean)
     .join(" ");

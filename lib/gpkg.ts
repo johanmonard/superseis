@@ -554,6 +554,36 @@ export function insertGpkgFeatures(
   return pks;
 }
 
+export function deleteGpkgFeatures(
+  db: Database,
+  meta: GpkgMeta,
+  pks: ReadonlyArray<number | string>
+): void {
+  if (pks.length === 0) return;
+
+  const triggerRows = db.exec(
+    `SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = '${meta.tableName}'`
+  );
+  const triggers: { name: string; sql: string }[] = [];
+  if (triggerRows.length) {
+    for (const row of triggerRows[0].values) {
+      triggers.push({ name: row[0] as string, sql: row[1] as string });
+      db.exec(`DROP TRIGGER IF EXISTS "${row[0] as string}"`);
+    }
+  }
+
+  const quoted = pks
+    .map((pk) => (typeof pk === "string" ? `'${pk.replace(/'/g, "''")}'` : pk))
+    .join(",");
+  db.exec(
+    `DELETE FROM "${meta.tableName}" WHERE "${meta.pkCol}" IN (${quoted})`
+  );
+
+  for (const t of triggers) {
+    db.exec(t.sql);
+  }
+}
+
 function uint8ToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
