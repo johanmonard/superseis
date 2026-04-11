@@ -32,6 +32,7 @@ export type GpkgMeta = {
   geomCol: string;
   srsId: number;
   pkCol: string;
+  geometryType: string;
 };
 
 // ==========================================================================
@@ -395,7 +396,7 @@ export function gpkgToGeoJSON(db: Database): GpkgReadResult {
   if (!contents.length || !contents[0].values.length) {
     return {
       geojson: { type: "FeatureCollection", features: [] },
-      meta: { tableName: "", geomCol: "geom", srsId: 4326, pkCol: "fid" },
+      meta: { tableName: "", geomCol: "geom", srsId: 4326, pkCol: "fid", geometryType: "GEOMETRY" },
     };
   }
 
@@ -403,9 +404,12 @@ export function gpkgToGeoJSON(db: Database): GpkgReadResult {
   const srsId = contents[0].values[0][1] as number;
 
   const geomCols = db.exec(
-    `SELECT column_name FROM gpkg_geometry_columns WHERE table_name = '${tableName}'`
+    `SELECT column_name, geometry_type_name FROM gpkg_geometry_columns WHERE table_name = '${tableName}'`
   );
   const geomCol = geomCols.length ? (geomCols[0].values[0][0] as string) : "geom";
+  const geometryType = geomCols.length
+    ? ((geomCols[0].values[0][1] as string) ?? "GEOMETRY").toUpperCase()
+    : "GEOMETRY";
 
   // Detect primary key column
   const pkRows = db.exec(`PRAGMA table_info("${tableName}")`);
@@ -426,7 +430,7 @@ export function gpkgToGeoJSON(db: Database): GpkgReadResult {
   if (!result.length) {
     return {
       geojson: { type: "FeatureCollection", features: [] },
-      meta: { tableName, geomCol, srsId, pkCol },
+      meta: { tableName, geomCol, srsId, pkCol, geometryType },
     };
   }
 
@@ -456,7 +460,7 @@ export function gpkgToGeoJSON(db: Database): GpkgReadResult {
 
   return {
     geojson: { type: "FeatureCollection", features },
-    meta: { tableName, geomCol, srsId, pkCol },
+    meta: { tableName, geomCol, srsId, pkCol, geometryType },
   };
 }
 
@@ -506,6 +510,48 @@ export function updateGpkgFeatures(
   for (const t of triggers) {
     db.exec(t.sql);
   }
+}
+
+export function insertGpkgFeatures(
+  db: Database,
+  meta: GpkgMeta,
+  features: GeoJSONFeature[]
+): number[] {
+  if (features.length === 0) return [];
+
+  const srcKey = meta.srsId !== 4326 ? `EPSG:${meta.srsId}` : null;
+  const inverse = srcKey ? buildInverseTransform(srcKey) : null;
+
+  const triggerRows = db.exec(
+    `SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = '${meta.tableName}'`
+  );
+  const triggers: { name: string; sql: string }[] = [];
+  if (triggerRows.length) {
+    for (const row of triggerRows[0].values) {
+      triggers.push({ name: row[0] as string, sql: row[1] as string });
+      db.exec(`DROP TRIGGER IF EXISTS "${row[0] as string}"`);
+    }
+  }
+
+  const pks: number[] = [];
+  for (const feature of features) {
+    let geom = feature.geometry;
+    if (!geom) continue;
+    if (inverse) geom = reprojectGeometry(geom, inverse);
+
+    const blob = encodeGpkgGeometry(geom, meta.srsId);
+    db.exec(
+      `INSERT INTO "${meta.tableName}" ("${meta.geomCol}") VALUES (x'${uint8ToHex(blob)}')`
+    );
+    const res = db.exec("SELECT last_insert_rowid()");
+    pks.push(res[0].values[0][0] as number);
+  }
+
+  for (const t of triggers) {
+    db.exec(t.sql);
+  }
+
+  return pks;
 }
 
 function uint8ToHex(bytes: Uint8Array): string {

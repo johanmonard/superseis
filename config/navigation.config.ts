@@ -37,6 +37,7 @@ export const navigation: NavigationItem[] = [
       { label: "Maps", href: "/demo/maps", icon: "map" },
       { label: "Wireframes", href: "/demo/wireframes", icon: "compass" },
       { label: "GIS", href: "/demo/gis", icon: "layers" },
+      { label: "GIS Globe", href: "/demo/gis-globe", icon: "map" },
     ],
   },
   {

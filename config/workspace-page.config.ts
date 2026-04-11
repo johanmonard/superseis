@@ -105,6 +105,12 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
     title: "GIS",
     subtitle: "GIS data display and manipulation experiments.",
   },
+  {
+    href: "/demo/gis-globe",
+    title: "GIS Globe",
+    subtitle:
+      "WebGL globe projection with satellite tiles and GeoJSON features (MapLibre GL).",
+  },
   // [new-module:page-identity]
   {
     href: "/admin",

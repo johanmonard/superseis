@@ -44,3 +44,6 @@ api/storage/
 
 # database
 *.db
+
+# shared data files
+/share

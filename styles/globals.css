@@ -64,6 +64,7 @@ input:-webkit-autofill:active {
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --color-bg-canvas: var(--slate-900);
   --color-bg-surface: var(--slate-800);
   --color-bg-elevated: var(--slate-700);

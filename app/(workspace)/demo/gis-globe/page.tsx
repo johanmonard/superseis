@@ -7,15 +7,23 @@ import type { Database } from "sql.js";
 import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
 import { ProjectSettingsPage } from "@/components/features/project/project-settings-page";
-import { gpkgToGeoJSON, updateGpkgFeatures, insertGpkgFeatures, exportDatabase } from "@/lib/gpkg";
+import {
+  gpkgToGeoJSON,
+  updateGpkgFeatures,
+  insertGpkgFeatures,
+  exportDatabase,
+} from "@/lib/gpkg";
 import type { GeoJSONFeatureCollection, GpkgMeta } from "@/lib/gpkg";
 
-const GisViewport = dynamic(
-  () => import("@/components/features/demo/gis-viewport").then((m) => m.GisViewport),
+const GisGlobeViewport = dynamic(
+  () =>
+    import("@/components/features/demo/gis-globe-viewport").then(
+      (m) => m.GisGlobeViewport
+    ),
   { ssr: false }
 );
 
-export default function GisPage() {
+export default function GisGlobePage() {
   const [files, setFiles] = React.useState<string[]>([]);
   const [selected, setSelected] = React.useState<string>("");
   const [data, setData] = React.useState<GeoJSONFeatureCollection | null>(null);
@@ -106,7 +114,6 @@ export default function GisPage() {
     };
   }, []);
 
-  // Called by the viewport when edit mode is toggled off
   const handleEdited = React.useCallback((features: GeoJSON.Feature[]) => {
     setData((prev) => {
       if (!prev) return prev;
@@ -177,14 +184,16 @@ export default function GisPage() {
 
       if (!res.ok) throw new Error("Save failed");
 
-      // Attach newly-assigned pks to the in-memory features
       if (newPks.length > 0) {
         setData((prev) => {
           if (!prev) return prev;
           const updated = { ...prev, features: prev.features.slice() };
           let pkIdx = 0;
           for (let i = 0; i < updated.features.length; i++) {
-            if (updated.features[i].properties[meta.pkCol] == null && pkIdx < newPks.length) {
+            if (
+              updated.features[i].properties[meta.pkCol] == null &&
+              pkIdx < newPks.length
+            ) {
               updated.features[i] = {
                 ...updated.features[i],
                 properties: {
@@ -210,10 +219,10 @@ export default function GisPage() {
 
   return (
     <ProjectSettingsPage
-      title="GIS"
+      title="GIS Globe"
       panelTitle="Parameters"
       viewport={
-        <GisViewport
+        <GisGlobeViewport
           data={data}
           dataKey={`${selected}:${loadId}`}
           editing={editing}
@@ -230,7 +239,6 @@ export default function GisPage() {
       }
     >
       <div className="space-y-[var(--space-4)]">
-        {/* File selector */}
         <Field label="GPKG File" htmlFor="gpkg-file">
           <Select
             id="gpkg-file"
@@ -246,6 +254,11 @@ export default function GisPage() {
             ))}
           </Select>
         </Field>
+
+        <p className="text-xs text-[var(--color-text-muted)]">
+          Real WebGL globe projection powered by MapLibre GL. Raster satellite
+          and basemap tiles are draped directly on the globe.
+        </p>
 
         {loading && (
           <p className="text-xs text-[var(--color-text-muted)]">Loading…</p>
