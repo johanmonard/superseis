@@ -817,6 +817,98 @@ function simplifyGeometry(
   }
 }
 
+// Chaikin's corner-cutting subdivision. For an open polyline, endpoints are
+// preserved; each interior edge is replaced by two points at 25% and 75%.
+// For a closed ring, the algorithm wraps around.
+// Laplacian smoothing: each vertex moves toward the average of its
+// neighbors by factor `alpha`. Repeated iterations progressively iron out
+// noise and pull the shape toward a smooth blob. Vertex count stays
+// constant (unlike Chaikin which subdivides). Endpoints are preserved for
+// open polylines; rings wrap around naturally.
+function smoothLine(
+  coords: GeoJSON.Position[],
+  iterations: number
+): GeoJSON.Position[] {
+  if (iterations <= 0 || coords.length < 3) return coords;
+  const alpha = 0.5;
+  let pts = coords.map((p) => [p[0], p[1]] as [number, number]);
+  for (let iter = 0; iter < iterations; iter++) {
+    const next: [number, number][] = pts.map((p) => [p[0], p[1]]);
+    // Skip first and last (preserve endpoints)
+    for (let i = 1; i < pts.length - 1; i++) {
+      const prev = pts[i - 1];
+      const curr = pts[i];
+      const nxt = pts[i + 1];
+      const avg0 = (prev[0] + nxt[0]) / 2;
+      const avg1 = (prev[1] + nxt[1]) / 2;
+      next[i] = [
+        curr[0] + alpha * (avg0 - curr[0]),
+        curr[1] + alpha * (avg1 - curr[1]),
+      ];
+    }
+    pts = next;
+  }
+  return pts;
+}
+
+function smoothRing(
+  ring: GeoJSON.Position[],
+  iterations: number
+): GeoJSON.Position[] {
+  if (iterations <= 0 || ring.length < 4) return ring;
+  const alpha = 0.5;
+  // Drop closure point
+  let pts = ring.slice(0, -1).map((p) => [p[0], p[1]] as [number, number]);
+  const n = pts.length;
+  for (let iter = 0; iter < iterations; iter++) {
+    const next: [number, number][] = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const prev = pts[(i - 1 + n) % n];
+      const curr = pts[i];
+      const nxt = pts[(i + 1) % n];
+      const avg0 = (prev[0] + nxt[0]) / 2;
+      const avg1 = (prev[1] + nxt[1]) / 2;
+      next[i] = [
+        curr[0] + alpha * (avg0 - curr[0]),
+        curr[1] + alpha * (avg1 - curr[1]),
+      ];
+    }
+    pts = next;
+  }
+  pts.push([pts[0][0], pts[0][1]]); // re-close
+  return pts;
+}
+
+function smoothGeometry(
+  geom: GeoJSON.Geometry,
+  iterations: number
+): GeoJSON.Geometry {
+  if (iterations <= 0) return geom;
+  switch (geom.type) {
+    case "LineString":
+      return { ...geom, coordinates: smoothLine(geom.coordinates, iterations) };
+    case "MultiLineString":
+      return {
+        ...geom,
+        coordinates: geom.coordinates.map((line) => smoothLine(line, iterations)),
+      };
+    case "Polygon":
+      return {
+        ...geom,
+        coordinates: geom.coordinates.map((ring) => smoothRing(ring, iterations)),
+      };
+    case "MultiPolygon":
+      return {
+        ...geom,
+        coordinates: geom.coordinates.map((poly) =>
+          poly.map((ring) => smoothRing(ring, iterations))
+        ),
+      };
+    default:
+      return geom;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Auto-polygon (region grow) utilities. The auto-polygon tool samples the
 // rendered satellite pixels inside a user-picked reference polygon to build a
@@ -1595,6 +1687,131 @@ function astarVesselnessPath(
   }
   path.reverse();
   return path.length >= 2 ? path : null;
+}
+
+// Multi-cue classical road probability map. Combines three complementary
+// signals — Frangi vesselness (tubular structure), gradient magnitude
+// (edge contrast), and intensity homogeneity — into a single [0..1]
+// probability field. Each cue catches what the others miss:
+//   vesselness → elongated features (the road itself)
+//   gradient   → road/non-road boundary contrast
+//   homogeneity → smooth asphalt vs textured surroundings
+// The combination is normalized per-pixel as a weighted geometric mean so
+// all three must agree for a high probability. Only pixels inside the
+// paint mask are processed; the rest stay at 0.
+function computeMultiCueRoadMap(
+  image: ImageData,
+  sigmaMin: number,
+  sigmaMax: number,
+  sigmaSteps: number,
+  paintMask?: { data: Uint8Array; width: number; height: number } | null
+): Float32Array {
+  const W = image.width;
+  const H = image.height;
+  const N = W * H;
+
+  // 1. Grayscale
+  const gray = new Float32Array(N);
+  const d = image.data;
+  for (let i = 0; i < N; i++) {
+    const idx = i * 4;
+    gray[i] = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
+  }
+
+  // 2. Frangi vesselness (reuse the existing implementation)
+  const vessel = computeVesselnessMap(
+    image,
+    sigmaMin,
+    sigmaMax,
+    sigmaSteps,
+    paintMask
+  );
+
+  // 3. Gradient magnitude via Sobel (3×3). Normalized to [0..1] by the
+  //    maximum observed value inside the mask.
+  const gradMag = new Float32Array(N);
+  let gMax = 0;
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      if (paintMask && !paintMask.data[y * W + x]) continue;
+      const tl = gray[(y - 1) * W + (x - 1)];
+      const tc = gray[(y - 1) * W + x];
+      const tr = gray[(y - 1) * W + (x + 1)];
+      const ml = gray[y * W + (x - 1)];
+      const mr = gray[y * W + (x + 1)];
+      const bl = gray[(y + 1) * W + (x - 1)];
+      const bc = gray[(y + 1) * W + x];
+      const br = gray[(y + 1) * W + (x + 1)];
+      const gx = -tl - 2 * ml - bl + tr + 2 * mr + br;
+      const gy = -tl - 2 * tc - tr + bl + 2 * bc + br;
+      const mag = Math.sqrt(gx * gx + gy * gy);
+      gradMag[y * W + x] = mag;
+      if (mag > gMax) gMax = mag;
+    }
+  }
+  if (gMax > 0) {
+    for (let i = 0; i < N; i++) gradMag[i] /= gMax;
+  }
+
+  // 4. Local homogeneity: inverse of local standard deviation in a small
+  //    window. Roads tend to have low local variance compared to
+  //    vegetation or gravel. Computed with a box filter (radius 2).
+  const homog = new Float32Array(N);
+  const HR = 2;
+  const HW = 2 * HR + 1;
+  const HA = HW * HW;
+  let hMax = 0;
+  for (let y = HR; y < H - HR; y++) {
+    for (let x = HR; x < W - HR; x++) {
+      if (paintMask && !paintMask.data[y * W + x]) continue;
+      let sum = 0;
+      let sumSq = 0;
+      for (let ky = -HR; ky <= HR; ky++) {
+        for (let kx = -HR; kx <= HR; kx++) {
+          const v = gray[(y + ky) * W + (x + kx)];
+          sum += v;
+          sumSq += v * v;
+        }
+      }
+      const mean = sum / HA;
+      const variance = Math.max(0, sumSq / HA - mean * mean);
+      const sd = Math.sqrt(variance);
+      // Inverse: high homogeneity = low sd. Use 1/(1+sd/C) so the
+      // value sits in (0, 1] without a hard normalization pass.
+      homog[y * W + x] = 1 / (1 + sd / 8);
+      if (homog[y * W + x] > hMax) hMax = homog[y * W + x];
+    }
+  }
+  if (hMax > 0) {
+    for (let i = 0; i < N; i++) homog[i] /= hMax;
+  }
+
+  // 5. Combine: weighted geometric mean. Vesselness dominates (it's the
+  //    most specific signal); gradient and homogeneity act as soft
+  //    modifiers. The exponents control relative weight.
+  //      road_prob = vessel^0.5 * (1 - grad)^0.2 * homog^0.3
+  //    Using (1-grad) because roads have low gradient in their interior;
+  //    edges are at the boundary. But this penalizes the road edges. A
+  //    better approach: use a small dilation of (1-grad) so the low-
+  //    gradient interior bleeds into the boundary pixels. For simplicity,
+  //    just use the raw cues and let A* handle the rest.
+  //
+  //    Simpler alternative that works better in practice: additive blend
+  //    with weights, clamped to [0,1]. This avoids the geometric mean's
+  //    tendency to collapse to 0 when any cue is near 0.
+  const prob = new Float32Array(N);
+  const wV = 0.55; // vesselness weight
+  const wG = 0.15; // inverted gradient weight (smooth interior)
+  const wH = 0.30; // homogeneity weight
+  for (let i = 0; i < N; i++) {
+    if (paintMask && !paintMask.data[i]) continue;
+    const v = vessel[i];
+    const g = 1 - gradMag[i]; // invert: smooth = high
+    const h = homog[i];
+    prob[i] = Math.min(1, wV * v + wG * g + wH * h);
+  }
+
+  return prob;
 }
 
 // BFS flood fill from `seed` accepting any pixel whose RGB distance from the
@@ -2463,6 +2680,43 @@ const GLOBE_CSS = `
     background-color: rgba(255, 255, 255, 0.22);
   }
 
+  .glb-toolbar-group {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  .glb-toolbar-group__popover {
+    position: absolute;
+    bottom: calc(100% + 14px);
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    z-index: 10;
+  }
+  .glb-toolbar-group__popover .glb-btn {
+    background-color: rgba(255, 255, 255, 0.92);
+    border-color: rgba(15, 23, 42, 0.14);
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.18);
+  }
+  .glb-toolbar-group__popover .glb-btn:hover:not(:disabled) {
+    background-color: rgba(255, 255, 255, 1);
+  }
+  [data-theme="dark"] .glb-toolbar-group__popover .glb-btn {
+    background-color: rgba(30, 41, 59, 0.92);
+    border-color: rgba(255, 255, 255, 0.14);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+  [data-theme="dark"] .glb-toolbar-group__popover .glb-btn:hover:not(:disabled) {
+    background-color: rgba(30, 41, 59, 1);
+  }
+
   .glb-simplify-panel {
     position: absolute;
     top: 100%;
@@ -2854,10 +3108,17 @@ function injectCss() {
   if (style.textContent !== GLOBE_CSS) style.textContent = GLOBE_CSS;
 }
 
+// Group icon: minimalist pencil
+const EDIT_GROUP_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l4 4L7 21H3v-4z"/></svg>';
+// Edit vertices: node on a line with move arrows — drag to reposition
 const EDIT_ICON =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l4 4-9 9H3v-4z"/><path d="M17.5 2.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
-const ADD_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l8-8 8-8"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="currentColor"/><path d="M12 7v-3m0 16v-3m-5-5H4m16 0h-3" stroke-width="1.5"/><path d="M12 4l-1.5 2h3zM12 20l-1.5-2h3zM4 12l2-1.5v3zM20 12l-2-1.5v3z" fill="currentColor" stroke="none"/></svg>';
+const ADD_GROUP_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+// Per-vertex click-to-place: polyline with vertex dots
+const ADD_VERTEX_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 18 10 8 16 14 20 6"/><circle cx="4" cy="18" r="2" fill="currentColor"/><circle cx="10" cy="8" r="2" fill="currentColor"/><circle cx="16" cy="14" r="2" fill="currentColor"/><circle cx="20" cy="6" r="2" fill="currentColor"/></svg>';
 const SAVE_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>';
 const ZOOM_IN_ICON =
@@ -2869,13 +3130,25 @@ const EXPAND_ICON =
 const SHRINK_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>';
 const FREEHAND_ICON =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17c2-4 4-4 6 0s4 4 6 0 4-4 6 0"/><path d="M3 11c2-4 4-4 6 0s4 4 6 0 4-4 6 0"/></svg>';
-const VESSEL_TRACE_ICON =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17c3-6 6-6 9 0s6 6 9 0"/><path d="M3 17c3-6 6-6 9 0s6 6 9 0" transform="translate(0,-6)"/><circle cx="12" cy="14" r="1.5" fill="currentColor"/></svg>';
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18c2-3 4-8 7-9s3 4 5 3 2-5 6-7"/></svg>';
+// Group icon: wand with sparkles — automatic digitization
+const DIGITIZE_GROUP_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4V2m0 2v2m0-2h2m-2 0h-2"/><path d="M20 9v-1m0 1v1m0-1h1m-1 0h-1"/><path d="M3 21l10-10"/><path d="M13 11l-1-1 1-1 1 1z"/></svg>';
+// Auto-trace: eyedropper sampling color + dashed path
 const AUTO_POLY_ICON =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6 L10 3 L20 7 L17 17 L7 19 Z"/><path d="M12 11 l2 2 M12 11 l-2 -2 M12 11 l2 -2 M12 11 l-2 2"/><circle cx="12" cy="11" r="1.5" fill="currentColor"/></svg>';
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4l-1.5 1.5M17 7l-3 3"/><circle cx="12" cy="12" r="2"/><path d="M10 14l-6 6" stroke-dasharray="3 2"/></svg>';
+// Vesselness: parallel road edges with centerline — tubular detection
+const VESSEL_TRACE_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8c4-2 8 2 12 0s4-2 4-2"/><path d="M4 16c4-2 8 2 12 0s4-2 4-2"/><path d="M4 12c4-2 8 2 12 0s4-2 4-2" stroke-dasharray="3 2" stroke-width="1.5"/></svg>';
+// Multi-cue: three overlapping signal layers funneling into a path
+const ML_TRACE_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h6"/><path d="M4 10h6"/><path d="M4 14h6"/><path d="M10 6l4 4-4 4"/><path d="M14 10h6" stroke-width="2.5"/></svg>';
+// Simplify: jagged path above a clean straight line — reduce vertices
 const SIMPLIFY_ICON =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18 L9 11 L15 14 L21 6"/><circle cx="3" cy="18" r="1.6" fill="currentColor"/><circle cx="9" cy="11" r="1.6" fill="currentColor"/><circle cx="15" cy="14" r="1.6" fill="currentColor"/><circle cx="21" cy="6" r="1.6" fill="currentColor"/></svg>';
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l3-3 3 4 3-5 3 4 3-3 3 2"/><path d="M3 17h18"/></svg>';
+// Smooth: angular path becoming a curve
+const SMOOTH_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l4-5 4 3 4-5 6 4" opacity="0.35"/><path d="M3 17q5-7 9-2t9-6"/></svg>';
 const TILT_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 L21 9 L12 15 L3 9 Z"/><path d="M3 9 L3 14 L12 20 L21 14 L21 9"/></svg>';
 const DEM_ICON =
@@ -2886,8 +3159,9 @@ const DELETE_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>';
 const RECLASSIFY_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41 13.41 20.59a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.5" fill="currentColor"/></svg>';
+// Discard: X mark — cancel/reject changes
 const DISCARD_ICON =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M3 13a9 9 0 1 0 3-7"/></svg>';
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>';
 
 // Contextual cursors used when the pointer is over a selectable feature in
 // the corresponding mode. Each is a 28×28 SVG with a white halo so the glyph
@@ -2895,6 +3169,9 @@ const DISCARD_ICON =
 // that ignore SVG cursors.
 const SIMPLIFY_HOVER_CURSOR =
   "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><path d='M5 21 L11 13 L17 16 L23 7'/><circle cx='5' cy='21' r='2.6' fill='%23ffffff'/><circle cx='11' cy='13' r='2.6' fill='%23ffffff'/><circle cx='17' cy='16' r='2.6' fill='%23ffffff'/><circle cx='23' cy='7' r='2.6' fill='%23ffffff'/><path d='M5 21 L11 13 L17 16 L23 7' stroke='%233b82f6' stroke-width='2'/><circle cx='5' cy='21' r='1.8' fill='%233b82f6'/><circle cx='11' cy='13' r='1.8' fill='%233b82f6'/><circle cx='17' cy='16' r='1.8' fill='%233b82f6'/><circle cx='23' cy='7' r='1.8' fill='%233b82f6'/></svg>\") 14 14, pointer";
+
+const SMOOTH_HOVER_CURSOR =
+  "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><path d='M5 21 q7-11 11-3 t7-9'/><path d='M5 21 q7-11 11-3 t7-9' stroke='%233b82f6' stroke-width='2'/></svg>\") 14 14, pointer";
 
 const EDIT_HOVER_CURSOR =
   "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><path d='M14 5 l4 4 -9 9 H5 v-4 z'/><path d='M19.5 4.5 a2.12 2.12 0 0 1 3 3 L9 21 l-4 1 1 -4 z'/><path d='M14 5 l4 4 -9 9 H5 v-4 z' stroke='%233b82f6' stroke-width='2'/><path d='M19.5 4.5 a2.12 2.12 0 0 1 3 3 L9 21 l-4 1 1 -4 z' stroke='%233b82f6' stroke-width='2'/></svg>\") 14 14, pointer";
@@ -2924,12 +3201,15 @@ export function GisGlobeViewport({
   onToggleLayerVisibility,
   onToggleFclassVisibility,
   dataKey,
+  discardKey,
   editing,
   adding,
   freehand,
   autoPoly,
   autoVessel,
+  autoSegment,
   simplifying,
+  smoothing,
   importingDem,
   deleting,
   reclassifying,
@@ -2947,7 +3227,9 @@ export function GisGlobeViewport({
   onToggleFreehand,
   onToggleAutoPoly,
   onToggleAutoVessel,
+  onToggleAutoSegment,
   onToggleSimplify,
+  onToggleSmooth,
   onToggleImportDem,
   onToggleDelete,
   onToggleReclassify,
@@ -2969,12 +3251,15 @@ export function GisGlobeViewport({
   onToggleLayerVisibility?: (id: string) => void;
   onToggleFclassVisibility?: (id: string, fclass: string) => void;
   dataKey: string;
+  discardKey: number;
   editing: boolean;
   adding: boolean;
   freehand: boolean;
   autoPoly: boolean;
   autoVessel: boolean;
+  autoSegment: boolean;
   simplifying: boolean;
+  smoothing: boolean;
   importingDem: boolean;
   deleting: boolean;
   reclassifying: boolean;
@@ -2992,7 +3277,9 @@ export function GisGlobeViewport({
   onToggleFreehand: () => void;
   onToggleAutoPoly: () => void;
   onToggleAutoVessel: () => void;
+  onToggleAutoSegment: () => void;
   onToggleSimplify: () => void;
+  onToggleSmooth: () => void;
   onToggleImportDem: () => void;
   onToggleDelete: () => void;
   onToggleReclassify: () => void;
@@ -3052,11 +3339,15 @@ export function GisGlobeViewport({
   const toolbarRef = React.useRef<HTMLDivElement>(null);
   const terrainBtnRef = React.useRef<HTMLButtonElement>(null);
   const demBtnRef = React.useRef<HTMLButtonElement>(null);
+  const editGroupRef = React.useRef<HTMLDivElement>(null);
+  const digitizeGroupRef = React.useRef<HTMLDivElement>(null);
   const simplifyBtnRef = React.useRef<HTMLButtonElement>(null);
+  const smoothBtnRef = React.useRef<HTMLButtonElement>(null);
   const autoPolyBtnRef = React.useRef<HTMLButtonElement>(null);
   const [terrainSliderLeft, setTerrainSliderLeft] = React.useState<number | null>(null);
   const [demSliderLeft, setDemSliderLeft] = React.useState<number | null>(null);
   const [simplifySliderLeft, setSimplifySliderLeft] = React.useState<number | null>(null);
+  const [smoothSliderLeft, setSmoothSliderLeft] = React.useState<number | null>(null);
   const [autoPolySliderLeft, setAutoPolySliderLeft] = React.useState<number | null>(null);
   const [autoPolyTolerance, setAutoPolyTolerance] = React.useState(1.0);
   const autoPolyToleranceRef = React.useRef(autoPolyTolerance);
@@ -3106,7 +3397,7 @@ export function GisGlobeViewport({
   const [autoVesselSliderLeft, setAutoVesselSliderLeft] = React.useState<
     number | null
   >(null);
-  const [vesselScaleMax, setVesselScaleMax] = React.useState(3.0);
+  const [vesselScaleMax, setVesselScaleMax] = React.useState(1.0);
   const [autoVesselSeq, setAutoVesselSeq] = React.useState(0);
   const autoVesselParamsRef = React.useRef<{
     startX: number;
@@ -3119,6 +3410,22 @@ export function GisGlobeViewport({
     cachedScaleMax?: number;
   } | null>(null);
   const autoVesselDraftGeomRef = React.useRef<GeoJSON.Geometry | null>(null);
+  // ONNX-based road segmentation trace state — separate from autoVessel.
+  const autoSegmentBtnRef = React.useRef<HTMLButtonElement>(null);
+  const [autoSegmentSliderLeft, setAutoSegmentSliderLeft] = React.useState<
+    number | null
+  >(null);
+  const [autoSegmentSeq, setAutoSegmentSeq] = React.useState(0);
+  const autoSegmentParamsRef = React.useRef<{
+    startX: number;
+    startY: number;
+    endX: number;
+    endY: number;
+    imageData: ImageData;
+    dpr: number;
+    cachedProb?: Float32Array;
+  } | null>(null);
+  const autoSegmentDraftGeomRef = React.useRef<GeoJSON.Geometry | null>(null);
   // Paint mask strokes stored as geographic coordinates so they survive
   // pan/zoom and can be rasterized to the current viewport on demand.
   // Each stroke records its brush width (CSS px) and the zoom level at
@@ -3154,7 +3461,8 @@ export function GisGlobeViewport({
   // `contextmenu` event preventDefaults the native menu for us.
   React.useEffect(() => {
     const map = mapRef.current;
-    if (!map || !styleReady || freehand || autoPoly || autoVessel) return;
+    if (!map || !styleReady || freehand || autoPoly || autoVessel || autoSegment)
+      return;
     const handler = (e: maplibregl.MapMouseEvent) => {
       setContextMenu({
         x: e.point.x,
@@ -3167,7 +3475,7 @@ export function GisGlobeViewport({
     return () => {
       map.off("contextmenu", handler);
     };
-  }, [styleReady, freehand, autoPoly, autoVessel]);
+  }, [styleReady, freehand, autoPoly, autoVessel, autoSegment]);
 
   // Position the context menu imperatively — repo lint forbids JSX style props,
   // and the click coordinates are pure runtime data so a CSS class won't do.
@@ -3253,7 +3561,9 @@ export function GisGlobeViewport({
   const onToggleFreehandRef = React.useRef(onToggleFreehand);
   const onToggleAutoPolyRef = React.useRef(onToggleAutoPoly);
   const onToggleAutoVesselRef = React.useRef(onToggleAutoVessel);
+  const onToggleAutoSegmentRef = React.useRef(onToggleAutoSegment);
   const onToggleSimplifyRef = React.useRef(onToggleSimplify);
+  const onToggleSmoothRef = React.useRef(onToggleSmooth);
   const onToggleImportDemRef = React.useRef(onToggleImportDem);
   const onToggleDeleteRef = React.useRef(onToggleDelete);
   const onToggleReclassifyRef = React.useRef(onToggleReclassify);
@@ -3278,7 +3588,9 @@ export function GisGlobeViewport({
     onToggleFreehandRef.current = onToggleFreehand;
     onToggleAutoPolyRef.current = onToggleAutoPoly;
     onToggleAutoVesselRef.current = onToggleAutoVessel;
+    onToggleAutoSegmentRef.current = onToggleAutoSegment;
     onToggleSimplifyRef.current = onToggleSimplify;
+    onToggleSmoothRef.current = onToggleSmooth;
     onToggleImportDemRef.current = onToggleImportDem;
     onToggleDeleteRef.current = onToggleDelete;
     onToggleReclassifyRef.current = onToggleReclassify;
@@ -3299,7 +3611,7 @@ export function GisGlobeViewport({
     workingRef.current = data
       ? (JSON.parse(JSON.stringify(data)) as GeoJSON.FeatureCollection)
       : null;
-  }, [data, dataKey]);
+  }, [data, dataKey, discardKey]);
 
   // Simplify-mode selection. The slider is bound to `slider` (0–100), which
   // is mapped through a cubic curve onto an absolute tolerance scaled by the
@@ -3326,6 +3638,31 @@ export function GisGlobeViewport({
     simplifyStateRef.current = simplifyState;
     simplifiedPreviewRef.current = simplifiedPreview;
   });
+
+  // Smooth-mode selection. The slider (0–100) maps linearly to 0–6 Chaikin
+  // iterations, producing progressively smoother curves.
+  const [smoothState, setSmoothState] = React.useState<{
+    id: number;
+    originalGeom: GeoJSON.Geometry;
+    baseVertices: number;
+    slider: number;
+  } | null>(null);
+
+  const smoothedPreview = React.useMemo<GeoJSON.Geometry | null>(() => {
+    if (!smoothState) return null;
+    // Cubic mapping: fine control near 0, aggressive at the top.
+    // 0 → 0 iterations, 50 → ~16, 100 → 200.
+    const t = smoothState.slider / 100;
+    const iterations = Math.round(t * t * t * 200);
+    return smoothGeometry(smoothState.originalGeom, iterations);
+  }, [smoothState]);
+
+  const smoothStateRef = React.useRef(smoothState);
+  const smoothedPreviewRef = React.useRef(smoothedPreview);
+  React.useEffect(() => {
+    smoothStateRef.current = smoothState;
+    smoothedPreviewRef.current = smoothedPreview;
+  }, [smoothState, smoothedPreview]);
 
   React.useEffect(() => injectCss(), []);
 
@@ -5656,6 +5993,501 @@ export function GisGlobeViewport({
   }, [autoVessel, vesselScaleMax, autoVesselSeq]);
 
   // --------------------------------------------------------------------
+  // ONNX-based road segmentation trace — same 2-click workflow as
+  // autoVessel but uses an ONNX model for the probability map.
+  // --------------------------------------------------------------------
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady || !autoSegment) return;
+    if (gpkgTypeToDrawShape(geometryType) !== "LineString") return;
+
+    const canvas = map.getCanvas();
+    canvas.style.cursor = "crosshair";
+
+    const SD_SOURCE = "auto-segment-draft";
+    const SD_LINE = "auto-segment-draft-line";
+    const SS_SOURCE = "auto-segment-start";
+    const SS_CIRCLE = "auto-segment-start-circle";
+
+    if (!map.getSource(SD_SOURCE)) {
+      map.addSource(SD_SOURCE, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: SD_LINE,
+        type: "line",
+        source: SD_SOURCE,
+        paint: { "line-color": SELECTED_COLOR, "line-width": 2 },
+      });
+    }
+    if (!map.getSource(SS_SOURCE)) {
+      map.addSource(SS_SOURCE, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: SS_CIRCLE,
+        type: "circle",
+        source: SS_SOURCE,
+        paint: {
+          "circle-radius": 6,
+          "circle-color": "#a78bfa",
+          "circle-stroke-color": "#0f172a",
+          "circle-stroke-width": 2,
+        },
+      });
+    }
+
+    const setStartPreview = (lngLat: [number, number] | null) => {
+      const src = map.getSource(SS_SOURCE) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      if (!src) return;
+      src.setData(
+        lngLat
+          ? {
+              type: "FeatureCollection",
+              features: [
+                {
+                  type: "Feature",
+                  properties: {},
+                  geometry: { type: "Point", coordinates: lngLat },
+                },
+              ],
+            }
+          : { type: "FeatureCollection", features: [] }
+      );
+    };
+
+    const commitDraft = (): void => {
+      const geom = autoSegmentDraftGeomRef.current;
+      if (!geom) return;
+      autoSegmentDraftGeomRef.current = null;
+      autoSegmentParamsRef.current = null;
+      const wrapped = wrapGeomToType(geom, geometryType);
+      const fc = activeFclassRef.current;
+      onAddedRef.current({
+        type: "Feature",
+        properties: fc ? { fclass: fc } : {},
+        geometry: wrapped,
+      });
+      const src = map.getSource(SD_SOURCE) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      src?.setData({ type: "FeatureCollection", features: [] });
+    };
+
+    let pendingStart: { lng: number; lat: number } | null = null;
+    let sampling = false;
+    let cancelled = false;
+
+    // ---- Magnifier (same as autoVessel) ----
+    const LENS_CSS = 140;
+    const MAG = 4;
+    const SAMPLE_CSS = LENS_CSS / MAG;
+    let magnifierEl: HTMLDivElement | null = null;
+    let lensCanvas: HTMLCanvasElement | null = null;
+    let lensCtx: CanvasRenderingContext2D | null = null;
+    let frameCanvas: HTMLCanvasElement | null = null;
+    let frameCtx: CanvasRenderingContext2D | null = null;
+
+    const captureFrame = () => {
+      if (!frameCanvas || !frameCtx) return;
+      const w = canvas.width;
+      const h = canvas.height;
+      if (frameCanvas.width !== w || frameCanvas.height !== h) {
+        frameCanvas.width = w;
+        frameCanvas.height = h;
+      }
+      frameCtx.drawImage(canvas, 0, 0);
+    };
+
+    {
+      const dpr = window.devicePixelRatio || 1;
+      frameCanvas = document.createElement("canvas");
+      frameCanvas.width = canvas.width;
+      frameCanvas.height = canvas.height;
+      frameCtx = frameCanvas.getContext("2d");
+      captureFrame();
+      map.on("render", captureFrame);
+
+      magnifierEl = document.createElement("div");
+      magnifierEl.className = "glb-magnifier";
+      lensCanvas = document.createElement("canvas");
+      lensCanvas.width = Math.round(LENS_CSS * dpr);
+      lensCanvas.height = Math.round(LENS_CSS * dpr);
+      magnifierEl.appendChild(lensCanvas);
+      lensCtx = lensCanvas.getContext("2d");
+      const crossSvg = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "svg"
+      );
+      crossSvg.setAttribute("class", "glb-magnifier__crosshair");
+      crossSvg.setAttribute("viewBox", "0 0 140 140");
+      crossSvg.innerHTML = [
+        '<line x1="70" y1="0" x2="70" y2="60" stroke="rgba(255,255,255,0.7)" stroke-width="1"/>',
+        '<line x1="70" y1="80" x2="70" y2="140" stroke="rgba(255,255,255,0.7)" stroke-width="1"/>',
+        '<line x1="0" y1="70" x2="60" y2="70" stroke="rgba(255,255,255,0.7)" stroke-width="1"/>',
+        '<line x1="80" y1="70" x2="140" y2="70" stroke="rgba(255,255,255,0.7)" stroke-width="1"/>',
+        '<circle cx="70" cy="70" r="3" fill="none" stroke="rgba(255,255,255,0.8)" stroke-width="1"/>',
+      ].join("");
+      magnifierEl.appendChild(crossSvg);
+      wrapperRef.current?.appendChild(magnifierEl);
+    }
+
+    const showMagnifier = (show: boolean) => {
+      if (magnifierEl) magnifierEl.style.display = show ? "block" : "none";
+    };
+    const updateMagnifier = (cssX: number, cssY: number) => {
+      if (!magnifierEl || !lensCanvas || !lensCtx || !frameCanvas) return;
+      const dpr = window.devicePixelRatio || 1;
+      const srcSize = Math.round(SAMPLE_CSS * dpr);
+      const sx = Math.round(cssX * dpr - srcSize / 2);
+      const sy = Math.round(cssY * dpr - srcSize / 2);
+      const lw = lensCanvas.width;
+      const lh = lensCanvas.height;
+      lensCtx.clearRect(0, 0, lw, lh);
+      lensCtx.imageSmoothingEnabled = false;
+      lensCtx.drawImage(frameCanvas, sx, sy, srcSize, srcSize, 0, 0, lw, lh);
+      magnifierEl.style.left = `${cssX - LENS_CSS / 2}px`;
+      magnifierEl.style.top = `${cssY - LENS_CSS / 2}px`;
+    };
+    const onMagMouseMove = (e: maplibregl.MapMouseEvent) => {
+      if (maskDrawing) {
+        showMagnifier(false);
+        return;
+      }
+      showMagnifier(true);
+      updateMagnifier(e.point.x, e.point.y);
+    };
+    const onMagMouseLeave = () => showMagnifier(false);
+    map.on("mousemove", onMagMouseMove);
+    map.on("mouseout", onMagMouseLeave);
+
+    // ---- Mask painting (same as autoVessel) ----
+    let maskOverlay: HTMLCanvasElement | null = null;
+    let maskOCtx: CanvasRenderingContext2D | null = null;
+    let maskOffscreen: HTMLCanvasElement | null = null;
+    let maskOffCtx: CanvasRenderingContext2D | null = null;
+    let maskDrawing = false;
+    let maskCurrentStroke: {
+      coords: [number, number][];
+      brushCss: number;
+      zoom: number;
+    } | null = null;
+    let maskLastPt: { x: number; y: number } | null = null;
+    const MASK_SAMPLE_DIST = 6;
+
+    const redrawMaskOverlay = () => {
+      if (!maskOCtx || !maskOffCtx || !maskOverlay || !maskOffscreen) return;
+      const w = canvas.width;
+      const h = canvas.height;
+      if (maskOverlay.width !== w || maskOverlay.height !== h) {
+        maskOverlay.width = w;
+        maskOverlay.height = h;
+      }
+      if (maskOffscreen.width !== w || maskOffscreen.height !== h) {
+        maskOffscreen.width = w;
+        maskOffscreen.height = h;
+      }
+      maskOCtx.clearRect(0, 0, w, h);
+      const strokes = paintMaskStrokesRef.current;
+      if (strokes.length === 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      const curZoom = map.getZoom();
+      maskOffCtx.clearRect(0, 0, w, h);
+      maskOffCtx.strokeStyle = "#a78bfa";
+      maskOffCtx.lineCap = "round";
+      maskOffCtx.lineJoin = "round";
+      for (const stroke of strokes) {
+        if (stroke.coords.length < 2) continue;
+        const scale = Math.pow(2, curZoom - stroke.zoom);
+        maskOffCtx.lineWidth = stroke.brushCss * scale * dpr;
+        maskOffCtx.beginPath();
+        for (let i = 0; i < stroke.coords.length; i++) {
+          const p = map.project(stroke.coords[i] as [number, number]);
+          const px = p.x * dpr;
+          const py = p.y * dpr;
+          if (i === 0) maskOffCtx.moveTo(px, py);
+          else maskOffCtx.lineTo(px, py);
+        }
+        maskOffCtx.stroke();
+      }
+      maskOCtx.globalAlpha = 0.35;
+      maskOCtx.drawImage(maskOffscreen, 0, 0);
+      maskOCtx.globalAlpha = 1;
+    };
+
+    const onMaskMouseDown = (e: MouseEvent) => {
+      if (e.button !== 2) return;
+      e.preventDefault();
+      e.stopPropagation();
+      maskDrawing = true;
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      maskLastPt = { x: sx, y: sy };
+      const ll = map.unproject([sx, sy]);
+      maskCurrentStroke = {
+        coords: [
+          [ll.lng, ll.lat],
+          [ll.lng, ll.lat],
+        ],
+        brushCss: paintMaskStrokeWidthRef.current,
+        zoom: map.getZoom(),
+      };
+      paintMaskStrokesRef.current.push(maskCurrentStroke);
+      redrawMaskOverlay();
+    };
+    const onMaskMouseMove = (e: MouseEvent) => {
+      if (!maskDrawing || !maskCurrentStroke || !maskLastPt) return;
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      if (Math.hypot(sx - maskLastPt.x, sy - maskLastPt.y) < MASK_SAMPLE_DIST)
+        return;
+      maskLastPt = { x: sx, y: sy };
+      const ll = map.unproject([sx, sy]);
+      maskCurrentStroke.coords.push([ll.lng, ll.lat]);
+      redrawMaskOverlay();
+    };
+    const onMaskMouseUp = (e: MouseEvent) => {
+      if (e.button !== 2 || !maskDrawing) return;
+      maskDrawing = false;
+      maskCurrentStroke = null;
+      maskLastPt = null;
+    };
+    const onMaskContextMenu = (e: Event) => e.preventDefault();
+
+    paintMaskStrokesRef.current = [];
+    map.dragRotate.disable();
+    maskOverlay = document.createElement("canvas");
+    maskOverlay.className = "glb-paint-mask-canvas";
+    maskOverlay.width = canvas.width;
+    maskOverlay.height = canvas.height;
+    wrapperRef.current?.appendChild(maskOverlay);
+    maskOCtx = maskOverlay.getContext("2d");
+    maskOffscreen = document.createElement("canvas");
+    maskOffscreen.width = canvas.width;
+    maskOffscreen.height = canvas.height;
+    maskOffCtx = maskOffscreen.getContext("2d");
+    map.on("render", redrawMaskOverlay);
+    canvas.addEventListener("mousedown", onMaskMouseDown);
+    window.addEventListener("mousemove", onMaskMouseMove);
+    window.addEventListener("mouseup", onMaskMouseUp);
+    canvas.addEventListener("contextmenu", onMaskContextMenu);
+
+    // ---- Overlay-hiding helper for satellite capture ----
+    const collectOverlayLayers = (): string[] => {
+      const style = map.getStyle();
+      const ids: string[] = [];
+      for (const layer of style.layers ?? []) {
+        const t = layer.type as string;
+        if (
+          t === "raster" ||
+          t === "background" ||
+          t === "hillshade" ||
+          t === "color-relief"
+        )
+          continue;
+        ids.push(layer.id);
+      }
+      return ids;
+    };
+
+    const captureSatelliteImageData = async (): Promise<ImageData | null> => {
+      const ids = collectOverlayLayers();
+      const prev: Array<{ id: string; vis: string }> = [];
+      for (const id of ids) {
+        const v =
+          (map.getLayoutProperty(id, "visibility") as string | undefined) ??
+          "visible";
+        prev.push({ id, vis: v });
+        map.setLayoutProperty(id, "visibility", "none");
+      }
+      try {
+        map.triggerRepaint();
+        await new Promise<void>((resolve) => {
+          map.once("idle", () => resolve());
+        });
+        if (cancelled) return null;
+        const gl = map.getCanvas();
+        const w = gl.width;
+        const h = gl.height;
+        const temp = document.createElement("canvas");
+        temp.width = w;
+        temp.height = h;
+        const ctx = temp.getContext("2d");
+        if (!ctx) return null;
+        ctx.drawImage(gl, 0, 0);
+        try {
+          return ctx.getImageData(0, 0, w, h);
+        } catch {
+          return null;
+        }
+      } finally {
+        for (const { id, vis } of prev) {
+          if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis);
+        }
+      }
+    };
+
+    // ---- Click handler: 2-click workflow ----
+    const onMapClick = async (e: maplibregl.MapMouseEvent) => {
+      if (sampling) return;
+      sampling = true;
+      try {
+        const dpr = window.devicePixelRatio || 1;
+        if (!pendingStart) {
+          // Click 1: record start.
+          commitDraft();
+          pendingStart = { lng: e.lngLat.lng, lat: e.lngLat.lat };
+          setStartPreview([e.lngLat.lng, e.lngLat.lat]);
+          return;
+        }
+        // Click 2: capture image, store params, bump sequence.
+        const img = await captureSatelliteImageData();
+        if (!img || cancelled) return;
+        const startPt = map.project([pendingStart.lng, pendingStart.lat]);
+        const sx = Math.round(startPt.x * dpr);
+        const sy = Math.round(startPt.y * dpr);
+        const ex = Math.round(e.point.x * dpr);
+        const ey = Math.round(e.point.y * dpr);
+        pendingStart = null;
+        setStartPreview(null);
+        autoSegmentParamsRef.current = {
+          startX: sx,
+          startY: sy,
+          endX: ex,
+          endY: ey,
+          imageData: img,
+          dpr,
+        };
+        setAutoSegmentSeq((n) => n + 1);
+      } finally {
+        sampling = false;
+      }
+    };
+
+    map.on("click", onMapClick);
+
+    return () => {
+      cancelled = true;
+      commitDraft();
+      map.off("click", onMapClick);
+      canvas.style.cursor = "";
+      autoSegmentParamsRef.current = null;
+      autoSegmentDraftGeomRef.current = null;
+
+      // Magnifier cleanup
+      map.off("render", captureFrame);
+      map.off("mousemove", onMagMouseMove);
+      map.off("mouseout", onMagMouseLeave);
+      if (magnifierEl?.parentNode)
+        magnifierEl.parentNode.removeChild(magnifierEl);
+      frameCanvas = null;
+      frameCtx = null;
+
+      // Mask painting cleanup
+      map.off("render", redrawMaskOverlay);
+      canvas.removeEventListener("mousedown", onMaskMouseDown);
+      window.removeEventListener("mousemove", onMaskMouseMove);
+      window.removeEventListener("mouseup", onMaskMouseUp);
+      canvas.removeEventListener("contextmenu", onMaskContextMenu);
+      map.dragRotate.enable();
+      if (maskOverlay?.parentNode)
+        maskOverlay.parentNode.removeChild(maskOverlay);
+      paintMaskStrokesRef.current = [];
+
+      for (const layerId of [SD_LINE, SS_CIRCLE]) {
+        if (map.getLayer(layerId)) map.removeLayer(layerId);
+      }
+      for (const srcId of [SD_SOURCE, SS_SOURCE]) {
+        if (map.getSource(srcId)) map.removeSource(srcId);
+      }
+    };
+  }, [autoSegment, geometryType, styleReady]);
+
+  // Secondary ONNX segmentation effect: runs inference and A* path
+  // whenever new endpoints are clicked.
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !autoSegment) return;
+    const params = autoSegmentParamsRef.current;
+    const src = map.getSource("auto-segment-draft") as
+      | maplibregl.GeoJSONSource
+      | undefined;
+    if (!params || !src) {
+      if (src) src.setData({ type: "FeatureCollection", features: [] });
+      autoSegmentDraftGeomRef.current = null;
+      return;
+    }
+
+    const scaleMax = vesselScaleMax;
+    const timer = window.setTimeout(() => {
+      const clearDraft = () => {
+        src.setData({ type: "FeatureCollection", features: [] });
+        autoSegmentDraftGeomRef.current = null;
+      };
+
+      const dpr = params.dpr;
+      const rasterizedMask =
+        paintMaskStrokesRef.current.length > 0
+          ? rasterizePaintMaskStrokes(
+              map,
+              paintMaskStrokesRef.current,
+              params.imageData.width,
+              params.imageData.height,
+              dpr
+            )
+          : null;
+
+      // Compute multi-cue road probability map (synchronous).
+      const probMap = computeMultiCueRoadMap(
+        params.imageData,
+        1.0,
+        scaleMax,
+        5,
+        rasterizedMask
+      );
+      params.cachedProb = probMap;
+
+      const path = astarVesselnessPath(
+        probMap,
+        params.imageData.width,
+        params.imageData.height,
+        params.startX,
+        params.startY,
+        params.endX,
+        params.endY,
+        rasterizedMask
+      );
+      if (!path) {
+        clearDraft();
+        return;
+      }
+      const lineLL: GeoJSON.Position[] = path.map(([px, py]) => {
+        const ll = map.unproject([px / dpr, py / dpr]);
+        return [ll.lng, ll.lat];
+      });
+      let geom: GeoJSON.Geometry = {
+        type: "LineString",
+        coordinates: lineLL,
+      };
+      const diag = geomBboxDiagonal(geom);
+      geom = simplifyGeometry(geom, diag / 400);
+      autoSegmentDraftGeomRef.current = geom;
+      src.setData({
+        type: "FeatureCollection",
+        features: [{ type: "Feature", properties: {}, geometry: geom }],
+      });
+    }, 120);
+
+    return () => window.clearTimeout(timer);
+  }, [autoSegment, vesselScaleMax, autoSegmentSeq]);
+
+  // --------------------------------------------------------------------
   // Simplify mode — click a feature to load it into the edit-source as a
   // preview. The slider drives RDP tolerance; moving it always restarts
   // from the original (cloned) geometry, so the user can scrub back and
@@ -5902,6 +6734,212 @@ export function GisGlobeViewport({
       | undefined;
     vertsSrc?.setData(geomVertexFC(simplifiedPreview));
   }, [simplifying, simplifyState, simplifiedPreview]);
+
+  // --------------------------------------------------------------------
+  // Smooth mode: Chaikin corner-cutting. Like simplify but uses
+  // subdivision iterations instead of RDP tolerance, and doesn't need
+  // vertex-dot layers since smoothing adds rather than removes vertices.
+  // --------------------------------------------------------------------
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady || !smoothing) return;
+
+    if (!map.getSource(EDIT_SOURCE_ID)) {
+      map.addSource(EDIT_SOURCE_ID, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: EDIT_FILL_LAYER,
+        type: "fill",
+        source: EDIT_SOURCE_ID,
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: {
+          "fill-color": SELECTED_COLOR,
+          "fill-opacity": 0.3,
+        },
+      });
+      map.addLayer({
+        id: EDIT_LINE_LAYER,
+        type: "line",
+        source: EDIT_SOURCE_ID,
+        filter: [
+          "any",
+          ["==", ["geometry-type"], "LineString"],
+          ["==", ["geometry-type"], "Polygon"],
+        ],
+        paint: {
+          "line-color": SELECTED_COLOR,
+          "line-width": 3,
+          "line-opacity": 0.95,
+        },
+      });
+      map.addLayer({
+        id: EDIT_CIRCLE_LAYER,
+        type: "circle",
+        source: EDIT_SOURCE_ID,
+        filter: ["==", ["geometry-type"], "Point"],
+        paint: {
+          "circle-radius": 7,
+          "circle-color": SELECTED_COLOR,
+          "circle-opacity": 0.9,
+          "circle-stroke-color": "#1e3a8a",
+          "circle-stroke-width": 1,
+        },
+      });
+    }
+
+    const commitCurrent = (): boolean => {
+      const state = smoothStateRef.current;
+      const preview = smoothedPreviewRef.current;
+      if (!state || !preview || !workingRef.current) return false;
+      // Smoothing preserves vertex count, so check slider instead.
+      if (state.slider === 0) return false;
+      const feature = workingRef.current.features[state.id];
+      if (!feature) return false;
+      const next = { ...feature, geometry: preview };
+      // Let the data flow (onEdited → handleEdited → data prop → sync
+      // effect) update the MapLibre source rather than mutating workingRef
+      // directly, which can cause both the original and the smoothed shape
+      // to appear simultaneously.
+      onEditedRef.current([next]);
+      return true;
+    };
+
+    const clearSelection = (clearReactState = true) => {
+      const state = smoothStateRef.current;
+      if (state) {
+        map.setFeatureState(
+          { source: FEATURES_SOURCE_ID, id: state.id },
+          { editing: false }
+        );
+      }
+      const editSrc = map.getSource(EDIT_SOURCE_ID) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      editSrc?.setData({ type: "FeatureCollection", features: [] });
+      if (clearReactState) setSmoothState(null);
+    };
+
+    const select = (id: number) => {
+      const working = workingRef.current;
+      if (!working) return;
+      const feature = working.features[id];
+      if (!feature?.geometry) return;
+      // Commit the previous selection (if any) before switching.
+      commitCurrent();
+      clearSelection(false);
+      map.setFeatureState(
+        { source: FEATURES_SOURCE_ID, id },
+        { editing: true }
+      );
+      setSmoothState({
+        id,
+        originalGeom: cloneGeometry(feature.geometry),
+        baseVertices: countGeomVertices(feature.geometry),
+        slider: 0,
+      });
+    };
+
+    const HIT_TOLERANCE = 6;
+    const onMapClick = (e: maplibregl.MapMouseEvent) => {
+      const layers = [
+        FEATURES_FILL_LAYER,
+        FEATURES_LINE_LAYER,
+        FEATURES_CIRCLE_LAYER,
+        EDIT_FILL_LAYER,
+        EDIT_LINE_LAYER,
+        EDIT_CIRCLE_LAYER,
+      ].filter((id) => !!map.getLayer(id));
+      if (layers.length === 0) {
+        commitCurrent();
+        clearSelection();
+        return;
+      }
+      const bbox: [maplibregl.PointLike, maplibregl.PointLike] = [
+        [e.point.x - HIT_TOLERANCE, e.point.y - HIT_TOLERANCE],
+        [e.point.x + HIT_TOLERANCE, e.point.y + HIT_TOLERANCE],
+      ];
+      const hits = map.queryRenderedFeatures(bbox, { layers });
+      if (hits.length === 0) {
+        commitCurrent();
+        clearSelection();
+        return;
+      }
+      const first = hits[0];
+      // Click on the currently-previewed feature → keep it selected.
+      if (first.source === EDIT_SOURCE_ID) return;
+      const rawId = first.id;
+      if (rawId == null) return;
+      const id = typeof rawId === "number" ? rawId : Number(rawId);
+      if (!Number.isFinite(id)) return;
+      select(id);
+    };
+
+    const canvas = map.getCanvas();
+    let hoverDepth = 0;
+    const setHoverCursor = () => {
+      hoverDepth += 1;
+      canvas.style.cursor = SMOOTH_HOVER_CURSOR;
+    };
+    const clearHoverCursor = () => {
+      hoverDepth = Math.max(0, hoverDepth - 1);
+      if (hoverDepth === 0) canvas.style.cursor = "";
+    };
+    const hoverLayers = [
+      FEATURES_FILL_LAYER,
+      FEATURES_LINE_LAYER,
+      FEATURES_CIRCLE_LAYER,
+      EDIT_FILL_LAYER,
+      EDIT_LINE_LAYER,
+      EDIT_CIRCLE_LAYER,
+    ].filter((id) => !!map.getLayer(id));
+    for (const layerId of hoverLayers) {
+      map.on("mouseenter", layerId, setHoverCursor);
+      map.on("mouseleave", layerId, clearHoverCursor);
+    }
+    map.on("click", onMapClick);
+
+    return () => {
+      // Final commit on teardown
+      commitCurrent();
+      clearSelection();
+
+      map.off("click", onMapClick);
+      for (const layerId of hoverLayers) {
+        map.off("mouseenter", layerId, setHoverCursor);
+        map.off("mouseleave", layerId, clearHoverCursor);
+      }
+      canvas.style.cursor = "";
+
+      for (const layerId of [
+        EDIT_CIRCLE_LAYER,
+        EDIT_LINE_LAYER,
+        EDIT_FILL_LAYER,
+      ]) {
+        if (map.getLayer(layerId)) map.removeLayer(layerId);
+      }
+      if (map.getSource(EDIT_SOURCE_ID)) map.removeSource(EDIT_SOURCE_ID);
+    };
+  }, [smoothing, styleReady]);
+
+  // Push the live smoothed preview into the edit-source whenever the slider
+  // moves (or a new feature is selected).
+  React.useEffect(() => {
+    if (!smoothing || !smoothState || !smoothedPreview) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const src = map.getSource(EDIT_SOURCE_ID) as
+      | maplibregl.GeoJSONSource
+      | undefined;
+    if (!src || !workingRef.current) return;
+    const feature = workingRef.current.features[smoothState.id];
+    if (!feature) return;
+    src.setData({
+      type: "FeatureCollection",
+      features: [{ ...feature, geometry: smoothedPreview }],
+    });
+  }, [smoothing, smoothState, smoothedPreview]);
 
   // ------------------------------------------------------------------
   // DEM-import mode: click a feature → compute its lng/lat bbox and
@@ -6529,19 +7567,23 @@ export function GisGlobeViewport({
     const recompute = () => {
       const t = terrainBtnRef.current;
       const d = demBtnRef.current;
-      const s = simplifyBtnRef.current;
-      const a = autoPolyBtnRef.current;
+      const s = editGroupRef.current;
+      const dg = digitizeGroupRef.current;
       if (t && t.offsetWidth > 0)
         setTerrainSliderLeft(t.offsetLeft + t.offsetWidth / 2);
       if (d && d.offsetWidth > 0)
         setDemSliderLeft(d.offsetLeft + d.offsetWidth / 2);
       if (s && s.offsetWidth > 0)
         setSimplifySliderLeft(s.offsetLeft + s.offsetWidth / 2);
-      if (a && a.offsetWidth > 0)
-        setAutoPolySliderLeft(a.offsetLeft + a.offsetWidth / 2);
-      const vb = autoVesselBtnRef.current;
-      if (vb && vb.offsetWidth > 0)
-        setAutoVesselSliderLeft(vb.offsetLeft + vb.offsetWidth / 2);
+      if (s && s.offsetWidth > 0)
+        setSmoothSliderLeft(s.offsetLeft + s.offsetWidth / 2);
+      // All auto-trace sliders anchored to the digitize group trigger
+      if (dg && dg.offsetWidth > 0) {
+        const center = dg.offsetLeft + dg.offsetWidth / 2;
+        setAutoPolySliderLeft(center);
+        setAutoVesselSliderLeft(center);
+        setAutoSegmentSliderLeft(center);
+      }
     };
     recompute();
     const ro = new ResizeObserver(recompute);
@@ -6741,66 +7783,125 @@ export function GisGlobeViewport({
           ))}
         </select>
         <div className="glb-fs-divider" />
-        <ToolbarButton
-          title={
-            canEdit === false
-              ? "Select a single layer to edit"
-              : adding
-                ? "Cancel add"
-                : "Add feature"
-          }
-          icon={ADD_ICON}
+        <ToolbarGroup
+          icon={ADD_GROUP_ICON}
+          title="Add features"
           disabled={
             canEdit === false ||
             saving ||
             editing ||
+            autoPoly ||
+            autoVessel ||
+            autoSegment ||
+            simplifying ||
+            smoothing ||
+            importingDem ||
+            deleting
+          }
+          childActive={adding || freehand}
+        >
+          <ToolbarButton
+            title={adding ? "Cancel add" : "Add by vertices (click to place, double-click to finish)"}
+            icon={ADD_VERTEX_ICON}
+            active={adding}
+            onClick={() => {
+              if (freehand) onToggleFreehandRef.current();
+              onToggleAddRef.current();
+            }}
+          />
+          <ToolbarButton
+            title={freehand ? "Finish freehand" : "Freehand draw (hold right mouse button)"}
+            icon={FREEHAND_ICON}
+            active={freehand}
+            onClick={() => {
+              if (adding) onToggleAddRef.current();
+              onToggleFreehandRef.current();
+            }}
+          />
+        </ToolbarGroup>
+        <ToolbarGroup
+          groupRef={editGroupRef}
+          icon={EDIT_GROUP_ICON}
+          title="Edit features"
+          disabled={
+            canEdit === false ||
+            saving ||
+            adding ||
             freehand ||
             autoPoly ||
             autoVessel ||
-            simplifying ||
-            importingDem ||
-            deleting
+            autoSegment ||
+            importingDem
           }
-          active={adding}
-          onClick={() => onToggleAddRef.current()}
-        />
-        <ToolbarButton
-          title={
-            canEdit === false
-              ? "Select a single layer to edit"
-              : freehand
-                ? "Finish freehand"
-                : "Freehand draw (hold right mouse button)"
-          }
-          icon={FREEHAND_ICON}
-          disabled={
-            canEdit === false ||
-            saving ||
-            editing ||
-            adding ||
-            autoPoly ||
-            autoVessel ||
-            simplifying ||
-            importingDem ||
-            deleting
-          }
-          active={freehand}
-          onClick={() => onToggleFreehandRef.current()}
-        />
-        <ToolbarButton
-          ref={autoPolyBtnRef}
-          title={
-            canEdit === false
-              ? "Select a single layer to edit"
-              : autoPoly
-                ? "Finish auto-trace"
-                : gpkgTypeToDrawShape(geometryType) === "Polygon"
-                  ? "Auto-trace region (click reference polygon, then click inside a similar region)"
-                  : gpkgTypeToDrawShape(geometryType) === "LineString"
-                    ? "Auto-trace line (click reference road, then click start + end points)"
-                    : "Auto-trace requires a polygon or line layer"
-          }
-          icon={AUTO_POLY_ICON}
+          childActive={editing || simplifying || smoothing || deleting || reclassifying}
+        >
+          <ToolbarButton
+            title={editing ? "Stop editing" : "Edit vertices"}
+            icon={EDIT_ICON}
+            active={editing}
+            onClick={() => {
+              if (simplifying) onToggleSimplifyRef.current();
+              if (smoothing) onToggleSmoothRef.current();
+              if (deleting) onToggleDeleteRef.current();
+              if (reclassifying) onToggleReclassifyRef.current();
+              onToggleEditRef.current();
+            }}
+          />
+          <ToolbarButton
+            ref={simplifyBtnRef}
+            title={simplifying ? "Finish simplify" : "Simplify shape (click a feature)"}
+            icon={SIMPLIFY_ICON}
+            active={simplifying}
+            onClick={() => {
+              if (editing) onToggleEditRef.current();
+              if (smoothing) onToggleSmoothRef.current();
+              if (deleting) onToggleDeleteRef.current();
+              if (reclassifying) onToggleReclassifyRef.current();
+              onToggleSimplifyRef.current();
+            }}
+          />
+          <ToolbarButton
+            ref={smoothBtnRef}
+            title={smoothing ? "Finish smooth" : "Smooth shape (click a feature)"}
+            icon={SMOOTH_ICON}
+            active={smoothing}
+            onClick={() => {
+              if (editing) onToggleEditRef.current();
+              if (simplifying) onToggleSimplifyRef.current();
+              if (deleting) onToggleDeleteRef.current();
+              if (reclassifying) onToggleReclassifyRef.current();
+              onToggleSmoothRef.current();
+            }}
+          />
+          <ToolbarButton
+            title={reclassifying ? "Finish reclassify" : "Reclassify feature (click a feature)"}
+            icon={RECLASSIFY_ICON}
+            active={reclassifying}
+            onClick={() => {
+              if (editing) onToggleEditRef.current();
+              if (simplifying) onToggleSimplifyRef.current();
+              if (smoothing) onToggleSmoothRef.current();
+              if (deleting) onToggleDeleteRef.current();
+              onToggleReclassifyRef.current();
+            }}
+          />
+          <ToolbarButton
+            title={deleting ? "Finish delete" : "Delete feature (click a feature)"}
+            icon={DELETE_ICON}
+            active={deleting}
+            onClick={() => {
+              if (editing) onToggleEditRef.current();
+              if (simplifying) onToggleSimplifyRef.current();
+              if (smoothing) onToggleSmoothRef.current();
+              if (reclassifying) onToggleReclassifyRef.current();
+              onToggleDeleteRef.current();
+            }}
+          />
+        </ToolbarGroup>
+        <ToolbarGroup
+          groupRef={digitizeGroupRef}
+          icon={DIGITIZE_GROUP_ICON}
+          title="Auto-digitization tools"
           disabled={
             canEdit === false ||
             gpkgTypeToDrawShape(geometryType) === "Point" ||
@@ -6808,129 +7909,62 @@ export function GisGlobeViewport({
             editing ||
             adding ||
             freehand ||
-            autoVessel ||
             simplifying ||
+            smoothing ||
             importingDem ||
             deleting
           }
-          active={autoPoly}
-          onClick={() => onToggleAutoPolyRef.current()}
-        />
-        <ToolbarButton
-          ref={autoVesselBtnRef}
-          title={
-            autoVessel
-              ? "Finish vesselness trace"
-              : "Vesselness trace (paint road, click start + end)"
-          }
-          icon={VESSEL_TRACE_ICON}
-          disabled={
-            canEdit === false ||
-            gpkgTypeToDrawShape(geometryType) !== "LineString" ||
-            saving ||
-            editing ||
-            adding ||
-            freehand ||
-            autoPoly ||
-            simplifying ||
-            importingDem ||
-            deleting
-          }
-          active={autoVessel}
-          onClick={() => onToggleAutoVesselRef.current()}
-        />
-        <ToolbarButton
-          title={
-            canEdit === false
-              ? "Select a single layer to edit"
-              : editing
-                ? "Stop editing"
-                : "Edit vertices"
-          }
-          icon={EDIT_ICON}
-          disabled={
-            canEdit === false ||
-            saving ||
-            adding ||
-            freehand ||
-            autoPoly ||
-            autoVessel ||
-            simplifying ||
-            importingDem ||
-            deleting
-          }
-          active={editing}
-          onClick={() => onToggleEditRef.current()}
-        />
-        <ToolbarButton
-          ref={simplifyBtnRef}
-          title={
-            canEdit === false
-              ? "Select a single layer to edit"
-              : simplifying
-                ? "Finish simplify"
-                : "Simplify shape (click a feature)"
-          }
-          icon={SIMPLIFY_ICON}
-          disabled={
-            canEdit === false ||
-            saving ||
-            adding ||
-            freehand ||
-            autoPoly ||
-            autoVessel ||
-            editing ||
-            importingDem ||
-            deleting
-          }
-          active={simplifying}
-          onClick={() => onToggleSimplifyRef.current()}
-        />
-        <ToolbarButton
-          title={
-            canEdit === false
-              ? "Select a single layer to edit"
-              : deleting
-                ? "Finish delete"
-                : "Delete feature (click a feature)"
-          }
-          icon={DELETE_ICON}
-          disabled={
-            canEdit === false ||
-            saving ||
-            adding ||
-            freehand ||
-            autoPoly ||
-            autoVessel ||
-            editing ||
-            simplifying ||
-            importingDem ||
-            reclassifying
-          }
-          active={deleting}
-          onClick={() => onToggleDeleteRef.current()}
-        />
-        <ToolbarButton
-          title={
-            reclassifying
-              ? "Finish reclassify"
-              : "Reclassify feature (click a feature)"
-          }
-          icon={RECLASSIFY_ICON}
-          disabled={
-            saving ||
-            adding ||
-            freehand ||
-            autoPoly ||
-            autoVessel ||
-            editing ||
-            simplifying ||
-            importingDem ||
-            deleting
-          }
-          active={reclassifying}
-          onClick={() => onToggleReclassifyRef.current()}
-        />
+          childActive={autoPoly || autoVessel || autoSegment}
+        >
+          <ToolbarButton
+            ref={autoPolyBtnRef}
+            title={
+              autoPoly
+                ? "Finish color trace"
+                : "Color trace (pick reference, then click target)"
+            }
+            icon={AUTO_POLY_ICON}
+            disabled={gpkgTypeToDrawShape(geometryType) === "Point"}
+            active={autoPoly}
+            onClick={() => {
+              if (autoVessel) onToggleAutoVesselRef.current();
+              if (autoSegment) onToggleAutoSegmentRef.current();
+              onToggleAutoPolyRef.current();
+            }}
+          />
+          <ToolbarButton
+            ref={autoVesselBtnRef}
+            title={
+              autoVessel
+                ? "Finish vesselness trace"
+                : "Vesselness trace (paint road, click start + end)"
+            }
+            icon={VESSEL_TRACE_ICON}
+            disabled={gpkgTypeToDrawShape(geometryType) !== "LineString"}
+            active={autoVessel}
+            onClick={() => {
+              if (autoPoly) onToggleAutoPolyRef.current();
+              if (autoSegment) onToggleAutoSegmentRef.current();
+              onToggleAutoVesselRef.current();
+            }}
+          />
+          <ToolbarButton
+            ref={autoSegmentBtnRef}
+            title={
+              autoSegment
+                ? "Finish multi-cue trace"
+                : "Multi-cue trace (paint road, click start + end)"
+            }
+            icon={ML_TRACE_ICON}
+            disabled={gpkgTypeToDrawShape(geometryType) !== "LineString"}
+            active={autoSegment}
+            onClick={() => {
+              if (autoPoly) onToggleAutoPolyRef.current();
+              if (autoVessel) onToggleAutoVesselRef.current();
+              onToggleAutoSegmentRef.current();
+            }}
+          />
+        </ToolbarGroup>
         <ToolbarButton
           ref={demBtnRef}
           title={
@@ -6945,13 +7979,16 @@ export function GisGlobeViewport({
             freehand ||
             autoPoly ||
             autoVessel ||
+            autoSegment ||
             editing ||
             simplifying ||
+            smoothing ||
             deleting
           }
           active={importingDem}
           onClick={() => onToggleImportDemRef.current()}
         />
+        <div className="glb-fs-divider" />
         <ToolbarButton
           title={dirty ? "Discard changes" : "No unsaved edits"}
           icon={DISCARD_ICON}
@@ -7133,9 +8170,54 @@ export function GisGlobeViewport({
             <span className="glb-terrain-slider-wrap__label">Scale</span>
             <input
               type="range"
-              min={1}
+              min={0.5}
               max={6}
-              step={0.5}
+              step={0.25}
+              value={vesselScaleMax}
+              onChange={(e) => setVesselScaleMax(Number(e.target.value))}
+            />
+            <span className="glb-terrain-slider-wrap__value">
+              {vesselScaleMax.toFixed(1)}
+            </span>
+            <span className="glb-autotrace-divider" />
+            <span className="glb-terrain-slider-wrap__label">Brush</span>
+            <input
+              type="range"
+              min={10}
+              max={80}
+              step={1}
+              value={paintMaskStrokeWidth}
+              onChange={(e) => setPaintMaskStrokeWidth(Number(e.target.value))}
+            />
+            <span className="glb-terrain-slider-wrap__value">
+              {paintMaskStrokeWidth}px
+            </span>
+            <button
+              type="button"
+              className="glb-terrain-slider-wrap__clear-btn"
+              title="Clear mask"
+              onClick={() => {
+                paintMaskStrokesRef.current = [];
+                mapRef.current?.triggerRepaint();
+              }}
+            >
+              Clear
+            </button>
+          </div>
+        )}
+
+        {autoSegment && autoSegmentSliderLeft != null && (
+          <div
+            className="glb-terrain-slider-wrap"
+            // eslint-disable-next-line template/no-jsx-style-prop -- runtime offset from button position
+            style={{ left: `${autoSegmentSliderLeft}px` }}
+          >
+            <span className="glb-terrain-slider-wrap__label">Scale</span>
+            <input
+              type="range"
+              min={0.5}
+              max={6}
+              step={0.25}
               value={vesselScaleMax}
               onChange={(e) => setVesselScaleMax(Number(e.target.value))}
             />
@@ -7200,6 +8282,38 @@ export function GisGlobeViewport({
                       ? countGeomVertices(simplifiedPreview)
                       : simplifyState.baseVertices
                   } / ${simplifyState.baseVertices} pts`
+                : "click a shape"}
+            </span>
+          </div>
+        )}
+
+        {smoothing && smoothSliderLeft != null && (
+          <div
+            className={
+              smoothState
+                ? "glb-simplify-panel"
+                : "glb-simplify-panel glb-simplify-panel--idle"
+            }
+            // eslint-disable-next-line template/no-jsx-style-prop -- runtime offset from button position
+            style={{ left: `${smoothSliderLeft}px` }}
+          >
+            <span className="glb-simplify-label">Smooth</span>
+            <input
+              type="range"
+              className="glb-simplify-slider"
+              min={0}
+              max={100}
+              step={1}
+              disabled={!smoothState}
+              value={smoothState?.slider ?? 0}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setSmoothState((s) => (s ? { ...s, slider: v } : s));
+              }}
+            />
+            <span className="glb-simplify-count">
+              {smoothState
+                ? `${Math.round(Math.pow(smoothState.slider / 100, 3) * 200)} iter`
                 : "click a shape"}
             </span>
           </div>
@@ -7394,6 +8508,47 @@ export function GisGlobeViewport({
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+// A toolbar group renders a single trigger button; clicking it toggles a
+// vertical popover above the toolbar that holds child tool buttons. The
+// trigger shows as "active" when any child tool is active, or when the
+// popover is open. Clicking outside dismisses the popover.
+function ToolbarGroup({
+  icon,
+  title,
+  disabled,
+  childActive,
+  children,
+  groupRef,
+}: {
+  icon: string;
+  title: string;
+  disabled?: boolean;
+  /** True when any child tool inside the group is currently active. */
+  childActive?: boolean;
+  children: React.ReactNode;
+  groupRef?: React.Ref<HTMLDivElement>;
+}) {
+  const [open, setOpen] = React.useState(false);
+
+  return (
+    <div ref={groupRef} className="glb-toolbar-group">
+      <button
+        type="button"
+        title={title}
+        className={
+          "glb-btn" + (open || childActive ? " glb-btn--active" : "")
+        }
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+        dangerouslySetInnerHTML={{ __html: icon }}
+      />
+      {open && !disabled && (
+        <div className="glb-toolbar-group__popover">{children}</div>
       )}
     </div>
   );

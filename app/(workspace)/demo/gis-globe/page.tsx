@@ -11,6 +11,7 @@ import {
   gpkgToGeoJSON,
   insertGpkgFeatures,
   deleteGpkgFeatures,
+  updateGpkgFeatures,
   exportDatabase,
   initializeGpkgSchema,
   ensureGpkgColumns,
@@ -154,7 +155,9 @@ export default function GisGlobePage() {
   const [freehand, setFreehand] = React.useState(false);
   const [autoPoly, setAutoPoly] = React.useState(false);
   const [autoVessel, setAutoVessel] = React.useState(false);
+  const [autoSegment, setAutoSegment] = React.useState(false);
   const [simplifying, setSimplifying] = React.useState(false);
+  const [smoothing, setSmoothing] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
   const [reclassifying, setReclassifying] = React.useState(false);
   const [importingDem, setImportingDem] = React.useState(false);
@@ -166,6 +169,10 @@ export default function GisGlobePage() {
   >({ kind: "idle" });
   const [dirty, setDirty] = React.useState(false);
   const [loadId, setLoadId] = React.useState(0);
+  // Bumped on discard to force the viewport's workingRef to re-clone
+  // without changing dataKey (which would trigger fitBounds and reset
+  // the camera). Kept separate from loadId for this reason.
+  const [discardId, setDiscardId] = React.useState(0);
   const [editLayerData, setEditLayerData] = React.useState<
     Map<EditKind, LoadedEntry>
   >(() => new Map());
@@ -364,7 +371,9 @@ export default function GisGlobePage() {
       setFreehand(false);
       setAutoPoly(false);
       setAutoVessel(false);
+      setAutoSegment(false);
       setSimplifying(false);
+      setSmoothing(false);
       setDeleting(false);
     }
   }, [activeFile, layerData]);
@@ -571,81 +580,174 @@ export default function GisGlobePage() {
 
   const handleEdited = React.useCallback(
     (features: GeoJSON.Feature[]) => {
-      const file = activeFile;
-      const meta = metaRef.current;
-      if (!file || !meta) return;
-
-      const movedPks: (number | string)[] = [];
-      const insertsByKind = new Map<EditKind, GeoJSON.Feature[]>();
-
-      // 1. For each edited feature, build the "full" feature using the
-      //    source's current properties (all columns) merged with the
-      //    edited geometry, then strip the source pk so the edit DB can
-      //    assign its own.
-      const srcEntry = layerData.get(file);
-      if (!srcEntry) return;
+      // Separate features by origin: edit DB vs source file.
+      const editUpdates = new Map<
+        EditKind,
+        { db: Database; entry: LoadedEntry; features: GeoJSON.Feature[] }
+      >();
+      const sourceFeatures: GeoJSON.Feature[] = [];
 
       for (const edited of features) {
-        const pk = edited.properties?.[meta.pkCol];
-        if (pk == null) continue;
-        const srcFeature = srcEntry.data.features.find(
-          (f) => f.properties[meta.pkCol] === pk
-        );
-        const mergedProps: Record<string, unknown> = {
-          ...(srcFeature?.properties ?? {}),
-          ...(edited.properties ?? {}),
-        };
-        delete mergedProps[meta.pkCol];
-        delete mergedProps.__dirty;
-        delete mergedProps.__layer;
+        const sourceFile =
+          (edited.properties?.__layer as string | undefined) ?? null;
+        const editKind =
+          sourceFile
+            ? EDIT_KINDS.find((k) => EDIT_FILES[k] === sourceFile)
+            : undefined;
 
-        const merged: GeoJSON.Feature = {
-          type: "Feature",
-          geometry: edited.geometry,
-          properties: mergedProps,
-        };
-        const kind = editKindForGeometry(edited.geometry);
-        if (!kind) continue;
-        const list = insertsByKind.get(kind) ?? [];
-        list.push(merged);
-        insertsByKind.set(kind, list);
-        movedPks.push(pk as number | string);
-      }
-
-      // 2. Insert into each edit DB.
-      for (const [kind, list] of insertsByKind) {
-        for (const f of list) insertIntoEditDb(kind, f);
-      }
-
-      // 3. Remove the moved features from the source's in-memory
-      //    layerData and queue deletions for save-time.
-      if (movedPks.length > 0) {
-        const movedSet = new Set(movedPks);
-        setLayerData((prev) => {
-          const entry = prev.get(file);
-          if (!entry) return prev;
-          const filtered = entry.data.features.filter(
-            (f) => !movedSet.has(f.properties[meta.pkCol] as number | string)
-          );
-          if (filtered.length === entry.data.features.length) return prev;
-          const next = new Map(prev);
-          next.set(file, {
-            ...entry,
-            data: { ...entry.data, features: filtered },
-          });
-          return next;
-        });
-        let set = deletedPksByFileRef.current.get(file);
-        if (!set) {
-          set = new Set();
-          deletedPksByFileRef.current.set(file, set);
+        if (editKind) {
+          // Feature lives in a user_edits_*.gpkg — update geometry in place.
+          if (!editUpdates.has(editKind)) {
+            const db = editDbsRef.current.get(editKind);
+            const entry = editLayerData.get(editKind);
+            if (db && entry)
+              editUpdates.set(editKind, { db, entry, features: [] });
+          }
+          editUpdates.get(editKind)?.features.push(edited);
+        } else {
+          sourceFeatures.push(edited);
         }
-        for (const pk of movedPks) set.add(pk);
+      }
+
+      // --- Case 1: update edit-DB features in place ----------------------
+      for (const [kind, { db, entry, features: edits }] of editUpdates) {
+        const updateBatch: GeoJSON.Feature[] = [];
+        for (const edited of edits) {
+          const pk = edited.properties?.[entry.meta.pkCol];
+          if (pk == null) continue;
+          // Build a feature with the pk kept so updateGpkgFeatures can
+          // match the row, and carry over all existing properties.
+          const srcFeature = entry.data.features.find(
+            (f) => f.properties[entry.meta.pkCol] === pk
+          );
+          const mergedProps: Record<string, unknown> = {
+            ...(srcFeature?.properties ?? {}),
+            ...(edited.properties ?? {}),
+            [entry.meta.pkCol]: pk,
+          };
+          delete mergedProps.__dirty;
+          delete mergedProps.__layer;
+          updateBatch.push({
+            type: "Feature",
+            geometry: edited.geometry,
+            properties: mergedProps,
+          });
+        }
+        if (updateBatch.length > 0) {
+          updateGpkgFeatures(
+            db,
+            entry.meta,
+            updateBatch as unknown as GeoJSONFeatureCollection["features"]
+          );
+          const updatedPks = new Set(
+            updateBatch.map((f) => f.properties![entry.meta.pkCol])
+          );
+          setEditLayerData((prev) => {
+            const cur = prev.get(kind);
+            if (!cur) return prev;
+            const updated = cur.data.features.map((f) => {
+              const fPk = f.properties[entry.meta.pkCol];
+              if (!updatedPks.has(fPk)) return f;
+              const batch = updateBatch.find(
+                (b) => b.properties![entry.meta.pkCol] === fPk
+              );
+              if (!batch) return f;
+              return {
+                ...f,
+                geometry: batch.geometry as typeof f.geometry,
+                properties: { ...batch.properties! },
+              };
+            });
+            const next = new Map(prev);
+            next.set(kind, {
+              ...cur,
+              data: { ...cur.data, features: updated },
+            });
+            return next;
+          });
+          setEditDirty((prev) => {
+            if (prev.has(kind)) return prev;
+            const next = new Set(prev);
+            next.add(kind);
+            return next;
+          });
+        }
+      }
+
+      // --- Case 2: source-file features — move to edit DB ----------------
+      if (sourceFeatures.length > 0) {
+        const file = activeFile;
+        const meta = metaRef.current;
+        if (!file || !meta) return;
+
+        const srcEntry = layerData.get(file);
+        if (!srcEntry) return;
+
+        const movedPks: (number | string)[] = [];
+        const insertsByKind = new Map<EditKind, GeoJSON.Feature[]>();
+
+        for (const edited of sourceFeatures) {
+          const pk = edited.properties?.[meta.pkCol];
+          if (pk == null) continue;
+          const srcFeature = srcEntry.data.features.find(
+            (f) => f.properties[meta.pkCol] === pk
+          );
+          const mergedProps: Record<string, unknown> = {
+            ...(srcFeature?.properties ?? {}),
+            ...(edited.properties ?? {}),
+          };
+          delete mergedProps[meta.pkCol];
+          delete mergedProps.__dirty;
+          delete mergedProps.__layer;
+
+          const merged: GeoJSON.Feature = {
+            type: "Feature",
+            geometry: edited.geometry,
+            properties: mergedProps,
+          };
+          const kind = editKindForGeometry(edited.geometry);
+          if (!kind) continue;
+          const list = insertsByKind.get(kind) ?? [];
+          list.push(merged);
+          insertsByKind.set(kind, list);
+          movedPks.push(pk as number | string);
+        }
+
+        for (const [kind, list] of insertsByKind) {
+          for (const f of list) insertIntoEditDb(kind, f);
+        }
+
+        if (movedPks.length > 0) {
+          const movedSet = new Set(movedPks);
+          setLayerData((prev) => {
+            const entry = prev.get(file);
+            if (!entry) return prev;
+            const filtered = entry.data.features.filter(
+              (f) =>
+                !movedSet.has(
+                  f.properties[meta.pkCol] as number | string
+                )
+            );
+            if (filtered.length === entry.data.features.length) return prev;
+            const next = new Map(prev);
+            next.set(file, {
+              ...entry,
+              data: { ...entry.data, features: filtered },
+            });
+            return next;
+          });
+          let set = deletedPksByFileRef.current.get(file);
+          if (!set) {
+            set = new Set();
+            deletedPksByFileRef.current.set(file, set);
+          }
+          for (const pk of movedPks) set.add(pk);
+        }
       }
 
       setDirty(true);
     },
-    [activeFile, layerData, insertIntoEditDb]
+    [activeFile, layerData, editLayerData, insertIntoEditDb]
   );
 
   const handleAdded = React.useCallback(
@@ -802,6 +904,50 @@ export default function GisGlobePage() {
 
   const handleDeleted = React.useCallback(
     (feature: GeoJSON.Feature) => {
+      const sourceLayer = (feature.properties?.__layer as string) ?? null;
+
+      // If the feature belongs to a user_edits file, delete it from the
+      // in-memory edit DB and editLayerData directly.
+      if (sourceLayer && isEditFile(sourceLayer)) {
+        const kind = editKindForGeometry(feature.geometry);
+        if (!kind) return;
+        const db = editDbsRef.current.get(kind);
+        const entry = editLayerData.get(kind);
+        if (!db || !entry) return;
+        const editPk = feature.properties?.[entry.meta.pkCol] as
+          | number
+          | string
+          | undefined;
+        if (editPk != null) {
+          deleteGpkgFeatures(db, entry.meta, [editPk]);
+        }
+        setEditLayerData((prev) => {
+          const cur = prev.get(kind);
+          if (!cur) return prev;
+          const filtered = cur.data.features.filter((f) => {
+            if (editPk != null)
+              return f.properties[entry.meta.pkCol] !== editPk;
+            return f !== feature;
+          });
+          if (filtered.length === cur.data.features.length) return prev;
+          const next = new Map(prev);
+          next.set(kind, {
+            ...cur,
+            data: { ...cur.data, features: filtered },
+          });
+          return next;
+        });
+        setEditDirty((prev) => {
+          if (prev.has(kind)) return prev;
+          const next = new Set(prev);
+          next.add(kind);
+          return next;
+        });
+        setDirty(true);
+        return;
+      }
+
+      // Otherwise, delete from the source file's layerData.
       const file = activeFile;
       const meta = metaRef.current;
       if (!file || !meta) return;
@@ -834,7 +980,7 @@ export default function GisGlobePage() {
       }
       setDirty(true);
     },
-    [activeFile]
+    [activeFile, editLayerData]
   );
 
   const handleToggleEdit = React.useCallback(() => {
@@ -862,9 +1008,19 @@ export default function GisGlobePage() {
     setAutoVessel((v) => !v);
   }, [canEdit]);
 
+  const handleToggleAutoSegment = React.useCallback(() => {
+    if (!canEdit) return;
+    setAutoSegment((v) => !v);
+  }, [canEdit]);
+
   const handleToggleSimplify = React.useCallback(() => {
     if (!canEdit) return;
     setSimplifying((s) => !s);
+  }, [canEdit]);
+
+  const handleToggleSmooth = React.useCallback(() => {
+    if (!canEdit) return;
+    setSmoothing((s) => !s);
   }, [canEdit]);
 
   const handleToggleDelete = React.useCallback(() => {
@@ -964,7 +1120,9 @@ export default function GisGlobePage() {
     }
 
     setDirty(false);
-    setLoadId((n) => n + 1);
+    // Bump discardId (not loadId) so the viewport re-clones its working
+    // copy without changing dataKey (which would trigger fitBounds).
+    setDiscardId((n) => n + 1);
   }, [loadOrCreateEditDbs]);
 
   const handleSave = React.useCallback(async () => {
@@ -1025,7 +1183,9 @@ export default function GisGlobePage() {
     freehand ||
     autoPoly ||
     autoVessel ||
+    autoSegment ||
     simplifying ||
+    smoothing ||
     deleting ||
     reclassifying;
 
@@ -1040,12 +1200,15 @@ export default function GisGlobePage() {
           onToggleLayerVisibility={toggleLayerVisibility}
           onToggleFclassVisibility={toggleFclassVisibility}
           dataKey={`globe:${loadId}`}
+          discardKey={discardId}
           editing={editing}
           adding={adding}
           freehand={freehand}
           autoPoly={autoPoly}
           autoVessel={autoVessel}
+          autoSegment={autoSegment}
           simplifying={simplifying}
+          smoothing={smoothing}
           importingDem={importingDem}
           deleting={deleting}
           reclassifying={reclassifying}
@@ -1063,7 +1226,9 @@ export default function GisGlobePage() {
           onToggleFreehand={handleToggleFreehand}
           onToggleAutoPoly={handleToggleAutoPoly}
           onToggleAutoVessel={handleToggleAutoVessel}
+          onToggleAutoSegment={handleToggleAutoSegment}
           onToggleSimplify={handleToggleSimplify}
+          onToggleSmooth={handleToggleSmooth}
           onToggleDelete={handleToggleDelete}
           onToggleReclassify={handleToggleReclassify}
           onToggleImportDem={handleToggleImportDem}
