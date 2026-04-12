@@ -817,6 +817,1059 @@ function simplifyGeometry(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Auto-polygon (region grow) utilities. The auto-polygon tool samples the
+// rendered satellite pixels inside a user-picked reference polygon to build a
+// color signature, then BFS-flood-fills from a second click point accepting
+// neighbor pixels whose RGB distance from the signature mean sits under a
+// tolerance derived from the signature's own per-channel standard deviation.
+// The grown mask is outlined via Moore-neighborhood boundary tracing, the
+// pixel contour is simplified with RDP and unprojected back to lng/lat.
+// ---------------------------------------------------------------------------
+
+type AutoPolySignature = {
+  // Reference color in linear 0..255 space.
+  meanR: number;
+  meanG: number;
+  meanB: number;
+  // Per-channel standard deviation; used to scale the matching tolerance so
+  // uniform regions (e.g. water) match tightly while noisy ones (mottled
+  // forest) stay permissive.
+  stdR: number;
+  stdG: number;
+  stdB: number;
+  // Sample count; purely informational, handy for debugging.
+  samples: number;
+};
+
+type AutoPolyMask = {
+  mask: Uint8Array;
+  // Absolute (full-canvas) pixel bbox of accepted pixels, inclusive.
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  count: number;
+  // Dimensions of the `mask` buffer — matches (maxX-minX+1) × (maxY-minY+1).
+  width: number;
+  height: number;
+};
+
+// Standard ray-casting point-in-polygon test operating on a planar ring in
+// canvas pixel space. The ring is open (not explicitly closed); the test
+// treats index N as wrapping back to index 0.
+function canvasPointInRing(
+  x: number,
+  y: number,
+  ring: ReadonlyArray<[number, number]>
+): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0];
+    const yi = ring[i][1];
+    const xj = ring[j][0];
+    const yj = ring[j][1];
+    const intersect =
+      yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function ringPixelBounds(
+  ring: ReadonlyArray<[number, number]>,
+  width: number,
+  height: number
+): { minX: number; minY: number; maxX: number; maxY: number } {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of ring) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  minX = Math.max(0, Math.floor(minX));
+  minY = Math.max(0, Math.floor(minY));
+  maxX = Math.min(width - 1, Math.ceil(maxX));
+  maxY = Math.min(height - 1, Math.ceil(maxY));
+  return { minX, minY, maxX, maxY };
+}
+
+function sampleSignatureInsideRing(
+  image: ImageData,
+  ring: ReadonlyArray<[number, number]>
+): AutoPolySignature | null {
+  const { width, height, data } = image;
+  const { minX, minY, maxX, maxY } = ringPixelBounds(ring, width, height);
+  if (maxX <= minX || maxY <= minY) return null;
+
+  let sumR = 0;
+  let sumG = 0;
+  let sumB = 0;
+  let sumR2 = 0;
+  let sumG2 = 0;
+  let sumB2 = 0;
+  let count = 0;
+
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      if (!canvasPointInRing(x + 0.5, y + 0.5, ring)) continue;
+      const idx = (y * width + x) * 4;
+      const r = data[idx];
+      const g = data[idx + 1];
+      const b = data[idx + 2];
+      sumR += r;
+      sumG += g;
+      sumB += b;
+      sumR2 += r * r;
+      sumG2 += g * g;
+      sumB2 += b * b;
+      count++;
+    }
+  }
+
+  if (count < 16) return null;
+
+  const meanR = sumR / count;
+  const meanG = sumG / count;
+  const meanB = sumB / count;
+  const varR = Math.max(0, sumR2 / count - meanR * meanR);
+  const varG = Math.max(0, sumG2 / count - meanG * meanG);
+  const varB = Math.max(0, sumB2 / count - meanB * meanB);
+
+  return {
+    meanR,
+    meanG,
+    meanB,
+    stdR: Math.sqrt(varR),
+    stdG: Math.sqrt(varG),
+    stdB: Math.sqrt(varB),
+    samples: count,
+  };
+}
+
+// Sample pixels inside a narrow corridor of `halfWidth` pixels around a
+// polyline, producing the same RGB mean/stddev signature used by the polygon
+// sampler. Disks are stamped along each segment with sub-pixel stepping and a
+// visited mask prevents double counting in the overlap zones between adjacent
+// segments.
+function sampleSignatureAlongLine(
+  image: ImageData,
+  linePix: ReadonlyArray<[number, number]>,
+  halfWidth: number
+): AutoPolySignature | null {
+  if (linePix.length < 2) return null;
+  const { width, height, data } = image;
+  const visited = new Uint8Array(width * height);
+  let sumR = 0;
+  let sumG = 0;
+  let sumB = 0;
+  let sumR2 = 0;
+  let sumG2 = 0;
+  let sumB2 = 0;
+  let count = 0;
+  const hwSq = halfWidth * halfWidth;
+
+  const stamp = (cx: number, cy: number): void => {
+    for (let oy = -halfWidth; oy <= halfWidth; oy++) {
+      for (let ox = -halfWidth; ox <= halfWidth; ox++) {
+        if (ox * ox + oy * oy > hwSq) continue;
+        const px = cx + ox;
+        const py = cy + oy;
+        if (px < 0 || py < 0 || px >= width || py >= height) continue;
+        const flat = py * width + px;
+        if (visited[flat]) continue;
+        visited[flat] = 1;
+        const idx = flat * 4;
+        const r = data[idx];
+        const g = data[idx + 1];
+        const b = data[idx + 2];
+        sumR += r;
+        sumG += g;
+        sumB += b;
+        sumR2 += r * r;
+        sumG2 += g * g;
+        sumB2 += b * b;
+        count++;
+      }
+    }
+  };
+
+  for (let i = 0; i < linePix.length - 1; i++) {
+    const [ax, ay] = linePix[i];
+    const [bx, by] = linePix[i + 1];
+    const len = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay)));
+    for (let t = 0; t <= len; t++) {
+      const fx = ax + ((bx - ax) * t) / len;
+      const fy = ay + ((by - ay) * t) / len;
+      stamp(Math.round(fx), Math.round(fy));
+    }
+  }
+
+  if (count < 16) return null;
+
+  const meanR = sumR / count;
+  const meanG = sumG / count;
+  const meanB = sumB / count;
+  const varR = Math.max(0, sumR2 / count - meanR * meanR);
+  const varG = Math.max(0, sumG2 / count - meanG * meanG);
+  const varB = Math.max(0, sumB2 / count - meanB * meanB);
+
+  return {
+    meanR,
+    meanG,
+    meanB,
+    stdR: Math.sqrt(varR),
+    stdG: Math.sqrt(varG),
+    stdB: Math.sqrt(varB),
+    samples: count,
+  };
+}
+
+// Minimal binary min-heap keyed on a numeric priority. Used by the A*
+// least-cost path solver below. Payloads are arbitrary (here: Int32 pixel
+// indices) but the heap is typed as generic `number[]` to keep the shape
+// simple — no class, just two parallel arrays wrapped by closures.
+type MinHeap = {
+  push: (priority: number, payload: number) => void;
+  pop: () => number;
+  size: () => number;
+};
+
+function createMinHeap(): MinHeap {
+  const keys: number[] = [];
+  const vals: number[] = [];
+  const up = (start: number): void => {
+    let i = start;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (keys[p] <= keys[i]) break;
+      const tk = keys[p];
+      const tv = vals[p];
+      keys[p] = keys[i];
+      vals[p] = vals[i];
+      keys[i] = tk;
+      vals[i] = tv;
+      i = p;
+    }
+  };
+  const down = (start: number): void => {
+    let i = start;
+    const n = keys.length;
+    for (;;) {
+      const l = i * 2 + 1;
+      const r = l + 1;
+      let s = i;
+      if (l < n && keys[l] < keys[s]) s = l;
+      if (r < n && keys[r] < keys[s]) s = r;
+      if (s === i) break;
+      const tk = keys[s];
+      const tv = vals[s];
+      keys[s] = keys[i];
+      vals[s] = vals[i];
+      keys[i] = tk;
+      vals[i] = tv;
+      i = s;
+    }
+  };
+  return {
+    push(priority, payload) {
+      keys.push(priority);
+      vals.push(payload);
+      up(keys.length - 1);
+    },
+    pop() {
+      const v = vals[0];
+      const lastK = keys.pop();
+      const lastV = vals.pop();
+      if (keys.length > 0 && lastK !== undefined && lastV !== undefined) {
+        keys[0] = lastK;
+        vals[0] = lastV;
+        down(0);
+      }
+      return v;
+    },
+    size() {
+      return keys.length;
+    },
+  };
+}
+
+// A* over the 8-connected pixel grid between `start` and `end`, bounded to
+// the bbox of the two endpoints padded by a fraction of their separation so
+// the path can bow around obstacles. Per-pixel cost is derived from the RGB
+// distance to the signature — on-signature pixels have near-baseline cost,
+// off-signature pixels are penalized quadratically. Returns the pixel path
+// in absolute canvas coordinates, or null if no path fits in the bbox.
+function astarLeastCostPath(
+  image: ImageData,
+  signature: AutoPolySignature,
+  toleranceMul: number,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  paintMask?: { data: Uint8Array; width: number; height: number } | null
+): [number, number][] | null {
+  const W = image.width;
+  const H = image.height;
+  if (
+    startX < 0 ||
+    startY < 0 ||
+    endX < 0 ||
+    endY < 0 ||
+    startX >= W ||
+    startY >= H ||
+    endX >= W ||
+    endY >= H
+  ) {
+    return null;
+  }
+
+  // When a paint mask is provided, use its tight bounding box (expanded to
+  // include both endpoints) instead of the default endpoint-derived bbox.
+  // This lets the search follow long curving corridors that would exceed the
+  // default 1.5M pixel cap.
+  let bboxMinX: number;
+  let bboxMaxX: number;
+  let bboxMinY: number;
+  let bboxMaxY: number;
+  if (paintMask && paintMask.data.length > 0) {
+    // Scan the mask for its tight bbox.
+    let mMinX = paintMask.width;
+    let mMinY = paintMask.height;
+    let mMaxX = 0;
+    let mMaxY = 0;
+    for (let y = 0; y < paintMask.height; y++) {
+      for (let x = 0; x < paintMask.width; x++) {
+        if (paintMask.data[y * paintMask.width + x]) {
+          if (x < mMinX) mMinX = x;
+          if (x > mMaxX) mMaxX = x;
+          if (y < mMinY) mMinY = y;
+          if (y > mMaxY) mMaxY = y;
+        }
+      }
+    }
+    if (mMaxX < mMinX) return null; // empty mask
+    // Expand to include both endpoints.
+    bboxMinX = Math.max(0, Math.min(mMinX, startX, endX));
+    bboxMaxX = Math.min(W - 1, Math.max(mMaxX, startX, endX));
+    bboxMinY = Math.max(0, Math.min(mMinY, startY, endY));
+    bboxMaxY = Math.min(H - 1, Math.max(mMaxY, startY, endY));
+  } else {
+    const span = Math.hypot(endX - startX, endY - startY);
+    const pad = Math.max(40, Math.round(span * 0.35));
+    bboxMinX = Math.max(0, Math.min(startX, endX) - pad);
+    bboxMaxX = Math.min(W - 1, Math.max(startX, endX) + pad);
+    bboxMinY = Math.max(0, Math.min(startY, endY) - pad);
+    bboxMaxY = Math.min(H - 1, Math.max(startY, endY) + pad);
+  }
+  const bw = bboxMaxX - bboxMinX + 1;
+  const bh = bboxMaxY - bboxMinY + 1;
+  const N = bw * bh;
+  // Guard against runaway searches.
+  if (N > 4_000_000) return null;
+
+  const baseline = 18;
+  const stdTerm = Math.hypot(signature.stdR, signature.stdG, signature.stdB);
+  const threshold = Math.max(8, toleranceMul * (baseline + stdTerm));
+  // Squared form saves the sqrt in the hot loop.
+  const thresholdSq = threshold * threshold;
+  // Penalty scale — bigger K = steeper cliff at the threshold and a path
+  // that tries harder to stay on-signature.
+  const K = 80;
+
+  const WALL = 1e9;
+  const pixCost = new Float32Array(N);
+  for (let y = 0; y < bh; y++) {
+    const sy = y + bboxMinY;
+    for (let x = 0; x < bw; x++) {
+      const sx = x + bboxMinX;
+      // Pixels outside the paint mask are impassable walls.
+      if (
+        paintMask &&
+        (sx >= paintMask.width ||
+          sy >= paintMask.height ||
+          !paintMask.data[sy * paintMask.width + sx])
+      ) {
+        pixCost[y * bw + x] = WALL;
+        continue;
+      }
+      const idx = (sy * W + sx) * 4;
+      const dr = image.data[idx] - signature.meanR;
+      const dg = image.data[idx + 1] - signature.meanG;
+      const db = image.data[idx + 2] - signature.meanB;
+      const dsq = dr * dr + dg * dg + db * db;
+      const norm = dsq / thresholdSq;
+      pixCost[y * bw + x] = 1 + K * norm;
+    }
+  }
+
+  const gScore = new Float32Array(N);
+  gScore.fill(Infinity);
+  const parent = new Int32Array(N);
+  parent.fill(-1);
+  const closed = new Uint8Array(N);
+
+  const localStartX = startX - bboxMinX;
+  const localStartY = startY - bboxMinY;
+  const localEndX = endX - bboxMinX;
+  const localEndY = endY - bboxMinY;
+  const startFlat = localStartY * bw + localStartX;
+  const endFlat = localEndY * bw + localEndX;
+
+  gScore[startFlat] = 0;
+  const heap = createMinHeap();
+  heap.push(0, startFlat);
+
+  const NDX = [1, -1, 0, 0, 1, 1, -1, -1];
+  const NDY = [0, 0, 1, -1, 1, -1, 1, -1];
+  const NSTEP = [1, 1, 1, 1, Math.SQRT2, Math.SQRT2, Math.SQRT2, Math.SQRT2];
+
+  // Iteration cap scales with the bbox — ~3× the pixel count is generous
+  // while still bounding the worst case on a tainted or tangled search.
+  const MAX_ITER = N * 3;
+  let iter = 0;
+  let found = false;
+  while (heap.size() > 0) {
+    if (++iter > MAX_ITER) break;
+    const cur = heap.pop();
+    if (closed[cur]) continue;
+    closed[cur] = 1;
+    if (cur === endFlat) {
+      found = true;
+      break;
+    }
+    const cx = cur % bw;
+    const cy = (cur - cx) / bw;
+    const curCost = pixCost[cur];
+    const curG = gScore[cur];
+    for (let k = 0; k < 8; k++) {
+      const nx = cx + NDX[k];
+      const ny = cy + NDY[k];
+      if (nx < 0 || ny < 0 || nx >= bw || ny >= bh) continue;
+      const nflat = ny * bw + nx;
+      if (closed[nflat]) continue;
+      const step = NSTEP[k] * 0.5 * (curCost + pixCost[nflat]);
+      const tentative = curG + step;
+      if (tentative < gScore[nflat]) {
+        gScore[nflat] = tentative;
+        parent[nflat] = cur;
+        const hx = localEndX - nx;
+        const hy = localEndY - ny;
+        // Heuristic: Euclidean distance × 1 (minimum edge cost), admissible.
+        const h = Math.sqrt(hx * hx + hy * hy);
+        heap.push(tentative + h, nflat);
+      }
+    }
+  }
+
+  if (!found) return null;
+
+  const path: [number, number][] = [];
+  let c = endFlat;
+  for (let guard = 0; guard < N; guard++) {
+    const x = c % bw;
+    const y = (c - x) / bw;
+    path.push([x + bboxMinX, y + bboxMinY]);
+    if (c === startFlat) break;
+    const p = parent[c];
+    if (p < 0) break;
+    c = p;
+  }
+  path.reverse();
+  return path.length >= 2 ? path : null;
+}
+
+// ---------------------------------------------------------------------------
+// Frangi vesselness filter. Detects elongated tubular structures (roads,
+// tracks, rivers) in grayscale imagery via multi-scale Hessian eigenanalysis.
+// Returns a [0..1] Float32Array where 1 = strong tubular response.
+// ---------------------------------------------------------------------------
+
+// Separable 1D Gaussian convolution (horizontal or vertical pass). Writes
+// result into `dst`. `srcW`/`srcH` are image dimensions; `vertical` flips
+// the axis so the same function handles both passes.
+function gaussConvolve1D(
+  src: Float32Array,
+  dst: Float32Array,
+  srcW: number,
+  srcH: number,
+  kernel: Float32Array,
+  vertical: boolean
+): void {
+  const r = (kernel.length - 1) / 2;
+  const w = srcW;
+  const h = srcH;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let sum = 0;
+      for (let k = -r; k <= r; k++) {
+        let sx: number;
+        let sy: number;
+        if (vertical) {
+          sx = x;
+          sy = Math.min(h - 1, Math.max(0, y + k));
+        } else {
+          sx = Math.min(w - 1, Math.max(0, x + k));
+          sy = y;
+        }
+        sum += src[sy * w + sx] * kernel[k + r];
+      }
+      dst[y * w + x] = sum;
+    }
+  }
+}
+
+function computeVesselnessMap(
+  image: ImageData,
+  sigmaMin: number,
+  sigmaMax: number,
+  sigmaSteps: number,
+  paintMask?: { data: Uint8Array; width: number; height: number } | null
+): Float32Array {
+  const W = image.width;
+  const H = image.height;
+  const N = W * H;
+
+  // Grayscale conversion
+  const gray = new Float32Array(N);
+  const d = image.data;
+  for (let i = 0; i < N; i++) {
+    const idx = i * 4;
+    gray[i] = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
+  }
+
+  const vesselness = new Float32Array(N);
+  const beta = 0.5;
+  const betaSq2 = 2 * beta * beta;
+  const C = 15.0;
+  const cSq2 = 2 * C * C;
+
+  // Temporary buffers for convolutions
+  const tmp1 = new Float32Array(N);
+  const ixx = new Float32Array(N);
+  const iyy = new Float32Array(N);
+  const ixy = new Float32Array(N);
+
+  // Build Gaussian derivative kernels for a given sigma
+  const makeKernels = (sigma: number) => {
+    const r = Math.ceil(3 * sigma);
+    const len = 2 * r + 1;
+    const g = new Float32Array(len);
+    const gp = new Float32Array(len); // first derivative
+    const gpp = new Float32Array(len); // second derivative
+    const s2 = sigma * sigma;
+    const s4 = s2 * s2;
+    let gSum = 0;
+    for (let k = -r; k <= r; k++) {
+      const t = k;
+      const e = Math.exp(-(t * t) / (2 * s2));
+      g[k + r] = e;
+      gp[k + r] = (-t / s2) * e;
+      gpp[k + r] = ((t * t - s2) / s4) * e;
+      gSum += e;
+    }
+    // Normalize G so it sums to 1 (smoothing kernel).
+    for (let i = 0; i < len; i++) g[i] /= gSum;
+    // Scale derivative kernels by sigma^2 for Lindeberg normalization.
+    for (let i = 0; i < len; i++) {
+      gp[i] *= s2;
+      gpp[i] *= s2;
+    }
+    return { g, gp, gpp };
+  };
+
+  for (let si = 0; si < sigmaSteps; si++) {
+    const sigma =
+      sigmaSteps === 1
+        ? sigmaMin
+        : sigmaMin *
+          Math.pow(sigmaMax / sigmaMin, si / (sigmaSteps - 1));
+    const { g, gp, gpp } = makeKernels(sigma);
+
+    // Ixx = Gpp(x) * G(y)
+    gaussConvolve1D(gray, tmp1, W, H, gpp, false);
+    gaussConvolve1D(tmp1, ixx, W, H, g, true);
+
+    // Iyy = G(x) * Gpp(y)
+    gaussConvolve1D(gray, tmp1, W, H, g, false);
+    gaussConvolve1D(tmp1, iyy, W, H, gpp, true);
+
+    // Ixy = Gp(x) * Gp(y)
+    gaussConvolve1D(gray, tmp1, W, H, gp, false);
+    gaussConvolve1D(tmp1, ixy, W, H, gp, true);
+
+    // Eigenvalue decomposition + vesselness per pixel
+    for (let i = 0; i < N; i++) {
+      // Skip pixels outside the mask
+      if (paintMask && !paintMask.data[i]) continue;
+
+      const a = ixx[i];
+      const b = ixy[i];
+      const cc = iyy[i];
+      const trace = a + cc;
+      const det = a * cc - b * b;
+      const disc = Math.sqrt(Math.max(0, trace * trace - 4 * det));
+      let l1 = (trace + disc) / 2;
+      let l2 = (trace - disc) / 2;
+      // Order by absolute value: |l1| >= |l2|
+      if (Math.abs(l1) < Math.abs(l2)) {
+        const tmp = l1;
+        l1 = l2;
+        l2 = tmp;
+      }
+      // Skip near-zero response (background)
+      if (Math.abs(l1) < 1e-6) continue;
+
+      const rb = l2 / l1;
+      const s2v = l1 * l1 + l2 * l2;
+      const v =
+        Math.exp(-(rb * rb) / betaSq2) *
+        (1 - Math.exp(-s2v / cSq2));
+      if (v > vesselness[i]) vesselness[i] = v;
+    }
+  }
+
+  return vesselness;
+}
+
+// A* on a vesselness cost field. High vesselness = low traversal cost.
+// Structurally identical to astarLeastCostPath but with a different cost
+// function that doesn't depend on a color signature.
+function astarVesselnessPath(
+  vesselness: Float32Array,
+  imgWidth: number,
+  imgHeight: number,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  paintMask?: { data: Uint8Array; width: number; height: number } | null
+): [number, number][] | null {
+  if (
+    startX < 0 ||
+    startY < 0 ||
+    endX < 0 ||
+    endY < 0 ||
+    startX >= imgWidth ||
+    startY >= imgHeight ||
+    endX >= imgWidth ||
+    endY >= imgHeight
+  ) {
+    return null;
+  }
+
+  let bboxMinX: number;
+  let bboxMaxX: number;
+  let bboxMinY: number;
+  let bboxMaxY: number;
+  if (paintMask && paintMask.data.length > 0) {
+    let mMinX = paintMask.width;
+    let mMinY = paintMask.height;
+    let mMaxX = 0;
+    let mMaxY = 0;
+    for (let y = 0; y < paintMask.height; y++) {
+      for (let x = 0; x < paintMask.width; x++) {
+        if (paintMask.data[y * paintMask.width + x]) {
+          if (x < mMinX) mMinX = x;
+          if (x > mMaxX) mMaxX = x;
+          if (y < mMinY) mMinY = y;
+          if (y > mMaxY) mMaxY = y;
+        }
+      }
+    }
+    if (mMaxX < mMinX) return null;
+    bboxMinX = Math.max(0, Math.min(mMinX, startX, endX));
+    bboxMaxX = Math.min(imgWidth - 1, Math.max(mMaxX, startX, endX));
+    bboxMinY = Math.max(0, Math.min(mMinY, startY, endY));
+    bboxMaxY = Math.min(imgHeight - 1, Math.max(mMaxY, startY, endY));
+  } else {
+    const span = Math.hypot(endX - startX, endY - startY);
+    const pad = Math.max(40, Math.round(span * 0.35));
+    bboxMinX = Math.max(0, Math.min(startX, endX) - pad);
+    bboxMaxX = Math.min(imgWidth - 1, Math.max(startX, endX) + pad);
+    bboxMinY = Math.max(0, Math.min(startY, endY) - pad);
+    bboxMaxY = Math.min(imgHeight - 1, Math.max(startY, endY) + pad);
+  }
+  const bw = bboxMaxX - bboxMinX + 1;
+  const bh = bboxMaxY - bboxMinY + 1;
+  const NN = bw * bh;
+  if (NN > 4_000_000) return null;
+
+  const WALL = 1e9;
+  const K = 80;
+  const pixCost = new Float32Array(NN);
+  for (let y = 0; y < bh; y++) {
+    const sy = y + bboxMinY;
+    for (let x = 0; x < bw; x++) {
+      const sx = x + bboxMinX;
+      if (
+        paintMask &&
+        (sx >= paintMask.width ||
+          sy >= paintMask.height ||
+          !paintMask.data[sy * paintMask.width + sx])
+      ) {
+        pixCost[y * bw + x] = WALL;
+        continue;
+      }
+      const v = vesselness[sy * imgWidth + sx];
+      // Invert: high vesselness → low cost.
+      const inv = 1 - v;
+      pixCost[y * bw + x] = 1 + K * inv * inv;
+    }
+  }
+
+  // A* (shared logic — same as astarLeastCostPath)
+  const gScore = new Float32Array(NN);
+  gScore.fill(Infinity);
+  const parent = new Int32Array(NN);
+  parent.fill(-1);
+  const closed = new Uint8Array(NN);
+
+  const localStartX = startX - bboxMinX;
+  const localStartY = startY - bboxMinY;
+  const localEndX = endX - bboxMinX;
+  const localEndY = endY - bboxMinY;
+  const startFlat = localStartY * bw + localStartX;
+  const endFlat = localEndY * bw + localEndX;
+
+  gScore[startFlat] = 0;
+  const heap = createMinHeap();
+  heap.push(0, startFlat);
+
+  const NDX = [1, -1, 0, 0, 1, 1, -1, -1];
+  const NDY = [0, 0, 1, -1, 1, -1, 1, -1];
+  const NSTEP = [1, 1, 1, 1, Math.SQRT2, Math.SQRT2, Math.SQRT2, Math.SQRT2];
+
+  const MAX_ITER = NN * 3;
+  let iter = 0;
+  let found = false;
+  while (heap.size() > 0) {
+    if (++iter > MAX_ITER) break;
+    const cur = heap.pop();
+    if (closed[cur]) continue;
+    closed[cur] = 1;
+    if (cur === endFlat) {
+      found = true;
+      break;
+    }
+    const cx = cur % bw;
+    const cy = (cur - cx) / bw;
+    const curCost = pixCost[cur];
+    const curG = gScore[cur];
+    for (let k = 0; k < 8; k++) {
+      const nx = cx + NDX[k];
+      const ny = cy + NDY[k];
+      if (nx < 0 || ny < 0 || nx >= bw || ny >= bh) continue;
+      const nflat = ny * bw + nx;
+      if (closed[nflat]) continue;
+      const step = NSTEP[k] * 0.5 * (curCost + pixCost[nflat]);
+      const tentative = curG + step;
+      if (tentative < gScore[nflat]) {
+        gScore[nflat] = tentative;
+        parent[nflat] = cur;
+        const hx = localEndX - nx;
+        const hy = localEndY - ny;
+        const h = Math.sqrt(hx * hx + hy * hy);
+        heap.push(tentative + h, nflat);
+      }
+    }
+  }
+
+  if (!found) return null;
+
+  const path: [number, number][] = [];
+  let c = endFlat;
+  for (let guard = 0; guard < NN; guard++) {
+    const x = c % bw;
+    const y = (c - x) / bw;
+    path.push([x + bboxMinX, y + bboxMinY]);
+    if (c === startFlat) break;
+    const p = parent[c];
+    if (p < 0) break;
+    c = p;
+  }
+  path.reverse();
+  return path.length >= 2 ? path : null;
+}
+
+// BFS flood fill from `seed` accepting any pixel whose RGB distance from the
+// signature mean is within `toleranceMul * (baseline + combined per-channel
+// stddev)`. Writes a compact mask covering only the pixels actually visited.
+function regionGrowFromSeed(
+  image: ImageData,
+  seedX: number,
+  seedY: number,
+  signature: AutoPolySignature,
+  toleranceMul: number,
+  maxPixels: number,
+  forbidden?: Uint8Array | null
+): AutoPolyMask | null {
+  const { width, height, data } = image;
+  if (seedX < 0 || seedY < 0 || seedX >= width || seedY >= height) return null;
+  // If the seed itself is forbidden (inside an existing polygon), bail.
+  if (forbidden && forbidden[seedY * width + seedX]) return null;
+
+  // Build an acceptance threshold. The baseline keeps it from collapsing to
+  // zero on perfectly uniform references; the std term relaxes it for noisy
+  // textures. Compared in squared RGB distance to save a sqrt per pixel.
+  const baseline = 18;
+  const stdTerm = Math.hypot(signature.stdR, signature.stdG, signature.stdB);
+  const threshold = toleranceMul * (baseline + stdTerm);
+  const thresholdSq = threshold * threshold;
+
+  const visited = new Uint8Array(width * height);
+  // Ring-buffer queue of pixel indices. 32-bit is plenty for any realistic
+  // canvas (max ~16M pixels).
+  const queueCap = Math.min(width * height, maxPixels * 4 + 1024);
+  const queue = new Int32Array(queueCap);
+  let qHead = 0;
+  let qTail = 0;
+
+  const pushPixel = (px: number, py: number): void => {
+    if (px < 0 || py < 0 || px >= width || py >= height) return;
+    const flat = py * width + px;
+    if (visited[flat]) return;
+    // Skip pixels that belong to an existing polygon on the active layer.
+    if (forbidden && forbidden[flat]) return;
+    visited[flat] = 1;
+    queue[qTail++] = flat;
+    if (qTail >= queueCap) qTail = 0;
+  };
+
+  const accepted = new Uint8Array(width * height);
+  let minX = seedX;
+  let maxX = seedX;
+  let minY = seedY;
+  let maxY = seedY;
+  let count = 0;
+
+  pushPixel(seedX, seedY);
+
+  while (qHead !== qTail) {
+    const flat = queue[qHead++];
+    if (qHead >= queueCap) qHead = 0;
+    const px = flat % width;
+    const py = (flat - px) / width;
+
+    const idx = flat * 4;
+    const dr = data[idx] - signature.meanR;
+    const dg = data[idx + 1] - signature.meanG;
+    const db = data[idx + 2] - signature.meanB;
+    if (dr * dr + dg * dg + db * db > thresholdSq) continue;
+
+    accepted[flat] = 1;
+    count++;
+    if (px < minX) minX = px;
+    if (px > maxX) maxX = px;
+    if (py < minY) minY = py;
+    if (py > maxY) maxY = py;
+
+    if (count >= maxPixels) break;
+
+    pushPixel(px + 1, py);
+    pushPixel(px - 1, py);
+    pushPixel(px, py + 1);
+    pushPixel(px, py - 1);
+  }
+
+  if (count < 32) return null;
+
+  const outW = maxX - minX + 1;
+  const outH = maxY - minY + 1;
+  const mask = new Uint8Array(outW * outH);
+  for (let y = 0; y < outH; y++) {
+    for (let x = 0; x < outW; x++) {
+      if (accepted[(y + minY) * width + (x + minX)]) {
+        mask[y * outW + x] = 1;
+      }
+    }
+  }
+  return { mask, minX, minY, maxX, maxY, count, width: outW, height: outH };
+}
+
+// Moore-neighborhood boundary trace. Walks the outer contour of the largest
+// connected component reachable from the first boundary pixel found by a
+// row-major scan. Returns a closed ring in absolute canvas pixel coords.
+function traceMaskContour(result: AutoPolyMask): [number, number][] | null {
+  const { mask, width, height, minX, minY } = result;
+
+  const at = (x: number, y: number): boolean => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return false;
+    return mask[y * width + x] === 1;
+  };
+
+  // Find the first boundary pixel (row-major). A filled pixel touching a
+  // non-filled 4-neighbor (or image edge) is a boundary pixel.
+  let startX = -1;
+  let startY = -1;
+  outer: for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!at(x, y)) continue;
+      if (!at(x - 1, y) || !at(x + 1, y) || !at(x, y - 1) || !at(x, y + 1)) {
+        startX = x;
+        startY = y;
+        break outer;
+      }
+    }
+  }
+  if (startX < 0) return null;
+
+  // 8-connected neighbors in clockwise order starting east.
+  const dx = [1, 1, 0, -1, -1, -1, 0, 1];
+  const dy = [0, 1, 1, 1, 0, -1, -1, -1];
+
+  const contour: [number, number][] = [];
+  let cx = startX;
+  let cy = startY;
+  // Initial "previous" direction: came from the west.
+  let dir = 7; // so the next check starts at east
+  const MAX_STEPS = width * height * 4;
+  for (let step = 0; step < MAX_STEPS; step++) {
+    contour.push([cx + minX, cy + minY]);
+    let found = false;
+    // Moore-neighbor tracing: start the search one step clockwise from the
+    // incoming direction (dir + 6 = dir - 2 mod 8).
+    const start = (dir + 6) % 8;
+    for (let i = 0; i < 8; i++) {
+      const nd = (start + i) % 8;
+      const nx = cx + dx[nd];
+      const ny = cy + dy[nd];
+      if (at(nx, ny)) {
+        cx = nx;
+        cy = ny;
+        dir = nd;
+        found = true;
+        break;
+      }
+    }
+    if (!found) break; // isolated pixel
+    if (cx === startX && cy === startY) break;
+  }
+
+  if (contour.length < 4) return null;
+  // Close the ring explicitly.
+  contour.push([contour[0][0], contour[0][1]]);
+  return contour;
+}
+
+// Rasterize every polygon and multipolygon in `fc` into a flat Uint8Array
+// mask at device-pixel resolution. Pixels covered by any feature get value 1.
+// Used by the auto-trace tool so the BFS region grow stops at the boundaries
+// of already-digitized shapes.
+function buildForbiddenMask(
+  map: MLMap,
+  fc: GeoJSON.FeatureCollection | null,
+  imgWidth: number,
+  imgHeight: number,
+  dpr: number
+): Uint8Array {
+  const mask = new Uint8Array(imgWidth * imgHeight);
+  if (!fc) return mask;
+  for (const feature of fc.features) {
+    const geom = feature.geometry;
+    if (!geom) continue;
+    let rings: GeoJSON.Position[][] = [];
+    if (geom.type === "Polygon") {
+      rings = geom.coordinates;
+    } else if (geom.type === "MultiPolygon") {
+      for (const poly of geom.coordinates) {
+        for (const ring of poly) rings.push(ring);
+      }
+    } else {
+      continue;
+    }
+    for (const ring of rings) {
+      if (ring.length < 3) continue;
+      const pixRing: [number, number][] = ring.map(([lng, lat]) => {
+        const p = map.project([lng, lat] as [number, number]);
+        return [p.x * dpr, p.y * dpr];
+      });
+      const { minX, minY, maxX, maxY } = ringPixelBounds(
+        pixRing,
+        imgWidth,
+        imgHeight
+      );
+      // Quick cull: skip features entirely outside the visible canvas.
+      if (maxX <= 0 || maxY <= 0 || minX >= imgWidth || minY >= imgHeight)
+        continue;
+      for (let y = minY; y <= maxY; y++) {
+        for (let x = minX; x <= maxX; x++) {
+          if (mask[y * imgWidth + x]) continue;
+          if (canvasPointInRing(x + 0.5, y + 0.5, pixRing)) {
+            mask[y * imgWidth + x] = 1;
+          }
+        }
+      }
+    }
+  }
+  return mask;
+}
+
+// Rasterize geographic paint-mask strokes into a device-pixel Uint8Array
+// for the current map viewport. Each stroke's coordinates are projected
+// to canvas pixels via map.project(), then stamped with a disk of the
+// stroke's brush radius (in device pixels).
+function rasterizePaintMaskStrokes(
+  map: MLMap,
+  strokes: ReadonlyArray<{
+    coords: [number, number][];
+    brushCss: number;
+    zoom: number;
+  }>,
+  imgWidth: number,
+  imgHeight: number,
+  dpr: number
+): { data: Uint8Array; width: number; height: number } | null {
+  if (strokes.length === 0) return null;
+  const currentZoom = map.getZoom();
+  const mask = new Uint8Array(imgWidth * imgHeight);
+  for (const stroke of strokes) {
+    if (stroke.coords.length === 0) continue;
+    // Scale the brush radius to account for the zoom difference between
+    // paint time and the current viewport, keeping geographic width fixed.
+    const zoomScale = Math.pow(2, currentZoom - stroke.zoom);
+    const radius = Math.round((stroke.brushCss * zoomScale * dpr) / 2);
+    const rSq = radius * radius;
+    const projected: [number, number][] = stroke.coords.map(([lng, lat]) => {
+      const p = map.project([lng, lat] as [number, number]);
+      return [Math.round(p.x * dpr), Math.round(p.y * dpr)];
+    });
+    const stamp = (cx: number, cy: number) => {
+      const x0 = Math.max(0, cx - radius);
+      const y0 = Math.max(0, cy - radius);
+      const x1 = Math.min(imgWidth - 1, cx + radius);
+      const y1 = Math.min(imgHeight - 1, cy + radius);
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const dx = x - cx;
+          const dy = y - cy;
+          if (dx * dx + dy * dy <= rSq) mask[y * imgWidth + x] = 1;
+        }
+      }
+    };
+    for (let i = 0; i < projected.length - 1; i++) {
+      const [ax, ay] = projected[i];
+      const [bx, by] = projected[i + 1];
+      const dist = Math.hypot(bx - ax, by - ay);
+      const steps = Math.max(1, Math.ceil(dist));
+      for (let t = 0; t <= steps; t++) {
+        const frac = t / steps;
+        stamp(
+          Math.round(ax + (bx - ax) * frac),
+          Math.round(ay + (by - ay) * frac)
+        );
+      }
+    }
+    if (projected.length === 1) stamp(projected[0][0], projected[0][1]);
+  }
+  return { data: mask, width: imgWidth, height: imgHeight };
+}
+
 function geomBboxDiagonal(geom: GeoJSON.Geometry): number {
   let minX = Infinity,
     maxX = -Infinity,
@@ -1217,6 +2270,71 @@ const GLOBE_CSS = `
     font-variant-numeric: tabular-nums;
     min-width: 26px;
     text-align: right;
+  }
+  .glb-terrain-slider-wrap__clear-btn {
+    padding: 0 6px;
+    border: 1px solid rgba(15, 23, 42, 0.15);
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    font-family: system-ui, sans-serif;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 16px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .glb-terrain-slider-wrap__clear-btn:hover {
+    background-color: rgba(15, 23, 42, 0.07);
+  }
+  [data-theme="dark"] .glb-terrain-slider-wrap__clear-btn {
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+  [data-theme="dark"] .glb-terrain-slider-wrap__clear-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+  .glb-autotrace-divider {
+    width: 1px;
+    height: 16px;
+    background-color: rgba(15, 23, 42, 0.15);
+    flex-shrink: 0;
+  }
+  [data-theme="dark"] .glb-autotrace-divider {
+    background-color: rgba(255, 255, 255, 0.15);
+  }
+  .glb-paint-mask-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 3;
+    pointer-events: none;
+  }
+  .glb-magnifier {
+    position: absolute;
+    pointer-events: none;
+    width: 140px;
+    height: 140px;
+    border-radius: 50%;
+    overflow: hidden;
+    border: 2px solid rgba(255, 255, 255, 0.85);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+    z-index: 20;
+    display: none;
+  }
+  .glb-magnifier canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+  }
+  .glb-magnifier__crosshair {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
   }
   .glb-ramp-picker {
     position: relative;
@@ -1752,6 +2870,10 @@ const SHRINK_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>';
 const FREEHAND_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17c2-4 4-4 6 0s4 4 6 0 4-4 6 0"/><path d="M3 11c2-4 4-4 6 0s4 4 6 0 4-4 6 0"/></svg>';
+const VESSEL_TRACE_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17c3-6 6-6 9 0s6 6 9 0"/><path d="M3 17c3-6 6-6 9 0s6 6 9 0" transform="translate(0,-6)"/><circle cx="12" cy="14" r="1.5" fill="currentColor"/></svg>';
+const AUTO_POLY_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6 L10 3 L20 7 L17 17 L7 19 Z"/><path d="M12 11 l2 2 M12 11 l-2 -2 M12 11 l2 -2 M12 11 l-2 2"/><circle cx="12" cy="11" r="1.5" fill="currentColor"/></svg>';
 const SIMPLIFY_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18 L9 11 L15 14 L21 6"/><circle cx="3" cy="18" r="1.6" fill="currentColor"/><circle cx="9" cy="11" r="1.6" fill="currentColor"/><circle cx="15" cy="14" r="1.6" fill="currentColor"/><circle cx="21" cy="6" r="1.6" fill="currentColor"/></svg>';
 const TILT_ICON =
@@ -1805,6 +2927,8 @@ export function GisGlobeViewport({
   editing,
   adding,
   freehand,
+  autoPoly,
+  autoVessel,
   simplifying,
   importingDem,
   deleting,
@@ -1821,6 +2945,8 @@ export function GisGlobeViewport({
   onToggleEdit,
   onToggleAdd,
   onToggleFreehand,
+  onToggleAutoPoly,
+  onToggleAutoVessel,
   onToggleSimplify,
   onToggleImportDem,
   onToggleDelete,
@@ -1846,6 +2972,8 @@ export function GisGlobeViewport({
   editing: boolean;
   adding: boolean;
   freehand: boolean;
+  autoPoly: boolean;
+  autoVessel: boolean;
   simplifying: boolean;
   importingDem: boolean;
   deleting: boolean;
@@ -1862,6 +2990,8 @@ export function GisGlobeViewport({
   onToggleEdit: () => void;
   onToggleAdd: () => void;
   onToggleFreehand: () => void;
+  onToggleAutoPoly: () => void;
+  onToggleAutoVessel: () => void;
   onToggleSimplify: () => void;
   onToggleImportDem: () => void;
   onToggleDelete: () => void;
@@ -1923,9 +3053,84 @@ export function GisGlobeViewport({
   const terrainBtnRef = React.useRef<HTMLButtonElement>(null);
   const demBtnRef = React.useRef<HTMLButtonElement>(null);
   const simplifyBtnRef = React.useRef<HTMLButtonElement>(null);
+  const autoPolyBtnRef = React.useRef<HTMLButtonElement>(null);
   const [terrainSliderLeft, setTerrainSliderLeft] = React.useState<number | null>(null);
   const [demSliderLeft, setDemSliderLeft] = React.useState<number | null>(null);
   const [simplifySliderLeft, setSimplifySliderLeft] = React.useState<number | null>(null);
+  const [autoPolySliderLeft, setAutoPolySliderLeft] = React.useState<number | null>(null);
+  const [autoPolyTolerance, setAutoPolyTolerance] = React.useState(1.0);
+  const autoPolyToleranceRef = React.useRef(autoPolyTolerance);
+  React.useEffect(() => {
+    autoPolyToleranceRef.current = autoPolyTolerance;
+  }, [autoPolyTolerance]);
+  const [autoPolyMaxSurface, setAutoPolyMaxSurface] = React.useState(3.0);
+  const [autoPolyCorridor, setAutoPolyCorridor] = React.useState(3);
+  const autoPolyCorridorRef = React.useRef(autoPolyCorridor);
+  React.useEffect(() => {
+    autoPolyCorridorRef.current = autoPolyCorridor;
+  }, [autoPolyCorridor]);
+  // Counter bumped by the click handler when a new seed is picked; the
+  // secondary live-preview effect watches it to trigger the initial grow.
+  const [autoPolyGrowSeq, setAutoPolyGrowSeq] = React.useState(0);
+  // Heavy data (ImageData + forbidden mask) stored in a ref so slider-
+  // driven re-renders don't deep-copy megapixel buffers.
+  const autoPolyGrowParamsRef = React.useRef<{
+    seedX: number;
+    seedY: number;
+    imageData: ImageData;
+    signature: AutoPolySignature;
+    refArea: number; // pixel count inside the reference polygon
+    forbidden: Uint8Array;
+    dpr: number;
+  } | null>(null);
+  // Same pattern for line-mode A* path: heavy data in a ref, secondary
+  // effect re-runs the path on tolerance changes.
+  const autoPolyLineParamsRef = React.useRef<{
+    startX: number;
+    startY: number;
+    endX: number;
+    endY: number;
+    imageData: ImageData;
+    signature: AutoPolySignature;
+    // Stored so the signature can be re-sampled when the corridor slider
+    // changes without re-picking the reference.
+    refLinePix: [number, number][];
+    refImageData: ImageData;
+    dpr: number;
+  } | null>(null);
+  // The geometry produced by the last grow/path, held here so the click
+  // handler and teardown can commit it.
+  const autoPolyDraftGeomRef = React.useRef<GeoJSON.Geometry | null>(null);
+  // Vesselness trace state — separate from autoPoly.
+  const autoVesselBtnRef = React.useRef<HTMLButtonElement>(null);
+  const [autoVesselSliderLeft, setAutoVesselSliderLeft] = React.useState<
+    number | null
+  >(null);
+  const [vesselScaleMax, setVesselScaleMax] = React.useState(3.0);
+  const [autoVesselSeq, setAutoVesselSeq] = React.useState(0);
+  const autoVesselParamsRef = React.useRef<{
+    startX: number;
+    startY: number;
+    endX: number;
+    endY: number;
+    imageData: ImageData;
+    dpr: number;
+    cachedVesselness?: Float32Array;
+    cachedScaleMax?: number;
+  } | null>(null);
+  const autoVesselDraftGeomRef = React.useRef<GeoJSON.Geometry | null>(null);
+  // Paint mask strokes stored as geographic coordinates so they survive
+  // pan/zoom and can be rasterized to the current viewport on demand.
+  // Each stroke records its brush width (CSS px) and the zoom level at
+  // paint time so the geographic width stays fixed across zoom changes.
+  const paintMaskStrokesRef = React.useRef<
+    Array<{ coords: [number, number][]; brushCss: number; zoom: number }>
+  >([]);
+  const [paintMaskStrokeWidth, setPaintMaskStrokeWidth] = React.useState(30);
+  const paintMaskStrokeWidthRef = React.useRef(paintMaskStrokeWidth);
+  React.useEffect(() => {
+    paintMaskStrokeWidthRef.current = paintMaskStrokeWidth;
+  }, [paintMaskStrokeWidth]);
   const [rampPickerOpen, setRampPickerOpen] = React.useState(false);
   const rampPickerRef = React.useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = React.useState(false);
@@ -1949,7 +3154,7 @@ export function GisGlobeViewport({
   // `contextmenu` event preventDefaults the native menu for us.
   React.useEffect(() => {
     const map = mapRef.current;
-    if (!map || !styleReady || freehand) return;
+    if (!map || !styleReady || freehand || autoPoly || autoVessel) return;
     const handler = (e: maplibregl.MapMouseEvent) => {
       setContextMenu({
         x: e.point.x,
@@ -1962,7 +3167,7 @@ export function GisGlobeViewport({
     return () => {
       map.off("contextmenu", handler);
     };
-  }, [styleReady, freehand]);
+  }, [styleReady, freehand, autoPoly, autoVessel]);
 
   // Position the context menu imperatively — repo lint forbids JSX style props,
   // and the click coordinates are pure runtime data so a CSS class won't do.
@@ -2046,6 +3251,8 @@ export function GisGlobeViewport({
   const onToggleEditRef = React.useRef(onToggleEdit);
   const onToggleAddRef = React.useRef(onToggleAdd);
   const onToggleFreehandRef = React.useRef(onToggleFreehand);
+  const onToggleAutoPolyRef = React.useRef(onToggleAutoPoly);
+  const onToggleAutoVesselRef = React.useRef(onToggleAutoVessel);
   const onToggleSimplifyRef = React.useRef(onToggleSimplify);
   const onToggleImportDemRef = React.useRef(onToggleImportDem);
   const onToggleDeleteRef = React.useRef(onToggleDelete);
@@ -2069,6 +3276,8 @@ export function GisGlobeViewport({
     onToggleEditRef.current = onToggleEdit;
     onToggleAddRef.current = onToggleAdd;
     onToggleFreehandRef.current = onToggleFreehand;
+    onToggleAutoPolyRef.current = onToggleAutoPoly;
+    onToggleAutoVesselRef.current = onToggleAutoVessel;
     onToggleSimplifyRef.current = onToggleSimplify;
     onToggleImportDemRef.current = onToggleImportDem;
     onToggleDeleteRef.current = onToggleDelete;
@@ -2131,6 +3340,10 @@ export function GisGlobeViewport({
       center: DEFAULT_CENTER,
       zoom: DEFAULT_ZOOM,
       attributionControl: false,
+      // Required so the auto-polygon tool can read back the rendered
+      // satellite tiles via canvas.drawImage after a frame has been drawn.
+      // Option exists in maplibre-gl but isn't exposed in the current typings.
+      ...({ preserveDrawingBuffer: true } as Record<string, unknown>),
     });
 
     // Enable real WebGL globe projection (MapLibre GL 5+)
@@ -3109,6 +4322,1340 @@ export function GisGlobeViewport({
   }, [freehand, geometryType, styleReady]);
 
   // --------------------------------------------------------------------
+  // Auto-trace mode. The tool adapts its click semantics to the active
+  // layer's geometry type:
+  //   Polygon layers — two-click workflow: pick a reference polygon, then
+  //     click inside similar regions to region-grow a matching mask.
+  //   Line layers — three-click workflow: pick a reference polyline, then
+  //     click the start and end of a new road/track; an A* least-cost path
+  //     through the satellite imagery is traced along the matching signature.
+  // In both cases the signature persists until the tool is toggled off so
+  // the user can trace several features in a row without reactivating.
+  // --------------------------------------------------------------------
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady || !autoPoly) return;
+    const shape = gpkgTypeToDrawShape(geometryType);
+    if (shape !== "Polygon" && shape !== "LineString") return;
+
+    const SIG_SOURCE_ID = "auto-poly-sig";
+    const SIG_LINE_LAYER = "auto-poly-sig-line";
+    const START_SOURCE_ID = "auto-poly-start";
+    const START_CIRCLE_LAYER = "auto-poly-start-circle";
+
+    if (!map.getSource(SIG_SOURCE_ID)) {
+      map.addSource(SIG_SOURCE_ID, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: SIG_LINE_LAYER,
+        type: "line",
+        source: SIG_SOURCE_ID,
+        paint: {
+          "line-color": "#22d3ee",
+          "line-width": 3,
+          "line-dasharray": [2, 2],
+          "line-opacity": 0.9,
+        },
+      });
+    }
+    if (!map.getSource(START_SOURCE_ID)) {
+      map.addSource(START_SOURCE_ID, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: START_CIRCLE_LAYER,
+        type: "circle",
+        source: START_SOURCE_ID,
+        paint: {
+          "circle-radius": 6,
+          "circle-color": "#22d3ee",
+          "circle-stroke-color": "#0f172a",
+          "circle-stroke-width": 2,
+        },
+      });
+    }
+
+    const setSigPreview = (coords: GeoJSON.Position[] | null) => {
+      const src = map.getSource(SIG_SOURCE_ID) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      if (!src) return;
+      src.setData(
+        coords
+          ? {
+              type: "FeatureCollection",
+              features: [
+                {
+                  type: "Feature",
+                  properties: {},
+                  geometry: { type: "LineString", coordinates: coords },
+                },
+              ],
+            }
+          : { type: "FeatureCollection", features: [] }
+      );
+    };
+
+    const setStartPreview = (lngLat: [number, number] | null) => {
+      const src = map.getSource(START_SOURCE_ID) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      if (!src) return;
+      src.setData(
+        lngLat
+          ? {
+              type: "FeatureCollection",
+              features: [
+                {
+                  type: "Feature",
+                  properties: {},
+                  geometry: { type: "Point", coordinates: lngLat },
+                },
+              ],
+            }
+          : { type: "FeatureCollection", features: [] }
+      );
+    };
+
+    let signature: AutoPolySignature | null = null;
+    let refPixelArea = 0;
+    // Kept so the corridor slider can re-sample the signature without
+    // re-picking the reference line.
+    let refLinePix: [number, number][] | null = null;
+    let refImageData: ImageData | null = null;
+    let pendingStart: { lng: number; lat: number } | null = null;
+    let sampling = false;
+    let cancelled = false;
+
+    const canvas = map.getCanvas();
+    canvas.style.cursor = "crosshair";
+
+    // ---- Magnifier lens for line-mode start/end point picking ----
+    const LENS_CSS = 140; // px
+    const MAG = 4;
+    const SAMPLE_CSS = LENS_CSS / MAG; // CSS pixels sampled around the cursor
+    let magnifierEl: HTMLDivElement | null = null;
+    let lensCanvas: HTMLCanvasElement | null = null;
+    let lensCtx: CanvasRenderingContext2D | null = null;
+    // Offscreen 2D copy of the WebGL canvas, updated on every MapLibre
+    // render event. Reading directly from the WebGL canvas outside the
+    // render pass returns a blank buffer when preserveDrawingBuffer fails;
+    // this offscreen copy is always readable.
+    let frameCanvas: HTMLCanvasElement | null = null;
+    let frameCtx: CanvasRenderingContext2D | null = null;
+
+    const captureFrame = () => {
+      if (!frameCanvas || !frameCtx) return;
+      const w = canvas.width;
+      const h = canvas.height;
+      if (frameCanvas.width !== w || frameCanvas.height !== h) {
+        frameCanvas.width = w;
+        frameCanvas.height = h;
+      }
+      frameCtx.drawImage(canvas, 0, 0);
+    };
+
+    if (shape === "LineString") {
+      const dpr = window.devicePixelRatio || 1;
+
+      // Offscreen frame buffer
+      frameCanvas = document.createElement("canvas");
+      frameCanvas.width = canvas.width;
+      frameCanvas.height = canvas.height;
+      frameCtx = frameCanvas.getContext("2d");
+      // Capture the current frame immediately so the magnifier has content
+      // even before the next render event fires.
+      captureFrame();
+      map.on("render", captureFrame);
+
+      magnifierEl = document.createElement("div");
+      magnifierEl.className = "glb-magnifier";
+
+      lensCanvas = document.createElement("canvas");
+      lensCanvas.width = Math.round(LENS_CSS * dpr);
+      lensCanvas.height = Math.round(LENS_CSS * dpr);
+      magnifierEl.appendChild(lensCanvas);
+      lensCtx = lensCanvas.getContext("2d");
+
+      // SVG crosshair overlay
+      const crossSvg = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "svg"
+      );
+      crossSvg.setAttribute("class", "glb-magnifier__crosshair");
+      crossSvg.setAttribute("viewBox", "0 0 140 140");
+      crossSvg.innerHTML = [
+        '<line x1="70" y1="0" x2="70" y2="60" stroke="rgba(255,255,255,0.7)" stroke-width="1"/>',
+        '<line x1="70" y1="80" x2="70" y2="140" stroke="rgba(255,255,255,0.7)" stroke-width="1"/>',
+        '<line x1="0" y1="70" x2="60" y2="70" stroke="rgba(255,255,255,0.7)" stroke-width="1"/>',
+        '<line x1="80" y1="70" x2="140" y2="70" stroke="rgba(255,255,255,0.7)" stroke-width="1"/>',
+        '<circle cx="70" cy="70" r="3" fill="none" stroke="rgba(255,255,255,0.8)" stroke-width="1"/>',
+      ].join("");
+      magnifierEl.appendChild(crossSvg);
+
+      wrapperRef.current?.appendChild(magnifierEl);
+    }
+
+    const showMagnifier = (show: boolean) => {
+      if (magnifierEl) {
+        magnifierEl.style.display = show ? "block" : "none";
+      }
+    };
+
+    const updateMagnifier = (cssX: number, cssY: number) => {
+      if (!magnifierEl || !lensCanvas || !lensCtx || !frameCanvas) return;
+      const dpr = window.devicePixelRatio || 1;
+      const srcSize = Math.round(SAMPLE_CSS * dpr);
+      const sx = Math.round(cssX * dpr - srcSize / 2);
+      const sy = Math.round(cssY * dpr - srcSize / 2);
+      const lw = lensCanvas.width;
+      const lh = lensCanvas.height;
+      lensCtx.clearRect(0, 0, lw, lh);
+      lensCtx.imageSmoothingEnabled = false;
+      // Read from the offscreen 2D copy, not the WebGL canvas directly.
+      lensCtx.drawImage(frameCanvas, sx, sy, srcSize, srcSize, 0, 0, lw, lh);
+
+      // Center the lens on the cursor. pointer-events: none ensures clicks
+      // pass through to the map canvas underneath.
+      magnifierEl.style.left = `${cssX - LENS_CSS / 2}px`;
+      magnifierEl.style.top = `${cssY - LENS_CSS / 2}px`;
+    };
+
+    const onMagMouseMove = (e: maplibregl.MapMouseEvent) => {
+      // Only show the magnifier when picking start/end points,
+      // and hide it while right-drag painting is active.
+      if (!signature || maskDrawing) {
+        showMagnifier(false);
+        return;
+      }
+      showMagnifier(true);
+      updateMagnifier(e.point.x, e.point.y);
+    };
+
+    const onMagMouseLeave = () => showMagnifier(false);
+
+    if (shape === "LineString") {
+      map.on("mousemove", onMagMouseMove);
+      map.on("mouseout", onMagMouseLeave);
+    }
+
+    // ---- Mask painting (line mode only) — right-drag paints corridor ---
+    let maskOverlay: HTMLCanvasElement | null = null;
+    let maskOCtx: CanvasRenderingContext2D | null = null;
+    let maskOffscreen: HTMLCanvasElement | null = null;
+    let maskOffCtx: CanvasRenderingContext2D | null = null;
+    let maskDrawing = false;
+    let maskCurrentStroke: {
+      coords: [number, number][];
+      brushCss: number;
+      zoom: number;
+    } | null = null;
+    let maskLastPt: { x: number; y: number } | null = null;
+    const MASK_SAMPLE_DIST = 6;
+
+    const redrawMaskOverlay = () => {
+      if (!maskOCtx || !maskOffCtx || !maskOverlay || !maskOffscreen) return;
+      const w = canvas.width;
+      const h = canvas.height;
+      if (maskOverlay.width !== w || maskOverlay.height !== h) {
+        maskOverlay.width = w;
+        maskOverlay.height = h;
+      }
+      if (maskOffscreen.width !== w || maskOffscreen.height !== h) {
+        maskOffscreen.width = w;
+        maskOffscreen.height = h;
+      }
+      maskOCtx.clearRect(0, 0, w, h);
+      const strokes = paintMaskStrokesRef.current;
+      if (strokes.length === 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      const curZoom = map.getZoom();
+      maskOffCtx.clearRect(0, 0, w, h);
+      maskOffCtx.strokeStyle = "#3b82f6";
+      maskOffCtx.lineCap = "round";
+      maskOffCtx.lineJoin = "round";
+      for (const stroke of strokes) {
+        if (stroke.coords.length < 2) continue;
+        const scale = Math.pow(2, curZoom - stroke.zoom);
+        maskOffCtx.lineWidth = stroke.brushCss * scale * dpr;
+        maskOffCtx.beginPath();
+        for (let i = 0; i < stroke.coords.length; i++) {
+          const p = map.project(stroke.coords[i] as [number, number]);
+          const px = p.x * dpr;
+          const py = p.y * dpr;
+          if (i === 0) maskOffCtx.moveTo(px, py);
+          else maskOffCtx.lineTo(px, py);
+        }
+        maskOffCtx.stroke();
+      }
+      maskOCtx.globalAlpha = 0.35;
+      maskOCtx.drawImage(maskOffscreen, 0, 0);
+      maskOCtx.globalAlpha = 1;
+    };
+
+    const onMaskMouseDown = (e: MouseEvent) => {
+      if (e.button !== 2) return;
+      e.preventDefault();
+      e.stopPropagation();
+      maskDrawing = true;
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      maskLastPt = { x: sx, y: sy };
+      const ll = map.unproject([sx, sy]);
+      maskCurrentStroke = {
+        coords: [
+          [ll.lng, ll.lat],
+          [ll.lng, ll.lat],
+        ],
+        brushCss: paintMaskStrokeWidthRef.current,
+        zoom: map.getZoom(),
+      };
+      paintMaskStrokesRef.current.push(maskCurrentStroke);
+      redrawMaskOverlay();
+    };
+
+    const onMaskMouseMove = (e: MouseEvent) => {
+      if (!maskDrawing || !maskCurrentStroke || !maskLastPt) return;
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const dx = sx - maskLastPt.x;
+      const dy = sy - maskLastPt.y;
+      if (Math.hypot(dx, dy) < MASK_SAMPLE_DIST) return;
+      maskLastPt = { x: sx, y: sy };
+      const ll = map.unproject([sx, sy]);
+      maskCurrentStroke.coords.push([ll.lng, ll.lat]);
+      redrawMaskOverlay();
+    };
+
+    const onMaskMouseUp = (e: MouseEvent) => {
+      if (e.button !== 2 || !maskDrawing) return;
+      maskDrawing = false;
+      maskCurrentStroke = null;
+      maskLastPt = null;
+    };
+
+    const onMaskContextMenu = (e: Event) => e.preventDefault();
+
+    if (shape === "LineString") {
+      // Clear strokes when the tool activates.
+      paintMaskStrokesRef.current = [];
+
+      // Disable right-button rotation so right-drag paints.
+      map.dragRotate.disable();
+
+      maskOverlay = document.createElement("canvas");
+      maskOverlay.className = "glb-paint-mask-canvas";
+      maskOverlay.width = canvas.width;
+      maskOverlay.height = canvas.height;
+      wrapperRef.current?.appendChild(maskOverlay);
+      maskOCtx = maskOverlay.getContext("2d");
+      maskOffscreen = document.createElement("canvas");
+      maskOffscreen.width = canvas.width;
+      maskOffscreen.height = canvas.height;
+      maskOffCtx = maskOffscreen.getContext("2d");
+
+      map.on("render", redrawMaskOverlay);
+      canvas.addEventListener("mousedown", onMaskMouseDown);
+      window.addEventListener("mousemove", onMaskMouseMove);
+      window.addEventListener("mouseup", onMaskMouseUp);
+      canvas.addEventListener("contextmenu", onMaskContextMenu);
+    }
+
+    // Hide any non-basemap layer so the sampled pixels are the raw satellite
+    // tiles. Raster, raster-dem, background and hillshade layers stay on so
+    // the satellite imagery (and DEM overlay, if any) remains visible and
+    // readable.
+    const collectOverlayLayers = (): string[] => {
+      const style = map.getStyle();
+      const ids: string[] = [];
+      for (const layer of style.layers ?? []) {
+        const t = layer.type as string;
+        if (
+          t === "raster" ||
+          t === "background" ||
+          t === "hillshade" ||
+          t === "color-relief"
+        )
+          continue;
+        ids.push(layer.id);
+      }
+      return ids;
+    };
+
+    const captureSatelliteImageData = async (): Promise<ImageData | null> => {
+      const ids = collectOverlayLayers();
+      const prev: Array<{ id: string; vis: string }> = [];
+      for (const id of ids) {
+        const v =
+          (map.getLayoutProperty(id, "visibility") as string | undefined) ??
+          "visible";
+        prev.push({ id, vis: v });
+        map.setLayoutProperty(id, "visibility", "none");
+      }
+      try {
+        map.triggerRepaint();
+        await new Promise<void>((resolve) => {
+          const done = () => resolve();
+          map.once("idle", done);
+        });
+        if (cancelled) return null;
+        const gl = map.getCanvas();
+        const w = gl.width;
+        const h = gl.height;
+        const temp = document.createElement("canvas");
+        temp.width = w;
+        temp.height = h;
+        const ctx = temp.getContext("2d");
+        if (!ctx) return null;
+        ctx.drawImage(gl, 0, 0);
+        try {
+          return ctx.getImageData(0, 0, w, h);
+        } catch {
+          // Canvas is tainted — a tile source didn't serve CORS headers.
+          return null;
+        }
+      } finally {
+        for (const { id, vis } of prev) {
+          if (map.getLayer(id)) {
+            map.setLayoutProperty(id, "visibility", vis);
+          }
+        }
+      }
+    };
+
+    const extractOuterRing = (
+      geom: GeoJSON.Geometry | undefined
+    ): GeoJSON.Position[] | null => {
+      if (!geom) return null;
+      if (geom.type === "Polygon") return geom.coordinates[0] ?? null;
+      if (geom.type === "MultiPolygon") {
+        let best: GeoJSON.Position[] | null = null;
+        for (const poly of geom.coordinates) {
+          const ring = poly[0];
+          if (!ring) continue;
+          if (!best || ring.length > best.length) best = ring;
+        }
+        return best;
+      }
+      return null;
+    };
+
+    const extractLineCoords = (
+      geom: GeoJSON.Geometry | undefined
+    ): GeoJSON.Position[] | null => {
+      if (!geom) return null;
+      if (geom.type === "LineString") return geom.coordinates;
+      if (geom.type === "MultiLineString") {
+        // Pick the longest constituent line by vertex count.
+        let best: GeoJSON.Position[] | null = null;
+        for (const line of geom.coordinates) {
+          if (!best || line.length > best.length) best = line;
+        }
+        return best;
+      }
+      return null;
+    };
+
+    const projectToPixels = (
+      coords: GeoJSON.Position[],
+      dpr: number
+    ): [number, number][] =>
+      coords.map(([lng, lat]) => {
+        const p = map.project([lng, lat] as [number, number]);
+        return [p.x * dpr, p.y * dpr];
+      });
+
+    const AP_DRAFT_SOURCE = "auto-poly-draft";
+    const AP_DRAFT_FILL = "auto-poly-draft-fill";
+    const AP_DRAFT_LINE = "auto-poly-draft-line";
+
+    if (!map.getSource(AP_DRAFT_SOURCE)) {
+      map.addSource(AP_DRAFT_SOURCE, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: AP_DRAFT_FILL,
+        type: "fill",
+        source: AP_DRAFT_SOURCE,
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: { "fill-color": SELECTED_COLOR, "fill-opacity": 0.25 },
+      });
+      map.addLayer({
+        id: AP_DRAFT_LINE,
+        type: "line",
+        source: AP_DRAFT_SOURCE,
+        paint: { "line-color": SELECTED_COLOR, "line-width": 2 },
+      });
+    }
+
+    // Commit the current draft (polygon or line) and clear preview.
+    const commitDraft = (): void => {
+      const geom = autoPolyDraftGeomRef.current;
+      if (!geom) return;
+      autoPolyDraftGeomRef.current = null;
+      autoPolyGrowParamsRef.current = null;
+      autoPolyLineParamsRef.current = null;
+      const wrapped = wrapGeomToType(geom, geometryType);
+      const fc = activeFclassRef.current;
+      onAddedRef.current({
+        type: "Feature",
+        properties: fc ? { fclass: fc } : {},
+        geometry: wrapped,
+      });
+      const src = map.getSource(AP_DRAFT_SOURCE) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      src?.setData({ type: "FeatureCollection", features: [] });
+    };
+
+    const onPolygonClick = async (
+      e: maplibregl.MapMouseEvent,
+      dpr: number
+    ): Promise<void> => {
+      if (!signature) {
+        const layerIds = [FEATURES_FILL_LAYER, EDIT_FILL_LAYER].filter(
+          (id) => !!map.getLayer(id)
+        );
+        if (layerIds.length === 0) return;
+        const hits = map.queryRenderedFeatures(
+          [
+            [e.point.x - 4, e.point.y - 4],
+            [e.point.x + 4, e.point.y + 4],
+          ],
+          { layers: layerIds }
+        );
+        let refRing: GeoJSON.Position[] | null = null;
+        for (const h of hits) {
+          refRing = extractOuterRing(
+            h.geometry as GeoJSON.Geometry | undefined
+          );
+          if (refRing && refRing.length >= 3) break;
+        }
+        if (!refRing) return;
+
+        const img = await captureSatelliteImageData();
+        if (!img || cancelled) return;
+        const ringPix = projectToPixels(refRing, dpr);
+        const sig = sampleSignatureInsideRing(img, ringPix);
+        if (!sig) return;
+        signature = sig;
+        // Store the reference area (pixel count) for the max-surface cap.
+        refPixelArea = sig.samples;
+        setSigPreview(refRing);
+        return;
+      }
+
+      // Commit the previous draft (if any) before starting a new grow.
+      commitDraft();
+
+      const seedX = Math.round(e.point.x * dpr);
+      const seedY = Math.round(e.point.y * dpr);
+      const img = await captureSatelliteImageData();
+      if (!img || cancelled) return;
+      // Build forbidden mask from all existing polygons so the grow respects
+      // already-digitized boundaries.
+      const forbidden = buildForbiddenMask(
+        map,
+        workingRef.current,
+        img.width,
+        img.height,
+        dpr
+      );
+      autoPolyGrowParamsRef.current = {
+        seedX,
+        seedY,
+        imageData: img,
+        signature,
+        refArea: refPixelArea,
+        forbidden,
+        dpr,
+      };
+      // Bump the sequence counter so the secondary live-preview effect fires.
+      setAutoPolyGrowSeq((n) => n + 1);
+    };
+
+    const onLineClick = async (
+      e: maplibregl.MapMouseEvent,
+      dpr: number
+    ): Promise<void> => {
+      if (!signature) {
+        // Step 1: pick a reference polyline under the click.
+        const layerIds = [FEATURES_LINE_LAYER, EDIT_LINE_LAYER].filter(
+          (id) => !!map.getLayer(id)
+        );
+        if (layerIds.length === 0) return;
+        const hits = map.queryRenderedFeatures(
+          [
+            [e.point.x - 6, e.point.y - 6],
+            [e.point.x + 6, e.point.y + 6],
+          ],
+          { layers: layerIds }
+        );
+        let refLine: GeoJSON.Position[] | null = null;
+        for (const h of hits) {
+          refLine = extractLineCoords(
+            h.geometry as GeoJSON.Geometry | undefined
+          );
+          if (refLine && refLine.length >= 2) break;
+        }
+        if (!refLine) return;
+
+        const img = await captureSatelliteImageData();
+        if (!img || cancelled) return;
+        const linePix = projectToPixels(refLine, dpr);
+        const sig = sampleSignatureAlongLine(
+          img,
+          linePix,
+          autoPolyCorridorRef.current
+        );
+        if (!sig) return;
+        signature = sig;
+        refLinePix = linePix;
+        refImageData = img;
+        setSigPreview(refLine);
+        return;
+      }
+
+      if (!pendingStart) {
+        // Step 2: record the start of the new road.
+        pendingStart = { lng: e.lngLat.lng, lat: e.lngLat.lat };
+        setStartPreview([e.lngLat.lng, e.lngLat.lat]);
+        return;
+      }
+
+      // Step 3: end click — commit previous draft, then store A* params
+      // so the secondary live-preview effect runs the path. The draft stays
+      // on-screen as a preview that reacts to the Tol slider; next start
+      // click (or toggling off) commits it.
+      commitDraft();
+
+      const img = await captureSatelliteImageData();
+      if (!img || cancelled) return;
+      const startPt = map.project([pendingStart.lng, pendingStart.lat]);
+      const sx = Math.round(startPt.x * dpr);
+      const sy = Math.round(startPt.y * dpr);
+      const ex = Math.round(e.point.x * dpr);
+      const ey = Math.round(e.point.y * dpr);
+      pendingStart = null;
+      setStartPreview(null);
+      autoPolyLineParamsRef.current = {
+        startX: sx,
+        startY: sy,
+        endX: ex,
+        endY: ey,
+        imageData: img,
+        signature,
+        refLinePix: refLinePix ?? [],
+        refImageData: refImageData ?? img,
+        dpr,
+      };
+      setAutoPolyGrowSeq((n) => n + 1);
+    };
+
+    const onMapClick = async (e: maplibregl.MapMouseEvent) => {
+      if (sampling) return;
+      sampling = true;
+      try {
+        const dpr = window.devicePixelRatio || 1;
+        if (shape === "Polygon") {
+          await onPolygonClick(e, dpr);
+        } else {
+          await onLineClick(e, dpr);
+        }
+      } finally {
+        sampling = false;
+      }
+    };
+
+    map.on("click", onMapClick);
+
+    return () => {
+      cancelled = true;
+      // Commit the current draft when the tool is toggled off.
+      commitDraft();
+      map.off("click", onMapClick);
+      canvas.style.cursor = "";
+      autoPolyGrowParamsRef.current = null;
+      autoPolyLineParamsRef.current = null;
+      autoPolyDraftGeomRef.current = null;
+
+      // Magnifier + mask painting cleanup
+      if (shape === "LineString") {
+        map.off("render", captureFrame);
+        map.off("mousemove", onMagMouseMove);
+        map.off("mouseout", onMagMouseLeave);
+        map.off("render", redrawMaskOverlay);
+        canvas.removeEventListener("mousedown", onMaskMouseDown);
+        window.removeEventListener("mousemove", onMaskMouseMove);
+        window.removeEventListener("mouseup", onMaskMouseUp);
+        canvas.removeEventListener("contextmenu", onMaskContextMenu);
+        map.dragRotate.enable();
+      }
+      if (magnifierEl && magnifierEl.parentNode) {
+        magnifierEl.parentNode.removeChild(magnifierEl);
+      }
+      if (maskOverlay && maskOverlay.parentNode) {
+        maskOverlay.parentNode.removeChild(maskOverlay);
+      }
+      frameCanvas = null;
+      frameCtx = null;
+
+      for (const layerId of [
+        AP_DRAFT_LINE,
+        AP_DRAFT_FILL,
+        START_CIRCLE_LAYER,
+        SIG_LINE_LAYER,
+      ]) {
+        if (map.getLayer(layerId)) map.removeLayer(layerId);
+      }
+      for (const srcId of [
+        AP_DRAFT_SOURCE,
+        START_SOURCE_ID,
+        SIG_SOURCE_ID,
+        "paint-mask-strokes",
+      ]) {
+        if (map.getSource(srcId)) map.removeSource(srcId);
+      }
+      paintMaskStrokesRef.current = [];
+    };
+  }, [autoPoly, geometryType, styleReady]);
+
+  // Secondary auto-trace effect: re-runs the polygon region grow or line
+  // A* path whenever the tolerance or max-surface sliders change, or a new
+  // seed/endpoint is clicked. Debounced at 80 ms so rapid slider scrubbing
+  // doesn't queue up expensive path operations.
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !autoPoly) return;
+    const polyParams = autoPolyGrowParamsRef.current;
+    const lineParams = autoPolyLineParamsRef.current;
+    const src = map.getSource("auto-poly-draft") as
+      | maplibregl.GeoJSONSource
+      | undefined;
+    if ((!polyParams && !lineParams) || !src) {
+      if (src) src.setData({ type: "FeatureCollection", features: [] });
+      autoPolyDraftGeomRef.current = null;
+      return;
+    }
+
+    const tol = autoPolyTolerance;
+    const maxSurf = autoPolyMaxSurface;
+    const timer = window.setTimeout(() => {
+      const clearDraft = () => {
+        src.setData({ type: "FeatureCollection", features: [] });
+        autoPolyDraftGeomRef.current = null;
+      };
+
+      if (polyParams) {
+        // --- Polygon mode: region grow ---
+        const maxPx = Math.round(polyParams.refArea * maxSurf);
+        const result = regionGrowFromSeed(
+          polyParams.imageData,
+          polyParams.seedX,
+          polyParams.seedY,
+          polyParams.signature,
+          tol,
+          maxPx,
+          polyParams.forbidden
+        );
+        if (!result) {
+          clearDraft();
+          return;
+        }
+        const contour = traceMaskContour(result);
+        if (!contour || contour.length < 4) {
+          clearDraft();
+          return;
+        }
+        const dpr = polyParams.dpr;
+        const ring: GeoJSON.Position[] = contour.map(([px, py]) => {
+          const ll = map.unproject([px / dpr, py / dpr]);
+          return [ll.lng, ll.lat];
+        });
+        let geom: GeoJSON.Geometry = {
+          type: "Polygon",
+          coordinates: [ring],
+        };
+        const diag = geomBboxDiagonal(geom);
+        geom = simplifyGeometry(geom, diag / 400);
+        autoPolyDraftGeomRef.current = geom;
+        src.setData({
+          type: "FeatureCollection",
+          features: [{ type: "Feature", properties: {}, geometry: geom }],
+        });
+      } else if (lineParams) {
+        // --- Line mode: A* least-cost path ---
+        // Re-sample the signature from the reference line with the current
+        // corridor width so changing the slider updates the cost map live.
+        const corridor = autoPolyCorridor;
+        const liveSig =
+          lineParams.refLinePix.length >= 2
+            ? sampleSignatureAlongLine(
+                lineParams.refImageData,
+                lineParams.refLinePix,
+                corridor
+              ) ?? lineParams.signature
+            : lineParams.signature;
+        // Rasterize the paint mask from geographic strokes into the
+        // current viewport's pixel space before each A* run.
+        const rasterizedMask =
+          paintMaskStrokesRef.current.length > 0
+            ? rasterizePaintMaskStrokes(
+                map,
+                paintMaskStrokesRef.current,
+                lineParams.imageData.width,
+                lineParams.imageData.height,
+                lineParams.dpr
+              )
+            : null;
+        const path = astarLeastCostPath(
+          lineParams.imageData,
+          liveSig,
+          tol,
+          lineParams.startX,
+          lineParams.startY,
+          lineParams.endX,
+          lineParams.endY,
+          rasterizedMask
+        );
+        if (!path) {
+          clearDraft();
+          return;
+        }
+        const dpr = lineParams.dpr;
+        const lineLL: GeoJSON.Position[] = path.map(([px, py]) => {
+          const ll = map.unproject([px / dpr, py / dpr]);
+          return [ll.lng, ll.lat];
+        });
+        let geom: GeoJSON.Geometry = {
+          type: "LineString",
+          coordinates: lineLL,
+        };
+        const diag = geomBboxDiagonal(geom);
+        geom = simplifyGeometry(geom, diag / 400);
+        autoPolyDraftGeomRef.current = geom;
+        src.setData({
+          type: "FeatureCollection",
+          features: [{ type: "Feature", properties: {}, geometry: geom }],
+        });
+      }
+    }, 80);
+
+    return () => window.clearTimeout(timer);
+  }, [autoPoly, autoPolyTolerance, autoPolyMaxSurface, autoPolyCorridor, autoPolyGrowSeq]);
+
+  // --------------------------------------------------------------------
+  // Vesselness trace mode. Two-click workflow: click start, click end.
+  // The Frangi vesselness filter detects road-like features in the
+  // satellite imagery; A* paths through the vesselness cost field.
+  // Mask painting (right-drag) is available, same as autoPoly line mode.
+  // --------------------------------------------------------------------
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady || !autoVessel) return;
+    if (gpkgTypeToDrawShape(geometryType) !== "LineString") return;
+
+    const canvas = map.getCanvas();
+    canvas.style.cursor = "crosshair";
+
+    const VD_SOURCE = "auto-vessel-draft";
+    const VD_LINE = "auto-vessel-draft-line";
+    const VS_SOURCE = "auto-vessel-start";
+    const VS_CIRCLE = "auto-vessel-start-circle";
+
+    if (!map.getSource(VD_SOURCE)) {
+      map.addSource(VD_SOURCE, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: VD_LINE,
+        type: "line",
+        source: VD_SOURCE,
+        paint: { "line-color": SELECTED_COLOR, "line-width": 2 },
+      });
+    }
+    if (!map.getSource(VS_SOURCE)) {
+      map.addSource(VS_SOURCE, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: VS_CIRCLE,
+        type: "circle",
+        source: VS_SOURCE,
+        paint: {
+          "circle-radius": 6,
+          "circle-color": "#22d3ee",
+          "circle-stroke-color": "#0f172a",
+          "circle-stroke-width": 2,
+        },
+      });
+    }
+
+    const setStartPreview = (lngLat: [number, number] | null) => {
+      const src = map.getSource(VS_SOURCE) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      if (!src) return;
+      src.setData(
+        lngLat
+          ? {
+              type: "FeatureCollection",
+              features: [
+                {
+                  type: "Feature",
+                  properties: {},
+                  geometry: { type: "Point", coordinates: lngLat },
+                },
+              ],
+            }
+          : { type: "FeatureCollection", features: [] }
+      );
+    };
+
+    const commitDraft = (): void => {
+      const geom = autoVesselDraftGeomRef.current;
+      if (!geom) return;
+      autoVesselDraftGeomRef.current = null;
+      autoVesselParamsRef.current = null;
+      const wrapped = wrapGeomToType(geom, geometryType);
+      const fc = activeFclassRef.current;
+      onAddedRef.current({
+        type: "Feature",
+        properties: fc ? { fclass: fc } : {},
+        geometry: wrapped,
+      });
+      const src = map.getSource(VD_SOURCE) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      src?.setData({ type: "FeatureCollection", features: [] });
+    };
+
+    let pendingStart: { lng: number; lat: number } | null = null;
+    let sampling = false;
+    let cancelled = false;
+
+    // ---- Magnifier (same as autoPoly line mode) ----
+    const LENS_CSS = 140;
+    const MAG = 4;
+    const SAMPLE_CSS = LENS_CSS / MAG;
+    let magnifierEl: HTMLDivElement | null = null;
+    let lensCanvas: HTMLCanvasElement | null = null;
+    let lensCtx: CanvasRenderingContext2D | null = null;
+    let frameCanvas: HTMLCanvasElement | null = null;
+    let frameCtx: CanvasRenderingContext2D | null = null;
+
+    const captureFrame = () => {
+      if (!frameCanvas || !frameCtx) return;
+      const w = canvas.width;
+      const h = canvas.height;
+      if (frameCanvas.width !== w || frameCanvas.height !== h) {
+        frameCanvas.width = w;
+        frameCanvas.height = h;
+      }
+      frameCtx.drawImage(canvas, 0, 0);
+    };
+
+    {
+      const dpr = window.devicePixelRatio || 1;
+      frameCanvas = document.createElement("canvas");
+      frameCanvas.width = canvas.width;
+      frameCanvas.height = canvas.height;
+      frameCtx = frameCanvas.getContext("2d");
+      captureFrame();
+      map.on("render", captureFrame);
+
+      magnifierEl = document.createElement("div");
+      magnifierEl.className = "glb-magnifier";
+      lensCanvas = document.createElement("canvas");
+      lensCanvas.width = Math.round(LENS_CSS * dpr);
+      lensCanvas.height = Math.round(LENS_CSS * dpr);
+      magnifierEl.appendChild(lensCanvas);
+      lensCtx = lensCanvas.getContext("2d");
+      const crossSvg = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "svg"
+      );
+      crossSvg.setAttribute("class", "glb-magnifier__crosshair");
+      crossSvg.setAttribute("viewBox", "0 0 140 140");
+      crossSvg.innerHTML = [
+        '<line x1="70" y1="0" x2="70" y2="60" stroke="rgba(255,255,255,0.7)" stroke-width="1"/>',
+        '<line x1="70" y1="80" x2="70" y2="140" stroke="rgba(255,255,255,0.7)" stroke-width="1"/>',
+        '<line x1="0" y1="70" x2="60" y2="70" stroke="rgba(255,255,255,0.7)" stroke-width="1"/>',
+        '<line x1="80" y1="70" x2="140" y2="70" stroke="rgba(255,255,255,0.7)" stroke-width="1"/>',
+        '<circle cx="70" cy="70" r="3" fill="none" stroke="rgba(255,255,255,0.8)" stroke-width="1"/>',
+      ].join("");
+      magnifierEl.appendChild(crossSvg);
+      wrapperRef.current?.appendChild(magnifierEl);
+    }
+
+    const showMagnifier = (show: boolean) => {
+      if (magnifierEl) magnifierEl.style.display = show ? "block" : "none";
+    };
+    const updateMagnifier = (cssX: number, cssY: number) => {
+      if (!magnifierEl || !lensCanvas || !lensCtx || !frameCanvas) return;
+      const dpr = window.devicePixelRatio || 1;
+      const srcSize = Math.round(SAMPLE_CSS * dpr);
+      const sx = Math.round(cssX * dpr - srcSize / 2);
+      const sy = Math.round(cssY * dpr - srcSize / 2);
+      const lw = lensCanvas.width;
+      const lh = lensCanvas.height;
+      lensCtx.clearRect(0, 0, lw, lh);
+      lensCtx.imageSmoothingEnabled = false;
+      lensCtx.drawImage(frameCanvas, sx, sy, srcSize, srcSize, 0, 0, lw, lh);
+      magnifierEl.style.left = `${cssX - LENS_CSS / 2}px`;
+      magnifierEl.style.top = `${cssY - LENS_CSS / 2}px`;
+    };
+    const onMagMouseMove = (e: maplibregl.MapMouseEvent) => {
+      // Hide the magnifier while right-drag painting is active.
+      if (maskDrawing) {
+        showMagnifier(false);
+        return;
+      }
+      showMagnifier(true);
+      updateMagnifier(e.point.x, e.point.y);
+    };
+    const onMagMouseLeave = () => showMagnifier(false);
+    map.on("mousemove", onMagMouseMove);
+    map.on("mouseout", onMagMouseLeave);
+
+    // ---- Mask painting (same as autoPoly line mode) ----
+    let maskOverlay: HTMLCanvasElement | null = null;
+    let maskOCtx: CanvasRenderingContext2D | null = null;
+    let maskOffscreen: HTMLCanvasElement | null = null;
+    let maskOffCtx: CanvasRenderingContext2D | null = null;
+    let maskDrawing = false;
+    let maskCurrentStroke: {
+      coords: [number, number][];
+      brushCss: number;
+      zoom: number;
+    } | null = null;
+    let maskLastPt: { x: number; y: number } | null = null;
+    const MASK_SAMPLE_DIST = 6;
+
+    const redrawMaskOverlay = () => {
+      if (!maskOCtx || !maskOffCtx || !maskOverlay || !maskOffscreen) return;
+      const w = canvas.width;
+      const h = canvas.height;
+      if (maskOverlay.width !== w || maskOverlay.height !== h) {
+        maskOverlay.width = w;
+        maskOverlay.height = h;
+      }
+      if (maskOffscreen.width !== w || maskOffscreen.height !== h) {
+        maskOffscreen.width = w;
+        maskOffscreen.height = h;
+      }
+      maskOCtx.clearRect(0, 0, w, h);
+      const strokes = paintMaskStrokesRef.current;
+      if (strokes.length === 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      const curZoom = map.getZoom();
+      maskOffCtx.clearRect(0, 0, w, h);
+      maskOffCtx.strokeStyle = "#3b82f6";
+      maskOffCtx.lineCap = "round";
+      maskOffCtx.lineJoin = "round";
+      for (const stroke of strokes) {
+        if (stroke.coords.length < 2) continue;
+        const scale = Math.pow(2, curZoom - stroke.zoom);
+        maskOffCtx.lineWidth = stroke.brushCss * scale * dpr;
+        maskOffCtx.beginPath();
+        for (let i = 0; i < stroke.coords.length; i++) {
+          const p = map.project(stroke.coords[i] as [number, number]);
+          const px = p.x * dpr;
+          const py = p.y * dpr;
+          if (i === 0) maskOffCtx.moveTo(px, py);
+          else maskOffCtx.lineTo(px, py);
+        }
+        maskOffCtx.stroke();
+      }
+      maskOCtx.globalAlpha = 0.35;
+      maskOCtx.drawImage(maskOffscreen, 0, 0);
+      maskOCtx.globalAlpha = 1;
+    };
+
+    const onMaskMouseDown = (e: MouseEvent) => {
+      if (e.button !== 2) return;
+      e.preventDefault();
+      e.stopPropagation();
+      maskDrawing = true;
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      maskLastPt = { x: sx, y: sy };
+      const ll = map.unproject([sx, sy]);
+      maskCurrentStroke = {
+        coords: [
+          [ll.lng, ll.lat],
+          [ll.lng, ll.lat],
+        ],
+        brushCss: paintMaskStrokeWidthRef.current,
+        zoom: map.getZoom(),
+      };
+      paintMaskStrokesRef.current.push(maskCurrentStroke);
+      redrawMaskOverlay();
+    };
+    const onMaskMouseMove = (e: MouseEvent) => {
+      if (!maskDrawing || !maskCurrentStroke || !maskLastPt) return;
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      if (Math.hypot(sx - maskLastPt.x, sy - maskLastPt.y) < MASK_SAMPLE_DIST)
+        return;
+      maskLastPt = { x: sx, y: sy };
+      const ll = map.unproject([sx, sy]);
+      maskCurrentStroke.coords.push([ll.lng, ll.lat]);
+      redrawMaskOverlay();
+    };
+    const onMaskMouseUp = (e: MouseEvent) => {
+      if (e.button !== 2 || !maskDrawing) return;
+      maskDrawing = false;
+      maskCurrentStroke = null;
+      maskLastPt = null;
+    };
+    const onMaskContextMenu = (e: Event) => e.preventDefault();
+
+    paintMaskStrokesRef.current = [];
+    map.dragRotate.disable();
+    maskOverlay = document.createElement("canvas");
+    maskOverlay.className = "glb-paint-mask-canvas";
+    maskOverlay.width = canvas.width;
+    maskOverlay.height = canvas.height;
+    wrapperRef.current?.appendChild(maskOverlay);
+    maskOCtx = maskOverlay.getContext("2d");
+    maskOffscreen = document.createElement("canvas");
+    maskOffscreen.width = canvas.width;
+    maskOffscreen.height = canvas.height;
+    maskOffCtx = maskOffscreen.getContext("2d");
+    map.on("render", redrawMaskOverlay);
+    canvas.addEventListener("mousedown", onMaskMouseDown);
+    window.addEventListener("mousemove", onMaskMouseMove);
+    window.addEventListener("mouseup", onMaskMouseUp);
+    canvas.addEventListener("contextmenu", onMaskContextMenu);
+
+    // ---- Overlay-hiding helper for satellite capture ----
+    const collectOverlayLayers = (): string[] => {
+      const style = map.getStyle();
+      const ids: string[] = [];
+      for (const layer of style.layers ?? []) {
+        const t = layer.type as string;
+        if (
+          t === "raster" ||
+          t === "background" ||
+          t === "hillshade" ||
+          t === "color-relief"
+        )
+          continue;
+        ids.push(layer.id);
+      }
+      return ids;
+    };
+
+    const captureSatelliteImageData = async (): Promise<ImageData | null> => {
+      const ids = collectOverlayLayers();
+      const prev: Array<{ id: string; vis: string }> = [];
+      for (const id of ids) {
+        const v =
+          (map.getLayoutProperty(id, "visibility") as string | undefined) ??
+          "visible";
+        prev.push({ id, vis: v });
+        map.setLayoutProperty(id, "visibility", "none");
+      }
+      try {
+        map.triggerRepaint();
+        await new Promise<void>((resolve) => {
+          map.once("idle", () => resolve());
+        });
+        if (cancelled) return null;
+        const gl = map.getCanvas();
+        const w = gl.width;
+        const h = gl.height;
+        const temp = document.createElement("canvas");
+        temp.width = w;
+        temp.height = h;
+        const ctx = temp.getContext("2d");
+        if (!ctx) return null;
+        ctx.drawImage(gl, 0, 0);
+        try {
+          return ctx.getImageData(0, 0, w, h);
+        } catch {
+          return null;
+        }
+      } finally {
+        for (const { id, vis } of prev) {
+          if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis);
+        }
+      }
+    };
+
+    // ---- Click handler: 2-click workflow ----
+    const onMapClick = async (e: maplibregl.MapMouseEvent) => {
+      if (sampling) return;
+      sampling = true;
+      try {
+        const dpr = window.devicePixelRatio || 1;
+        if (!pendingStart) {
+          // Click 1: record start.
+          commitDraft();
+          pendingStart = { lng: e.lngLat.lng, lat: e.lngLat.lat };
+          setStartPreview([e.lngLat.lng, e.lngLat.lat]);
+          return;
+        }
+        // Click 2: capture image, store params, bump sequence.
+        const img = await captureSatelliteImageData();
+        if (!img || cancelled) return;
+        const startPt = map.project([pendingStart.lng, pendingStart.lat]);
+        const sx = Math.round(startPt.x * dpr);
+        const sy = Math.round(startPt.y * dpr);
+        const ex = Math.round(e.point.x * dpr);
+        const ey = Math.round(e.point.y * dpr);
+        pendingStart = null;
+        setStartPreview(null);
+        autoVesselParamsRef.current = {
+          startX: sx,
+          startY: sy,
+          endX: ex,
+          endY: ey,
+          imageData: img,
+          dpr,
+        };
+        setAutoVesselSeq((n) => n + 1);
+      } finally {
+        sampling = false;
+      }
+    };
+
+    map.on("click", onMapClick);
+
+    return () => {
+      cancelled = true;
+      commitDraft();
+      map.off("click", onMapClick);
+      canvas.style.cursor = "";
+      autoVesselParamsRef.current = null;
+      autoVesselDraftGeomRef.current = null;
+
+      // Magnifier cleanup
+      map.off("render", captureFrame);
+      map.off("mousemove", onMagMouseMove);
+      map.off("mouseout", onMagMouseLeave);
+      if (magnifierEl?.parentNode) magnifierEl.parentNode.removeChild(magnifierEl);
+      frameCanvas = null;
+      frameCtx = null;
+
+      // Mask painting cleanup
+      map.off("render", redrawMaskOverlay);
+      canvas.removeEventListener("mousedown", onMaskMouseDown);
+      window.removeEventListener("mousemove", onMaskMouseMove);
+      window.removeEventListener("mouseup", onMaskMouseUp);
+      canvas.removeEventListener("contextmenu", onMaskContextMenu);
+      map.dragRotate.enable();
+      if (maskOverlay?.parentNode) maskOverlay.parentNode.removeChild(maskOverlay);
+      paintMaskStrokesRef.current = [];
+
+      for (const layerId of [VD_LINE, VS_CIRCLE]) {
+        if (map.getLayer(layerId)) map.removeLayer(layerId);
+      }
+      for (const srcId of [VD_SOURCE, VS_SOURCE]) {
+        if (map.getSource(srcId)) map.removeSource(srcId);
+      }
+    };
+  }, [autoVessel, geometryType, styleReady]);
+
+  // Secondary vesselness effect: computes the Frangi filter and A* path
+  // whenever the scale slider changes or new endpoints are clicked.
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !autoVessel) return;
+    const params = autoVesselParamsRef.current;
+    const src = map.getSource("auto-vessel-draft") as
+      | maplibregl.GeoJSONSource
+      | undefined;
+    if (!params || !src) {
+      if (src) src.setData({ type: "FeatureCollection", features: [] });
+      autoVesselDraftGeomRef.current = null;
+      return;
+    }
+
+    const scaleMax = vesselScaleMax;
+    const timer = window.setTimeout(() => {
+      const clearDraft = () => {
+        src.setData({ type: "FeatureCollection", features: [] });
+        autoVesselDraftGeomRef.current = null;
+      };
+
+      const dpr = params.dpr;
+      const rasterizedMask =
+        paintMaskStrokesRef.current.length > 0
+          ? rasterizePaintMaskStrokes(
+              map,
+              paintMaskStrokesRef.current,
+              params.imageData.width,
+              params.imageData.height,
+              dpr
+            )
+          : null;
+
+      // Re-use cached vesselness if the scale hasn't changed.
+      let vMap: Float32Array;
+      if (
+        params.cachedVesselness &&
+        params.cachedScaleMax === scaleMax
+      ) {
+        vMap = params.cachedVesselness;
+      } else {
+        vMap = computeVesselnessMap(
+          params.imageData,
+          1.0,
+          scaleMax,
+          5,
+          rasterizedMask
+        );
+        params.cachedVesselness = vMap;
+        params.cachedScaleMax = scaleMax;
+      }
+
+      const path = astarVesselnessPath(
+        vMap,
+        params.imageData.width,
+        params.imageData.height,
+        params.startX,
+        params.startY,
+        params.endX,
+        params.endY,
+        rasterizedMask
+      );
+      if (!path) {
+        clearDraft();
+        return;
+      }
+      const lineLL: GeoJSON.Position[] = path.map(([px, py]) => {
+        const ll = map.unproject([px / dpr, py / dpr]);
+        return [ll.lng, ll.lat];
+      });
+      let geom: GeoJSON.Geometry = {
+        type: "LineString",
+        coordinates: lineLL,
+      };
+      const diag = geomBboxDiagonal(geom);
+      geom = simplifyGeometry(geom, diag / 400);
+      autoVesselDraftGeomRef.current = geom;
+      src.setData({
+        type: "FeatureCollection",
+        features: [{ type: "Feature", properties: {}, geometry: geom }],
+      });
+    }, 120);
+
+    return () => window.clearTimeout(timer);
+  }, [autoVessel, vesselScaleMax, autoVesselSeq]);
+
+  // --------------------------------------------------------------------
   // Simplify mode — click a feature to load it into the edit-source as a
   // preview. The slider drives RDP tolerance; moving it always restarts
   // from the original (cloned) geometry, so the user can scrub back and
@@ -3983,12 +6530,18 @@ export function GisGlobeViewport({
       const t = terrainBtnRef.current;
       const d = demBtnRef.current;
       const s = simplifyBtnRef.current;
+      const a = autoPolyBtnRef.current;
       if (t && t.offsetWidth > 0)
         setTerrainSliderLeft(t.offsetLeft + t.offsetWidth / 2);
       if (d && d.offsetWidth > 0)
         setDemSliderLeft(d.offsetLeft + d.offsetWidth / 2);
       if (s && s.offsetWidth > 0)
         setSimplifySliderLeft(s.offsetLeft + s.offsetWidth / 2);
+      if (a && a.offsetWidth > 0)
+        setAutoPolySliderLeft(a.offsetLeft + a.offsetWidth / 2);
+      const vb = autoVesselBtnRef.current;
+      if (vb && vb.offsetWidth > 0)
+        setAutoVesselSliderLeft(vb.offsetLeft + vb.offsetWidth / 2);
     };
     recompute();
     const ro = new ResizeObserver(recompute);
@@ -4202,6 +6755,8 @@ export function GisGlobeViewport({
             saving ||
             editing ||
             freehand ||
+            autoPoly ||
+            autoVessel ||
             simplifying ||
             importingDem ||
             deleting
@@ -4223,12 +6778,66 @@ export function GisGlobeViewport({
             saving ||
             editing ||
             adding ||
+            autoPoly ||
+            autoVessel ||
             simplifying ||
             importingDem ||
             deleting
           }
           active={freehand}
           onClick={() => onToggleFreehandRef.current()}
+        />
+        <ToolbarButton
+          ref={autoPolyBtnRef}
+          title={
+            canEdit === false
+              ? "Select a single layer to edit"
+              : autoPoly
+                ? "Finish auto-trace"
+                : gpkgTypeToDrawShape(geometryType) === "Polygon"
+                  ? "Auto-trace region (click reference polygon, then click inside a similar region)"
+                  : gpkgTypeToDrawShape(geometryType) === "LineString"
+                    ? "Auto-trace line (click reference road, then click start + end points)"
+                    : "Auto-trace requires a polygon or line layer"
+          }
+          icon={AUTO_POLY_ICON}
+          disabled={
+            canEdit === false ||
+            gpkgTypeToDrawShape(geometryType) === "Point" ||
+            saving ||
+            editing ||
+            adding ||
+            freehand ||
+            autoVessel ||
+            simplifying ||
+            importingDem ||
+            deleting
+          }
+          active={autoPoly}
+          onClick={() => onToggleAutoPolyRef.current()}
+        />
+        <ToolbarButton
+          ref={autoVesselBtnRef}
+          title={
+            autoVessel
+              ? "Finish vesselness trace"
+              : "Vesselness trace (paint road, click start + end)"
+          }
+          icon={VESSEL_TRACE_ICON}
+          disabled={
+            canEdit === false ||
+            gpkgTypeToDrawShape(geometryType) !== "LineString" ||
+            saving ||
+            editing ||
+            adding ||
+            freehand ||
+            autoPoly ||
+            simplifying ||
+            importingDem ||
+            deleting
+          }
+          active={autoVessel}
+          onClick={() => onToggleAutoVesselRef.current()}
         />
         <ToolbarButton
           title={
@@ -4244,6 +6853,8 @@ export function GisGlobeViewport({
             saving ||
             adding ||
             freehand ||
+            autoPoly ||
+            autoVessel ||
             simplifying ||
             importingDem ||
             deleting
@@ -4266,6 +6877,8 @@ export function GisGlobeViewport({
             saving ||
             adding ||
             freehand ||
+            autoPoly ||
+            autoVessel ||
             editing ||
             importingDem ||
             deleting
@@ -4287,6 +6900,8 @@ export function GisGlobeViewport({
             saving ||
             adding ||
             freehand ||
+            autoPoly ||
+            autoVessel ||
             editing ||
             simplifying ||
             importingDem ||
@@ -4306,6 +6921,8 @@ export function GisGlobeViewport({
             saving ||
             adding ||
             freehand ||
+            autoPoly ||
+            autoVessel ||
             editing ||
             simplifying ||
             importingDem ||
@@ -4326,6 +6943,8 @@ export function GisGlobeViewport({
             saving ||
             adding ||
             freehand ||
+            autoPoly ||
+            autoVessel ||
             editing ||
             simplifying ||
             deleting
@@ -4410,6 +7029,143 @@ export function GisGlobeViewport({
             <span className="glb-terrain-slider-wrap__value">
               {terrainExaggeration.toFixed(1)}
             </span>
+          </div>
+        )}
+
+
+        {autoPoly && autoPolySliderLeft != null && (
+          <div
+            className="glb-terrain-slider-wrap"
+            // eslint-disable-next-line template/no-jsx-style-prop -- runtime offset from button position
+            style={{ left: `${autoPolySliderLeft}px` }}
+          >
+            <span className="glb-terrain-slider-wrap__label">Tol</span>
+            <input
+              type="range"
+              min={0.25}
+              max={3}
+              step={0.05}
+              value={autoPolyTolerance}
+              onChange={(e) => setAutoPolyTolerance(Number(e.target.value))}
+            />
+            <span className="glb-terrain-slider-wrap__value">
+              {autoPolyTolerance.toFixed(2)}
+            </span>
+            {gpkgTypeToDrawShape(geometryType) === "Polygon" && (
+              <>
+                <span className="glb-autotrace-divider" />
+                <span className="glb-terrain-slider-wrap__label">
+                  Max ×
+                </span>
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  step={0.5}
+                  value={autoPolyMaxSurface}
+                  onChange={(e) =>
+                    setAutoPolyMaxSurface(Number(e.target.value))
+                  }
+                />
+                <span className="glb-terrain-slider-wrap__value">
+                  {autoPolyMaxSurface.toFixed(1)}
+                </span>
+              </>
+            )}
+            {gpkgTypeToDrawShape(geometryType) === "LineString" && (
+              <>
+                <span className="glb-autotrace-divider" />
+                <span className="glb-terrain-slider-wrap__label">
+                  Brush
+                </span>
+                <input
+                  type="range"
+                  min={10}
+                  max={80}
+                  step={1}
+                  value={paintMaskStrokeWidth}
+                  onChange={(e) =>
+                    setPaintMaskStrokeWidth(Number(e.target.value))
+                  }
+                />
+                <span className="glb-terrain-slider-wrap__value">
+                  {paintMaskStrokeWidth}px
+                </span>
+                <button
+                  type="button"
+                  className="glb-terrain-slider-wrap__clear-btn"
+                  title="Clear mask"
+                  onClick={() => {
+                    paintMaskStrokesRef.current = [];
+                    mapRef.current?.triggerRepaint();
+                  }}
+                >
+                  Clear
+                </button>
+                <span className="glb-autotrace-divider" />
+                <span className="glb-terrain-slider-wrap__label">
+                  Width
+                </span>
+                <input
+                  type="range"
+                  min={1}
+                  max={5}
+                  step={1}
+                  value={autoPolyCorridor}
+                  onChange={(e) =>
+                    setAutoPolyCorridor(Number(e.target.value))
+                  }
+                />
+                <span className="glb-terrain-slider-wrap__value">
+                  {autoPolyCorridor}px
+                </span>
+              </>
+            )}
+          </div>
+        )}
+
+        {autoVessel && autoVesselSliderLeft != null && (
+          <div
+            className="glb-terrain-slider-wrap"
+            // eslint-disable-next-line template/no-jsx-style-prop -- runtime offset from button position
+            style={{ left: `${autoVesselSliderLeft}px` }}
+          >
+            <span className="glb-terrain-slider-wrap__label">Scale</span>
+            <input
+              type="range"
+              min={1}
+              max={6}
+              step={0.5}
+              value={vesselScaleMax}
+              onChange={(e) => setVesselScaleMax(Number(e.target.value))}
+            />
+            <span className="glb-terrain-slider-wrap__value">
+              {vesselScaleMax.toFixed(1)}
+            </span>
+            <span className="glb-autotrace-divider" />
+            <span className="glb-terrain-slider-wrap__label">Brush</span>
+            <input
+              type="range"
+              min={10}
+              max={80}
+              step={1}
+              value={paintMaskStrokeWidth}
+              onChange={(e) => setPaintMaskStrokeWidth(Number(e.target.value))}
+            />
+            <span className="glb-terrain-slider-wrap__value">
+              {paintMaskStrokeWidth}px
+            </span>
+            <button
+              type="button"
+              className="glb-terrain-slider-wrap__clear-btn"
+              title="Clear mask"
+              onClick={() => {
+                paintMaskStrokesRef.current = [];
+                mapRef.current?.triggerRepaint();
+              }}
+            >
+              Clear
+            </button>
           </div>
         )}
 

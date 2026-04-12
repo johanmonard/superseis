@@ -152,6 +152,8 @@ export default function GisGlobePage() {
   const [editing, setEditing] = React.useState(false);
   const [adding, setAdding] = React.useState(false);
   const [freehand, setFreehand] = React.useState(false);
+  const [autoPoly, setAutoPoly] = React.useState(false);
+  const [autoVessel, setAutoVessel] = React.useState(false);
   const [simplifying, setSimplifying] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
   const [reclassifying, setReclassifying] = React.useState(false);
@@ -360,6 +362,8 @@ export default function GisGlobePage() {
       setEditing(false);
       setAdding(false);
       setFreehand(false);
+      setAutoPoly(false);
+      setAutoVessel(false);
       setSimplifying(false);
       setDeleting(false);
     }
@@ -666,6 +670,8 @@ export default function GisGlobePage() {
       setDirty(true);
       setAdding(false);
       setFreehand(false);
+      // Keep autoPoly on — the user probably wants to trace several regions
+      // in a row without reactivating the tool between each one.
     },
     [insertIntoEditDb]
   );
@@ -846,6 +852,16 @@ export default function GisGlobePage() {
     setFreehand((f) => !f);
   }, [canEdit]);
 
+  const handleToggleAutoPoly = React.useCallback(() => {
+    if (!canEdit) return;
+    setAutoPoly((v) => !v);
+  }, [canEdit]);
+
+  const handleToggleAutoVessel = React.useCallback(() => {
+    if (!canEdit) return;
+    setAutoVessel((v) => !v);
+  }, [canEdit]);
+
   const handleToggleSimplify = React.useCallback(() => {
     if (!canEdit) return;
     setSimplifying((s) => !s);
@@ -1004,7 +1020,14 @@ export default function GisGlobePage() {
 
   const featureCount = combinedData?.features.length ?? 0;
   const selectionLocked =
-    editing || adding || freehand || simplifying || deleting || reclassifying;
+    editing ||
+    adding ||
+    freehand ||
+    autoPoly ||
+    autoVessel ||
+    simplifying ||
+    deleting ||
+    reclassifying;
 
   return (
     <ProjectSettingsPage
@@ -1020,6 +1043,8 @@ export default function GisGlobePage() {
           editing={editing}
           adding={adding}
           freehand={freehand}
+          autoPoly={autoPoly}
+          autoVessel={autoVessel}
           simplifying={simplifying}
           importingDem={importingDem}
           deleting={deleting}
@@ -1036,6 +1061,8 @@ export default function GisGlobePage() {
           onToggleEdit={handleToggleEdit}
           onToggleAdd={handleToggleAdd}
           onToggleFreehand={handleToggleFreehand}
+          onToggleAutoPoly={handleToggleAutoPoly}
+          onToggleAutoVessel={handleToggleAutoVessel}
           onToggleSimplify={handleToggleSimplify}
           onToggleDelete={handleToggleDelete}
           onToggleReclassify={handleToggleReclassify}
