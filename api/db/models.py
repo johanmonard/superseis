@@ -4,7 +4,7 @@ Domain models — Company (tenant) and User for multi-tenant B2B auth.
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -69,22 +69,6 @@ class Project(Base):
     def __repr__(self) -> str:
         return f"<Project id={self.id} name={self.name!r}>"
 
-
-class ProjectSection(Base):
-    """Stores one JSON blob per (project, section) pair."""
-
-    __tablename__ = "project_sections"
-    __table_args__ = (
-        UniqueConstraint("project_id", "section", name="uq_project_section"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    section: Mapped[str] = mapped_column(String(100), nullable=False)
-    data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
-    )
 
 
 class Item(Base):

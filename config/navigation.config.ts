@@ -52,6 +52,7 @@ export const navigation: NavigationItem[] = [
         icon: "settings",
         children: [
           { label: "Definition", href: "/project/definition", icon: "dashboards" },
+          { label: "Files", href: "/project/files", icon: "folderOpen" },
           { label: "Partitioning", href: "/project/partitioning", icon: "grid" },
           { label: "Design", href: "/project/design", icon: "compass" },
           { label: "Terrain", href: "/project/terrain", icon: "mountain" },

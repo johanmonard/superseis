@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.db.engine import async_session_factory, engine
 from api.db.models import Base
+from api.dojo import init_project_service
 from api.middleware import RateLimitMiddleware
 from api.routes.auth import router as auth_router
 from api.routes.items import router as items_router
@@ -19,6 +20,10 @@ async def lifespan(application: FastAPI):
     from api.bootstrap import bootstrap_super_admin
     async with async_session_factory() as session:
         await bootstrap_super_admin(session)
+
+    # Initialize dojo ProjectService
+    init_project_service(storage_dir=os.environ.get("DOJO_STORAGE_DIR"))
+
     yield
 
 app = FastAPI(
@@ -65,6 +70,7 @@ app.include_router(items_router)
 from api.routes.admin_companies import router as admin_companies_router
 from api.routes.admin_users import router as admin_users_router
 from api.routes.project import router as project_router
+from api.routes.project_files import router as project_files_router
 from api.routes.project_sections import router as project_sections_router
 
 
@@ -74,6 +80,7 @@ from api.routes.project_sections import router as project_sections_router
 app.include_router(admin_companies_router)
 app.include_router(admin_users_router)
 app.include_router(project_router)
+app.include_router(project_files_router)
 app.include_router(project_sections_router)
 
 

@@ -11,10 +11,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.dojo import get_dojo_project_service
 from api.auth import AuthPrincipal, get_current_user
 from api.db.engine import get_db
 from api.db.models import Project
 from api.tenant import get_company_id
+
+from dojo.v3.services.project_service import ProjectService
 
 
 # ---------------------------------------------------------------------------
@@ -56,11 +59,26 @@ async def create_project(
     payload: ProjectCreate,
     db: AsyncSession = Depends(get_db),
     principal: AuthPrincipal = Depends(get_current_user),
+    dojo_svc: ProjectService = Depends(get_dojo_project_service),
 ):
     row = Project(name=payload.name.strip(), company_id=principal.company_id)
     db.add(row)
     await db.commit()
     await db.refresh(row)
+
+    # Create the dojo project with initial metadata
+    dojo_svc.create(
+        project_id=row.id,
+        config_data={
+            "metadata": {
+                "root_path": dojo_svc._storage_dir.as_posix() if dojo_svc._storage_dir else "",
+                "company": principal.company_name,
+                "user_name": principal.email,
+                "project_name": row.name,
+            }
+        },
+    )
+
     return row
 
 
@@ -69,6 +87,7 @@ async def delete_project(
     item_id: int,
     db: AsyncSession = Depends(get_db),
     company_id: int = Depends(get_company_id),
+    dojo_svc: ProjectService = Depends(get_dojo_project_service),
 ):
     result = await db.execute(
         select(Project).where(Project.id == item_id, Project.company_id == company_id)
@@ -76,5 +95,12 @@ async def delete_project(
     row = result.scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    # Delete the dojo project (ignore if not found — defensive)
+    try:
+        dojo_svc.delete(item_id)
+    except Exception:
+        pass
+
     await db.delete(row)
     await db.commit()

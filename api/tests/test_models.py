@@ -57,27 +57,3 @@ async def test_company_has_users_relationship(db_session):
     assert len(company.users) == 2
 
 
-@pytest.mark.asyncio
-async def test_create_project_section(db_session):
-    company = Company(name="Test Co", is_active=True, max_users=10)
-    db_session.add(company)
-    await db_session.commit()
-
-    project = Project(name="Test Project", company_id=company.id)
-    db_session.add(project)
-    await db_session.commit()
-
-    from api.db.models import ProjectSection
-    section = ProjectSection(
-        project_id=project.id,
-        section="definition",
-        data={"client": "Acme", "country": "France"},
-    )
-    db_session.add(section)
-    await db_session.commit()
-
-    result = await db_session.execute(select(ProjectSection))
-    saved = result.scalar_one()
-    assert saved.section == "definition"
-    assert saved.data["client"] == "Acme"
-    assert saved.updated_at is not None

@@ -2,6 +2,8 @@
 
 import * as React from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { useQueries } from "@tanstack/react-query";
+import { fetchProjectSection } from "../../services/api/project-sections";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
@@ -30,7 +32,7 @@ import { useThemePreferences } from "../../lib/use-theme-preferences";
 import type { ThemeDensity } from "../../lib/theme";
 import { getApiErrorMessage } from "../../services/api/auth";
 
-const { folderOpen: FolderOpen, logOut: LogOut, rows3: Rows3, save: Save, upload: Upload, x: X } = appIcons;
+const { braces: Braces, folderOpen: FolderOpen, logOut: LogOut, rows3: Rows3, save: Save, upload: Upload, x: X } = appIcons;
 
 export interface WorkspacePageHeaderProps {
   session: { email: string; is_admin: boolean };
@@ -80,6 +82,7 @@ export function WorkspacePageHeader({
   const userInitials = session.email.slice(0, 2).toUpperCase();
   const isProjectPage = pathname.startsWith("/project") || pathname === "/";
   const [showFilesDialog, setShowFilesDialog] = React.useState(false);
+  const [showPayloadDialog, setShowPayloadDialog] = React.useState(false);
 
   return (
     <>
@@ -153,6 +156,16 @@ export function WorkspacePageHeader({
           ) : null}
         </div>
         <div className="flex items-center justify-end gap-2">
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="sm" aria-label="Page payload" onClick={() => setShowPayloadDialog(true)}>
+                  <Braces size={16} strokeWidth={1.75} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Page payload</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <Popover>
             <PopoverTrigger asChild>
               <Button variant="ghost" size="sm" aria-label="Change density">
@@ -236,6 +249,13 @@ export function WorkspacePageHeader({
       <ProjectFilesDialog
         open={showFilesDialog}
         onOpenChange={setShowFilesDialog}
+        projectId={activeProject?.id ?? null}
+      />
+      <PagePayloadDialog
+        open={showPayloadDialog}
+        onOpenChange={setShowPayloadDialog}
+        pathname={pathname}
+        projectId={activeProject?.id ?? null}
       />
     </>
   );
@@ -245,7 +265,12 @@ export function WorkspacePageHeader({
    Project Files Dialog
    ------------------------------------------------------------------ */
 
-type FileCategory = "polygons" | "poi" | "layers";
+import type { FileCategory } from "../../services/api/project-files";
+import {
+  useProjectFiles,
+  useUploadProjectFile,
+  useDeleteProjectFile,
+} from "../../services/query/project-files";
 
 const FILE_CATEGORIES: { key: FileCategory; label: string }[] = [
   { key: "polygons", label: "Polygons" },
@@ -253,46 +278,41 @@ const FILE_CATEGORIES: { key: FileCategory; label: string }[] = [
   { key: "layers", label: "Layers" },
 ];
 
-const DUMMY_FILES: Record<FileCategory, string[]> = {
-  polygons: ["exclusion_zone_north.shp", "survey_boundary_v2.geojson"],
-  poi: ["well_locations.csv", "camp_sites.kml"],
-  layers: ["elevation_model.tif"],
-};
+const ACCEPTED_EXTENSIONS = ".gpkg,.kml,.zip";
 
 function ProjectFilesDialog({
   open,
   onOpenChange,
+  projectId,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  projectId: number | null;
 }) {
+  const { data: files } = useProjectFiles(open ? projectId : null);
+  const uploadMutation = useUploadProjectFile(projectId);
+  const deleteMutation = useDeleteProjectFile(projectId);
+
   const fileInputRefs = React.useRef<Record<FileCategory, HTMLInputElement | null>>({
     polygons: null,
     poi: null,
     layers: null,
   });
 
-  const [files, setFiles] = React.useState<Record<FileCategory, string[]>>(DUMMY_FILES);
-
   const handleUpload = React.useCallback(
     (category: FileCategory, fileList: FileList) => {
-      const names = Array.from(fileList).map((f) => f.name);
-      setFiles((prev) => ({
-        ...prev,
-        [category]: [...prev[category], ...names],
-      }));
+      Array.from(fileList).forEach((file) => {
+        uploadMutation.mutate({ category, file });
+      });
     },
-    []
+    [uploadMutation]
   );
 
   const handleRemove = React.useCallback(
-    (category: FileCategory, index: number) => {
-      setFiles((prev) => ({
-        ...prev,
-        [category]: prev[category].filter((_, i) => i !== index),
-      }));
+    (category: FileCategory, filename: string) => {
+      deleteMutation.mutate({ category, filename });
     },
-    []
+    [deleteMutation]
   );
 
   return (
@@ -301,60 +321,164 @@ function ProjectFilesDialog({
         <DialogTitle>Project Files</DialogTitle>
       </DialogHeader>
       <DialogBody className="min-h-0 flex-1 overflow-y-auto">
-        <div className="flex flex-col gap-[var(--space-4)]">
-          {FILE_CATEGORIES.map(({ key, label }) => (
-            <div key={key} className="flex flex-col gap-[var(--space-2)]">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-                  {label}
-                </span>
-                <input
-                  ref={(el) => { fileInputRefs.current[key] = el; }}
-                  type="file"
-                  multiple
-                  className="hidden"
-                  onChange={(e) => {
-                    if (e.target.files?.length) handleUpload(key, e.target.files);
-                    e.target.value = "";
-                  }}
-                />
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => fileInputRefs.current[key]?.click()}
-                >
-                  <Upload size={12} className="mr-[var(--space-1)]" />
-                  Upload
-                </Button>
-              </div>
-              {files[key].length === 0 ? (
-                <p className="px-[var(--space-3)] py-[var(--space-2)] text-xs text-[var(--color-text-muted)]">
-                  No files uploaded.
-                </p>
-              ) : (
-                <div className="flex max-h-36 flex-col gap-[var(--space-1)] overflow-y-auto">
-                  {files[key].map((name, i) => (
-                    <div
-                      key={`${name}-${i}`}
-                      className="flex shrink-0 items-center justify-between rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)] px-[var(--space-3)] py-[var(--space-2)]"
+        {!projectId ? (
+          <p className="text-sm text-[var(--color-text-muted)]">No active project.</p>
+        ) : (
+          <div className="flex flex-col gap-[var(--space-4)]">
+            {FILE_CATEGORIES.map(({ key, label }) => {
+              const categoryFiles = files?.[key] ?? [];
+              return (
+                <div key={key} className="flex flex-col gap-[var(--space-2)]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+                      {label}
+                    </span>
+                    <input
+                      ref={(el) => { fileInputRefs.current[key] = el; }}
+                      type="file"
+                      multiple
+                      accept={ACCEPTED_EXTENSIONS}
+                      className="hidden"
+                      onChange={(e) => {
+                        if (e.target.files?.length) handleUpload(key, e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={uploadMutation.isPending}
+                      onClick={() => fileInputRefs.current[key]?.click()}
                     >
-                      <span className="truncate text-xs text-[var(--color-text-secondary)]">
-                        {name}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleRemove(key, i)}
-                        className="shrink-0 ml-[var(--space-2)] text-[var(--color-text-muted)] hover:text-[var(--color-status-danger)]"
-                      >
-                        <X size={12} />
-                      </button>
+                      <Upload size={12} className="mr-[var(--space-1)]" />
+                      {uploadMutation.isPending ? "Uploading…" : "Upload"}
+                    </Button>
+                  </div>
+                  {categoryFiles.length === 0 ? (
+                    <p className="px-[var(--space-3)] py-[var(--space-2)] text-xs text-[var(--color-text-muted)]">
+                      No files uploaded.
+                    </p>
+                  ) : (
+                    <div className="flex max-h-36 flex-col gap-[var(--space-1)] overflow-y-auto">
+                      {categoryFiles.map((name) => (
+                        <div
+                          key={name}
+                          className="flex shrink-0 items-center justify-between rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)] px-[var(--space-3)] py-[var(--space-2)]"
+                        >
+                          <span className="truncate text-xs text-[var(--color-text-secondary)]">
+                            {name}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemove(key, name)}
+                            disabled={deleteMutation.isPending}
+                            className="shrink-0 ml-[var(--space-2)] text-[var(--color-text-muted)] hover:text-[var(--color-status-danger)]"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
+              );
+            })}
+          </div>
+        )}
+        {uploadMutation.error ? (
+          <p className="mt-[var(--space-2)] text-xs text-[var(--color-status-danger)]">
+            {(uploadMutation.error as Error).message}
+          </p>
+        ) : null}
+      </DialogBody>
+      <DialogFooter>
+        <Button variant="secondary" size="sm" onClick={() => onOpenChange(false)}>
+          Close
+        </Button>
+      </DialogFooter>
+    </Dialog>
+  );
+}
+
+/* ------------------------------------------------------------------
+   Page Payload Dialog
+   ------------------------------------------------------------------ */
+
+/** Map route segments to the section key(s) stored in the query cache. */
+const ROUTE_SECTIONS: Record<string, string[]> = {
+  definition: ["definition"],
+  partitioning: ["partitioning"],
+  design: ["design", "design_options"],
+  terrain: ["terrain"],
+  osm: ["osm"],
+  layers: ["layers"],
+  maps: ["maps"],
+  offsetters: ["offsetters"],
+  crew: ["crew"],
+};
+
+function getSectionSegment(pathname: string): string | null {
+  const match = pathname.match(/^\/project\/([^/]+)/);
+  return match?.[1] ?? null;
+}
+
+function PagePayloadDialog({
+  open,
+  onOpenChange,
+  pathname,
+  projectId,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  pathname: string;
+  projectId: number | null;
+}) {
+  const segment = getSectionSegment(pathname);
+  const sectionKeys = React.useMemo(
+    () => (segment ? ROUTE_SECTIONS[segment] ?? [] : []),
+    [segment],
+  );
+
+  const queries = useQueries({
+    queries: sectionKeys.map((key) => ({
+      queryKey: ["project-sections", projectId, key] as const,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        fetchProjectSection(projectId!, key, signal),
+      enabled: open && projectId !== null && projectId > 0,
+    })),
+  });
+
+  const isLoading = queries.some((q) => q.isLoading);
+
+  const payload = React.useMemo(() => {
+    if (sectionKeys.length === 0) return null;
+    const result: Record<string, unknown> = {};
+    for (let i = 0; i < sectionKeys.length; i++) {
+      result[sectionKeys[i]] = queries[i]?.data?.data ?? null;
+    }
+    return result;
+  }, [sectionKeys, queries]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange} className="max-w-2xl max-h-[80vh] flex flex-col">
+      <DialogHeader>
+        <DialogTitle>
+          Payload{" "}
+          <span className="font-normal text-[var(--color-text-muted)]">— {segment ?? "unknown"}</span>
+        </DialogTitle>
+      </DialogHeader>
+      <DialogBody className="min-h-0 flex-1 overflow-y-auto">
+        {!segment || sectionKeys.length === 0 ? (
+          <p className="text-sm text-[var(--color-text-muted)]">
+            No section data available for this page.
+          </p>
+        ) : isLoading ? (
+          <p className="text-sm text-[var(--color-text-muted)]">Loading…</p>
+        ) : (
+          <pre className="overflow-auto rounded-[var(--radius-sm)] bg-[var(--color-bg-elevated)] p-[var(--space-4)] text-xs leading-relaxed text-[var(--color-text-secondary)]">
+            {JSON.stringify(payload, null, 2)}
+          </pre>
+        )}
       </DialogBody>
       <DialogFooter>
         <Button variant="secondary" size="sm" onClick={() => onOpenChange(false)}>

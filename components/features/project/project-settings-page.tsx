@@ -127,7 +127,7 @@ export function ProjectSettingsPage({
       )}
 
       {/* Viewport panel */}
-      <div className="min-w-0 flex-1 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
+      <div className="relative min-w-0 flex-1 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
         {viewport ?? (
           <div className="flex h-full flex-col items-center justify-center p-[var(--space-4)]">
             <ViewportPlaceholder />

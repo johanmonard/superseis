@@ -51,6 +51,11 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
     subtitle: "Project base information.",
   },
   {
+    href: "/project/files",
+    title: "Files",
+    subtitle: "Upload and visualize project GIS files (polygons, POI, layers).",
+  },
+  {
     href: "/project/partitioning",
     title: "Partitioning",
     subtitle: "Partition the project area in regions.",

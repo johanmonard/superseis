@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../SEISLAB/superseis_storage"
+		},
+		{
+			"path": "../ocfa"
+		}
+	],
+	"settings": {}
+}

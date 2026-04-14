@@ -3,6 +3,7 @@ import {
   Activity,
   BarChart3,
   Blocks,
+  Braces,
   CalendarDays,
   Check,
   ChevronDown,
@@ -76,6 +77,7 @@ export function Icon({
 // Import from lucide-react and map them to semantic names.
 export const appIcons = {
   activity: Activity,
+  braces: Braces,
   home: Home,
   dashboards: LayoutDashboard,
   blocks: Blocks,

@@ -108,25 +108,27 @@ export function CountryMap({ country }: CountryMapProps) {
   const globeRadius = size * SCALE_RATIO * zoom;
 
   const isFirstLoad = React.useRef(true);
-  const handleGeoLoaded = React.useCallback(
-    (geographies: { properties: { name: string }; type: string; geometry: GeoJSON.Geometry }[]) => {
-      if (initialized) return;
-      const target = geographies.find((g) => g.properties.name === targetName);
-      if (target) {
-        const [lon, lat] = geoCentroid(target as GeoJSON.Feature);
-        const rot: [number, number, number] = [-lon, -lat, 0];
-        centeredRotation.current = rot;
-        if (isFirstLoad.current) {
-          setRotation(rot);
-          isFirstLoad.current = false;
-        } else {
-          animateTo(rot);
-        }
+  const pendingGeos = React.useRef<{ properties: { name: string }; type: string; geometry: GeoJSON.Geometry }[] | null>(null);
+
+  // Process geo data in an effect to avoid setState during render
+  React.useEffect(() => {
+    if (initialized || !pendingGeos.current) return;
+    const geographies = pendingGeos.current;
+    pendingGeos.current = null;
+    const target = geographies.find((g) => g.properties.name === targetName);
+    if (target) {
+      const [lon, lat] = geoCentroid(target as GeoJSON.Feature);
+      const rot: [number, number, number] = [-lon, -lat, 0];
+      centeredRotation.current = rot;
+      if (isFirstLoad.current) {
+        setRotation(rot);
+        isFirstLoad.current = false;
+      } else {
+        animateTo(rot);
       }
-      setInitialized(true);
-    },
-    [targetName, initialized, animateTo]
-  );
+    }
+    setInitialized(true);
+  }, [initialized, targetName, animateTo]);
 
   const prevCountry = React.useRef(country);
   React.useEffect(() => {
@@ -224,7 +226,7 @@ export function CountryMap({ country }: CountryMapProps) {
         />
         <Geographies geography={GEO_URL}>
           {({ geographies }) => {
-            handleGeoLoaded(geographies);
+            if (!initialized) pendingGeos.current = geographies;
             return geographies.map((geo) => {
               const name = geo.properties.name;
               const isSelected = name === targetName;

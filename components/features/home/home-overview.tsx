@@ -227,7 +227,7 @@ export function HomeOverview() {
             <div className="flex flex-col items-center gap-[var(--space-3)] text-center">
               <Image
                 src={isDark ? "/seiseye_logo_white.png" : "/seiseye_logo_black.png"}
-                alt="SeisEye"
+                alt="Seiseye"
                 width={220}
                 height={60}
                 priority
