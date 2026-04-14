@@ -280,6 +280,8 @@ const TERRAIN_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20 L8 8 L12 14 L15 9 L22 20 Z"/><path d="M8 8 L10 11 M15 9 L17 12"/></svg>';
 const TILT_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 L21 9 L12 15 L3 9 Z"/><path d="M3 9 L3 14 L12 20 L21 14 L21 9"/></svg>';
+const TRAIL_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="18" cy="12" r="3" fill="currentColor" opacity="1"/><circle cx="11" cy="12" r="2.2" fill="currentColor" opacity="0.55"/><circle cx="5.5" cy="12" r="1.5" fill="currentColor" opacity="0.25"/></svg>';
 
 // ---------------------------------------------------------------------------
 // CSS (subset of gis-globe-viewport CSS for toolbar controls)
@@ -536,6 +538,57 @@ const ANIMATE_CSS = `
     text-align: right;
   }
 
+  .anim-trail-slider-wrap {
+    position: absolute;
+    top: 100%;
+    margin-top: 8px;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 12px;
+    border-radius: 12px;
+    background-color: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.18);
+    backdrop-filter: blur(8px);
+    font-family: system-ui, sans-serif;
+    font-size: 11px;
+    color: #1e293b;
+    cursor: default;
+    white-space: nowrap;
+  }
+  [data-theme="dark"] .anim-trail-slider-wrap {
+    background-color: rgba(15, 23, 42, 0.82);
+    border-color: rgba(255, 255, 255, 0.12);
+    color: #e2e8f0;
+  }
+  .anim-trail-slider-wrap__row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .anim-trail-slider-wrap__label {
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 10px;
+    min-width: 52px;
+  }
+  [data-theme="dark"] .anim-trail-slider-wrap__label { color: #94a3b8; }
+  .anim-trail-slider-wrap input[type="range"] {
+    width: 110px;
+    accent-color: #3b82f6;
+    cursor: pointer;
+  }
+  .anim-trail-slider-wrap__value {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    min-width: 32px;
+    text-align: right;
+  }
+
   .anim-fs-divider {
     width: 1px;
     height: 22px;
@@ -643,7 +696,7 @@ const ANIMATE_CSS = `
     text-align: center;
   }
   .anim-legend__row--child {
-    padding-left: 28px;
+    padding-left: 38px;
     font-size: 10px;
   }
   .anim-legend__color {
@@ -1013,6 +1066,7 @@ interface EntityStyle {
 }
 
 type AcquEntry = { position: [number, number, number]; entityIdx: number };
+type TrailPoint = { position: [number, number, number]; progress: number; entityIdx: number };
 
 function hexToRgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
@@ -1045,7 +1099,7 @@ export function Animate3DViewport({
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<MLMap | null>(null);
-  const [tileIndex, setTileIndex] = React.useState(0);
+  const [tileIndex, setTileIndex] = React.useState(15); // CartoDB Dark
   const [styleReady, setStyleReady] = React.useState(false);
   const [zoomDisplay, setZoomDisplay] = React.useState(DEFAULT_ZOOM);
   const [pitchDisplay, setPitchDisplay] = React.useState(0);
@@ -1054,6 +1108,28 @@ export function Animate3DViewport({
   const [terrainExaggeration, setTerrainExaggeration] = React.useState(1.5);
   const [terrainSliderLeft, setTerrainSliderLeft] = React.useState<number | null>(null);
   const terrainBtnRef = React.useRef<HTMLButtonElement>(null);
+
+  // Trail settings (global)
+  const [trailOn, setTrailOn] = React.useState(true);
+  const [trailLength, setTrailLength] = React.useState(2);     // 0–3 multiplier
+  const [trailOpacity, setTrailOpacity] = React.useState(0.8); // 0–1
+  const [trailDensity, setTrailDensity] = React.useState(100); // 4–100 pts
+  const [trailTaper, setTrailTaper] = React.useState(1);       // 0 = uniform, 1 = sharp needle
+  const [trailGlow, setTrailGlow] = React.useState(0);         // 0 = no glow, 1 = max glow
+  const [trailSliderLeft, setTrailSliderLeft] = React.useState<number | null>(null);
+  const trailBtnRef = React.useRef<HTMLButtonElement>(null);
+  const trailLengthRef = React.useRef(trailLength);
+  const trailOpacityRef = React.useRef(trailOpacity);
+  const trailDensityRef = React.useRef(trailDensity);
+  const trailTaperRef = React.useRef(trailTaper);
+  const trailGlowRef = React.useRef(trailGlow);
+  const trailOnRef = React.useRef(trailOn);
+  React.useEffect(() => { trailLengthRef.current = trailLength; }, [trailLength]);
+  React.useEffect(() => { trailOpacityRef.current = trailOpacity; }, [trailOpacity]);
+  React.useEffect(() => { trailDensityRef.current = trailDensity; }, [trailDensity]);
+  React.useEffect(() => { trailTaperRef.current = trailTaper; }, [trailTaper]);
+  React.useEffect(() => { trailGlowRef.current = trailGlow; }, [trailGlow]);
+  React.useEffect(() => { trailOnRef.current = trailOn; }, [trailOn]);
 
   // Per-entity visual settings
   const [entityStyles, setEntityStyles] = React.useState<EntityStyle[]>([]);
@@ -1064,7 +1140,7 @@ export function Animate3DViewport({
   const [timeRange, setTimeRange] = React.useState<[number, number]>([0, 0]);
   const [currentTime, setCurrentTime] = React.useState(0);
   const [playing, setPlaying] = React.useState(false);
-  const [speed, setSpeed] = React.useState(100);
+  const [speed, setSpeed] = React.useState(10000);
 
   const playingRef = React.useRef(playing);
   const speedRef = React.useRef(speed);
@@ -1241,6 +1317,16 @@ export function Animate3DViewport({
     setTerrainSliderLeft(btn.offsetLeft + btn.offsetWidth / 2);
   }, [terrainOn, isFullscreen]);
 
+  // Update trail slider position from the trail button
+  React.useEffect(() => {
+    const btn = trailBtnRef.current;
+    if (!btn || !trailOn) {
+      setTrailSliderLeft(null);
+      return;
+    }
+    setTrailSliderLeft(btn.offsetLeft + btn.offsetWidth / 2);
+  }, [trailOn, isFullscreen]);
+
   // Resize map when the container changes size
   React.useEffect(() => {
     const el = containerRef.current;
@@ -1307,13 +1393,22 @@ export function Animate3DViewport({
     acquLastTimeRef.current = -1;
     overlayRef.current?.setProps({ layers: [] });
 
-    // Initialize per-entity styles
+    // Initialize per-entity styles — same color for all wids in the same type group
     const initStyles: EntityStyle[] = [];
+    const groupColorMap = new Map<string, string>();
+    let groupColorIdx = 0;
     for (let i = 0; i < n; i++) {
+      const id = String(trajectories![i].id);
+      const dash = id.indexOf("-");
+      const group = dash >= 0 ? id.slice(0, dash) : id;
+      if (!groupColorMap.has(group)) {
+        groupColorMap.set(group, ENTITY_COLORS[groupColorIdx % ENTITY_COLORS.length]);
+        groupColorIdx++;
+      }
       initStyles.push({
-        color: ENTITY_COLORS[i % ENTITY_COLORS.length],
-        dotSize: 14,
-        acquSize: 3,
+        color: groupColorMap.get(group)!,
+        dotSize: 10,
+        acquSize: 0.5,
       });
     }
     entityStylesRef.current = initStyles;
@@ -1395,28 +1490,124 @@ export function Animate3DViewport({
       acquDataRef.current = acquDataRef.current.slice();
     }
 
+    // Build speed trail data — global trail settings from refs
+    const trailData: TrailPoint[] = [];
+    const spd = speedRef.current;
+    const tLen = trailLengthRef.current;
+    const tOp = trailOpacityRef.current;
+    const tDens = Math.round(trailDensityRef.current);
+    const tTaper = trailTaperRef.current;
+    const tGlow = trailGlowRef.current;
+    const trailDuration = trailOnRef.current && tLen > 0 && spd >= 10
+      ? spd * 30 * tLen
+      : 0;
+
+    if (trailDuration > 0 && tDens >= 2 && trajs) {
+      const tStart = t - trailDuration;
+      for (let i = 0; i < trajs.length; i++) {
+        const pos = trajs[i].positions;
+        const n = pos.length / STRIDE;
+        if (n === 0) continue;
+        const endIdx = bisect(pos, t);
+        if (endIdx < 0) continue;
+        const startIdx = Math.max(0, bisect(pos, tStart) + 1);
+        const count = endIdx - startIdx + 1;
+        if (count <= 1) continue;
+        const step = Math.max(1, Math.floor(count / tDens));
+        for (let j = startIdx; j < endIdx; j += step) {
+          const base = j * STRIDE;
+          const pTime = pos[base];
+          const progress = (pTime - tStart) / trailDuration;
+          trailData.push({
+            position: [pos[base + 1], pos[base + 2], pos[base + 3]],
+            progress: Math.max(0, Math.min(1, progress)),
+            entityIdx: i,
+          });
+        }
+      }
+    }
+
     const styles = entityStylesRef.current;
-    overlay.setProps({
-      layers: [
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const layers: ScatterplotLayer<any>[] = [
+      new ScatterplotLayer({
+        id: "acqu-marks",
+        data: acquDataRef.current,
+        getPosition: (d: AcquEntry) => d.position,
+        getFillColor: (d: AcquEntry) => {
+          const s = styles[d.entityIdx];
+          return s ? hexToRgb(s.color) : [200, 200, 200];
+        },
+        getRadius: (d: AcquEntry) => styles[d.entityIdx]?.acquSize ?? 3,
+        updateTriggers: {
+          getFillColor: styleVersionRef.current,
+          getRadius: styleVersionRef.current,
+        },
+        radiusUnits: "pixels" as const,
+        radiusMinPixels: 0.5,
+        radiusMaxPixels: 20,
+      }),
+    ];
+
+    // Add trail layer when there are trail points
+    if (trailData.length > 0) {
+      // tTaper: 0 = uniform width, 1 = sharp needle
+      // We blend between a flat size curve and a steep one via tTaper
+      const taperSize = (p: number, base: number) => {
+        const flat = base;
+        const tapered = base * (0.1 + 0.9 * p);
+        return flat * (1 - tTaper) + tapered * tTaper;
+      };
+
+      // Soft glow layer (larger, more transparent) — intensity driven by tGlow
+      if (tGlow > 0) {
+        layers.push(
+          new ScatterplotLayer({
+            id: "entity-trail-glow",
+            data: trailData,
+            getPosition: (d: TrailPoint) => d.position,
+            getFillColor: (d: TrailPoint) => {
+              const s = styles[d.entityIdx];
+              const rgb = s ? hexToRgb(s.color) : [200, 200, 200];
+              const a = d.progress * d.progress * d.progress;
+              return [...rgb, Math.round(a * 100 * tOp * tGlow)] as [number, number, number, number];
+            },
+            getRadius: (d: TrailPoint) => {
+              const s = styles[d.entityIdx];
+              const base = s ? s.dotSize * (0.5 + 0.5 * tGlow) : 6;
+              return taperSize(d.progress, base);
+            },
+            radiusUnits: "pixels" as const,
+            radiusMinPixels: 2,
+            radiusMaxPixels: 30,
+          }),
+        );
+      }
+      // Core trail dots (smaller, more opaque)
+      layers.push(
         new ScatterplotLayer({
-          id: "acqu-marks",
-          data: acquDataRef.current,
-          getPosition: (d: AcquEntry) => d.position,
-          getFillColor: (d: AcquEntry) => {
+          id: "entity-trail",
+          data: trailData,
+          getPosition: (d: TrailPoint) => d.position,
+          getFillColor: (d: TrailPoint) => {
             const s = styles[d.entityIdx];
-            return s ? hexToRgb(s.color) : [200, 200, 200];
+            const rgb = s ? hexToRgb(s.color) : [200, 200, 200];
+            const a = d.progress * d.progress;
+            return [...rgb, Math.round(a * 255 * tOp)] as [number, number, number, number];
           },
-          getRadius: (d: AcquEntry) => styles[d.entityIdx]?.acquSize ?? 3,
-          updateTriggers: {
-            getFillColor: styleVersionRef.current,
-            getRadius: styleVersionRef.current,
+          getRadius: (d: TrailPoint) => {
+            const s = styles[d.entityIdx];
+            const base = s ? s.dotSize * 0.35 : 3;
+            return taperSize(d.progress, base);
           },
           radiusUnits: "pixels" as const,
           radiusMinPixels: 1,
-          radiusMaxPixels: 20,
+          radiusMaxPixels: 16,
         }),
-      ],
-    });
+      );
+    }
+
+    overlay.setProps({ layers });
   }, []);
 
   // Update a single entity's visual style and immediately apply it.
@@ -1605,6 +1796,13 @@ export function Animate3DViewport({
           }}
         />
         <ToolbarButton
+          ref={trailBtnRef}
+          icon={TRAIL_ICON}
+          title={trailOn ? "Trail settings (on)" : "Trail settings (off)"}
+          active={trailOn}
+          onClick={() => setTrailOn((v) => !v)}
+        />
+        <ToolbarButton
           icon={isFullscreen ? SHRINK_ICON : EXPAND_ICON}
           title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
           onClick={toggleFullscreen}
@@ -1628,6 +1826,85 @@ export function Animate3DViewport({
             <span className="anim-terrain-slider-wrap__value">
               {terrainExaggeration.toFixed(1)}
             </span>
+          </div>
+        )}
+
+        {trailOn && trailSliderLeft != null && (
+          <div
+            className="anim-trail-slider-wrap"
+            // eslint-disable-next-line template/no-jsx-style-prop
+            style={{ left: `${trailSliderLeft}px` }}
+          >
+            <div className="anim-trail-slider-wrap__row">
+              <span className="anim-trail-slider-wrap__label">Length</span>
+              <input
+                type="range"
+                min={0}
+                max={3}
+                step={0.1}
+                value={trailLength}
+                onChange={(e) => setTrailLength(Number(e.target.value))}
+              />
+              <span className="anim-trail-slider-wrap__value">
+                {trailLength.toFixed(1)}&times;
+              </span>
+            </div>
+            <div className="anim-trail-slider-wrap__row">
+              <span className="anim-trail-slider-wrap__label">Opacity</span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={trailOpacity}
+                onChange={(e) => setTrailOpacity(Number(e.target.value))}
+              />
+              <span className="anim-trail-slider-wrap__value">
+                {Math.round(trailOpacity * 100)}%
+              </span>
+            </div>
+            <div className="anim-trail-slider-wrap__row">
+              <span className="anim-trail-slider-wrap__label">Density</span>
+              <input
+                type="range"
+                min={4}
+                max={100}
+                step={1}
+                value={trailDensity}
+                onChange={(e) => setTrailDensity(Number(e.target.value))}
+              />
+              <span className="anim-trail-slider-wrap__value">
+                {trailDensity}
+              </span>
+            </div>
+            <div className="anim-trail-slider-wrap__row">
+              <span className="anim-trail-slider-wrap__label">Taper</span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={trailTaper}
+                onChange={(e) => setTrailTaper(Number(e.target.value))}
+              />
+              <span className="anim-trail-slider-wrap__value">
+                {Math.round(trailTaper * 100)}%
+              </span>
+            </div>
+            <div className="anim-trail-slider-wrap__row">
+              <span className="anim-trail-slider-wrap__label">Glow</span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={trailGlow}
+                onChange={(e) => setTrailGlow(Number(e.target.value))}
+              />
+              <span className="anim-trail-slider-wrap__value">
+                {Math.round(trailGlow * 100)}%
+              </span>
+            </div>
           </div>
         )}
       </DraggableToolbar>
@@ -1665,8 +1942,9 @@ export function Animate3DViewport({
                   <input
                     type="range"
                     className="anim-legend__slider"
-                    min={1}
+                    min={0.5}
                     max={12}
+                    step={0.5}
                     value={s0.acquSize}
                     title={`All ACQU size: ${s0.acquSize}px`}
                     onChange={(e) => updateGroupStyle(allIndices, { acquSize: Number(e.target.value) })}
@@ -1738,8 +2016,9 @@ export function Animate3DViewport({
                           <input
                             type="range"
                             className="anim-legend__slider"
-                            min={1}
+                            min={0.5}
                             max={12}
+                            step={0.5}
                             value={firstStyle.acquSize}
                             title={`Group ACQU size: ${firstStyle.acquSize}px`}
                             onChange={(e) => updateGroupStyle(grp.indices, { acquSize: Number(e.target.value) })}
@@ -1791,8 +2070,9 @@ export function Animate3DViewport({
                               <input
                                 type="range"
                                 className="anim-legend__slider"
-                                min={1}
+                                min={0.5}
                                 max={12}
+                                step={0.5}
                                 value={s.acquSize}
                                 title={`ACQU size: ${s.acquSize}px`}
                                 onChange={(e) => updateEntityStyle(idx, { acquSize: Number(e.target.value) })}

@@ -75,7 +75,7 @@ const MULTI_SELECT_FIELDS = new Set(["event"]);
 
 // Default event types to pre-select when event uniques are available
 const DEFAULT_EVENTS = new Set([
-  "ACQU", "BASE", "BORN", "CGRP", "CPRG", "TRAV",
+  "ACQU", "BASE", "CGRP", "CPRG", "MOVE", "TRAV",
 ]);
 
 // ---------------------------------------------------------------------------
