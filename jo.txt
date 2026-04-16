@@ -21,6 +21,7 @@ Login with any non-empty username/password (dev stub). Browse the Demo pages to 
 npm run new-module <your-first-feature-name>
 The agent will handle architecture and quality gates. Just tell it what you want to build.
 
-cd /home/johan/Documents/github/superseis && npx next dev
 cd /home/johan/Documents/github/superseis && api/.venv/bin/uvicorn api.app:app --reload --port 8001 --env-file api/.env
+cd /home/johan/Documents/github/superseis && npx next dev
+
 

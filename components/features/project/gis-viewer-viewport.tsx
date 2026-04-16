@@ -386,10 +386,11 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
           getLineColor: rgba,
           getFillColor: fillRgba,
           getLineWidth: f.style.width,
-          getPointRadius: f.style.width,
+          getPointRadius: f.style.width * 50,
           lineWidthUnits: "pixels" as const,
-          pointRadiusUnits: "pixels" as const,
-          pointRadiusMinPixels: 2,
+          pointRadiusUnits: "meters" as const,
+          pointRadiusMinPixels: 1,
+          pointRadiusMaxPixels: 20,
         });
       })
       .filter(Boolean);
