@@ -11,8 +11,9 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { useActiveProject } from "@/lib/use-active-project";
-import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
+import { useSectionData } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
+import { useProjectFiles } from "@/services/query/project-files";
 
 /* ------------------------------------------------------------------
    Types
@@ -31,14 +32,6 @@ interface RegionGroup {
 const POINT_TYPE_OPTIONS = ["Receivers", "Sources"];
 const GRID_OPTIONS = ["Theoretical", "Offseted"];
 
-// Dummy available polygons (from project files)
-const AVAILABLE_POLYGONS = [
-  "exclusion_zone_north",
-  "survey_boundary_v2",
-  "river_buffer_500m",
-  "protected_area_east",
-  "camp_exclusion",
-];
 
 function createGroup(name: string): RegionGroup {
   const tag = name.toLowerCase().replace(/\s+/g, "_") + "_reg";
@@ -296,15 +289,30 @@ const DEFAULT_PARTITIONING: PartitioningData = {
    Main form
    ------------------------------------------------------------------ */
 
-export function ProjectPartitioning() {
+export function ProjectPartitioning({
+  onActivePolygonsChange,
+}: {
+  onActivePolygonsChange?: (projectId: number | null, polygons: string[]) => void;
+} = {}) {
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
 
   const { data, update, status } = useSectionData<PartitioningData>(projectId, "partitioning", DEFAULT_PARTITIONING);
+  const { data: projectFiles } = useProjectFiles(projectId);
+  const availablePolygons = React.useMemo(
+    () => (projectFiles?.polygons ?? []).map((f) => f.replace(/\.gpkg$/, "")),
+    [projectFiles?.polygons],
+  );
 
   const groups = data.groups;
   const activeId = data.activeId || groups[0]?.id || "";
   const activeGroup = groups.find((g) => g.id === activeId) ?? groups[0];
+
+  // Notify parent about current polygons for viewport display
+  const activePolygonsKey = activeGroup?.polygons?.join(",") ?? "";
+  React.useEffect(() => {
+    onActivePolygonsChange?.(projectId, activeGroup?.polygons ?? []);
+  }, [onActivePolygonsChange, projectId, activePolygonsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateGroup = React.useCallback(
     (id: string, patch: Partial<RegionGroup>) => {
@@ -357,10 +365,6 @@ export function ProjectPartitioning() {
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      <div className="flex items-center justify-end">
-        <AutosaveStatus status={status} />
-      </div>
-
       {/* Group selector */}
       <GroupSelector
         groups={groups}
@@ -429,7 +433,7 @@ export function ProjectPartitioning() {
         <Field label="Area Allocation" layout="horizontal">
           <PolygonList
             selected={activeGroup.polygons}
-            available={AVAILABLE_POLYGONS}
+            available={availablePolygons}
             onAdd={(name) =>
               updateGroup(activeGroup.id, {
                 polygons: [...activeGroup.polygons, name],

@@ -66,9 +66,9 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
     subtitle: "Survey design parameters & region assignment.",
   },
   {
-    href: "/project/terrain",
-    title: "Terrain",
-    subtitle: "Define project extents and boundaries.",
+    href: "/project/survey",
+    title: "Survey",
+    subtitle: "Define survey extents and boundaries.",
   },
   {
     href: "/project/osm",
@@ -115,6 +115,11 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
     title: "GIS Globe",
     subtitle:
       "WebGL globe projection with satellite tiles and GeoJSON features (MapLibre GL).",
+  },
+  {
+    href: "/demo/workflow",
+    title: "Workflow",
+    subtitle: "Two-panel workflow layout with parameters and viewport.",
   },
   // [new-module:page-identity]
   {

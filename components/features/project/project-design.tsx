@@ -8,7 +8,7 @@ import { Field } from "@/components/ui/field";
 const { check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
 import { SliderInput } from "@/components/ui/slider-input";
 import { useActiveProject } from "@/lib/use-active-project";
-import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
+import { useSectionData } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------
@@ -241,10 +241,6 @@ export function ProjectDesign({
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      <div className="flex items-center justify-end">
-        <AutosaveStatus status={status} />
-      </div>
-
       <GroupSelector
         groups={groups}
         activeId={activeId}

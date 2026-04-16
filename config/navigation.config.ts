@@ -39,6 +39,7 @@ export const navigation: NavigationItem[] = [
       { label: "GIS", href: "/demo/gis", icon: "layers" },
       { label: "GIS Globe", href: "/demo/gis-globe", icon: "map" },
       { label: "Animate 3D", href: "/demo/animate", icon: "activity" },
+      { label: "Workflow", href: "/demo/workflow", icon: "blocks" },
     ],
   },
   {
@@ -55,7 +56,7 @@ export const navigation: NavigationItem[] = [
           { label: "Files", href: "/project/files", icon: "folderOpen" },
           { label: "Partitioning", href: "/project/partitioning", icon: "grid" },
           { label: "Design", href: "/project/design", icon: "compass" },
-          { label: "Terrain", href: "/project/terrain", icon: "mountain" },
+          { label: "Survey", href: "/project/survey", icon: "mountain" },
           { label: "OSM", href: "/project/osm", icon: "map" },
           { label: "Layers", href: "/project/layers", icon: "layers" },
           { label: "Maps", href: "/project/maps", icon: "mapPin" },

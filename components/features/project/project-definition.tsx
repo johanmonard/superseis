@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { CountryMap } from "@/components/features/project/country-map";
 import { ViewportPlaceholder } from "@/components/features/project/viewport-placeholder";
 import { useActiveProject } from "@/lib/use-active-project";
-import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
+import { useSectionData } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------
@@ -331,7 +331,6 @@ export function ProjectDefinition() {
               Parameters
             </h2>
             <div className="flex items-center gap-[var(--space-2)]">
-              <AutosaveStatus status={status} />
               <button
                 type="button"
                 onClick={() => setCollapsed(true)}

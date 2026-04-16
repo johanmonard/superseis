@@ -2940,6 +2940,16 @@ const GLOBE_CSS = `
     margin: 0 0 2px 2px;
   }
   [data-theme="dark"] .glb-legend__title { color: #94a3b8; }
+  .glb-legend__group {
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #64748b;
+    margin: 5px 0 1px 2px;
+  }
+  .glb-legend__group:first-child { margin-top: 0; }
+  [data-theme="dark"] .glb-legend__group { color: #94a3b8; }
   .glb-legend__row {
     display: flex;
     align-items: center;
@@ -3193,6 +3203,11 @@ export type LayerStyle = {
   color: string;
   visible: boolean;
   fclasses?: ReadonlyArray<LayerFclass>;
+  /** Display name shown in the legend (defaults to id). */
+  displayName?: string;
+  /** Optional group label — layers with the same group are rendered under
+   *  a shared heading in the legend. */
+  group?: string;
 };
 
 export function GisGlobeViewport({
@@ -3245,6 +3260,9 @@ export function GisGlobeViewport({
   onAdded,
   onDeleted,
   onReclassify,
+  demFileUrl,
+  demTileUrlTemplate,
+  demManifestUrl,
 }: {
   data: GeoJSONFeatureCollection | null;
   layers?: ReadonlyArray<LayerStyle>;
@@ -3299,6 +3317,12 @@ export function GisGlobeViewport({
   onAdded: (feature: GeoJSON.Feature) => void;
   onDeleted: (feature: GeoJSON.Feature) => void;
   onReclassify: (feature: GeoJSON.Feature, newFclass: string) => void;
+  /** Override URL for fetching the raw DEM .tif (default: /api/gis/${demFile}) */
+  demFileUrl?: string;
+  /** Override URL template for DEM tile PNG (use {z},{x},{y} placeholders) */
+  demTileUrlTemplate?: string;
+  /** Override URL for the DEM tile pyramid manifest */
+  demManifestUrl?: string;
 }) {
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -7201,7 +7225,8 @@ export function GisGlobeViewport({
 
     let cancelled = false;
     (async () => {
-      const res = await fetch(`/api/gis/${encodeURIComponent(demFile)}`);
+      const fetchUrl = demFileUrl ?? `/api/gis/${encodeURIComponent(demFile)}`;
+      const res = await fetch(fetchUrl, demFileUrl ? { credentials: "include" } : undefined);
       if (!res.ok) return;
       const buf = await res.arrayBuffer();
       if (cancelled) return;
@@ -7334,7 +7359,7 @@ export function GisGlobeViewport({
       cancelled = true;
       cleanup();
     };
-  }, [demFile, demColorRamp, styleReady]);
+  }, [demFile, demFileUrl, demColorRamp, styleReady]);
 
   // Light effect: opacity-only updates avoid the expensive re-render of
   // the canvas / image source — just push the new value to the layer.
@@ -7470,16 +7495,17 @@ export function GisGlobeViewport({
       // to AWS server-side for tiles outside the file's bounds).
       if (demFile) {
         const baseName = demFile.replace(/\.tif$/i, "");
+        const manifestUrl = demManifestUrl ?? `/api/gis/dem-tiles/${encodeURIComponent(baseName)}/manifest`;
+        const tileUrl = demTileUrlTemplate ?? `/api/gis/dem-tiles/${encodeURIComponent(baseName)}/{z}/{x}/{y}`;
         try {
           const res = await fetch(
-            `/api/gis/dem-tiles/${encodeURIComponent(baseName)}/manifest`
+            manifestUrl,
+            demManifestUrl ? { credentials: "include" } : undefined
           );
           if (res.ok) {
             const manifest = (await res.json()) as { maxZoom?: number };
             sourceId = LOCAL_TERRAIN_SOURCE_ID;
-            tilesUrl = `/api/gis/dem-tiles/${encodeURIComponent(
-              baseName
-            )}/{z}/{x}/{y}`;
+            tilesUrl = tileUrl;
             maxzoom = Math.max(15, manifest.maxZoom ?? 15);
           }
         } catch {
@@ -7508,7 +7534,7 @@ export function GisGlobeViewport({
       cancelled = true;
       removeBoth();
     };
-  }, [terrainOn, terrainExaggeration, demFile, styleReady]);
+  }, [terrainOn, terrainExaggeration, demFile, demManifestUrl, demTileUrlTemplate, styleReady]);
 
   // Cursor readout: lng/lat under the pointer plus a queryTerrainElevation
   // sample when 3D terrain is active. Throttled to one update per animation
@@ -7618,144 +7644,167 @@ export function GisGlobeViewport({
     >
       <div ref={containerRef} className="h-full w-full" />
 
-      {layers && layers.length > 0 && (
-        <div className="glb-legend">
-          <div className="glb-legend__title">Layers</div>
-          {layers.map((l) => {
-            const collapsed = collapsedLayers.has(l.id);
-            const rowClass =
-              "glb-legend__row" +
-              (l.visible ? "" : " glb-legend__row--hidden");
-            const fclasses = l.fclasses ?? [];
-            const canCollapse = fclasses.length > 0;
-            return (
-              <React.Fragment key={l.id}>
-                <div className={rowClass}>
-                  <input
-                    type="checkbox"
-                    className="glb-legend__checkbox"
-                    checked={l.visible}
-                    onChange={() =>
-                      onToggleLayerVisibilityRef.current?.(l.id)
-                    }
-                  />
-                  <span
-                    className="glb-legend__swatch"
-                    // eslint-disable-next-line template/no-jsx-style-prop -- per-layer color is runtime data
-                    style={{ backgroundColor: l.color }}
-                  />
-                  <button
-                    type="button"
-                    className="glb-legend__name-btn"
-                    title={
-                      canCollapse
-                        ? collapsed
-                          ? `Expand ${l.id}`
-                          : `Collapse ${l.id}`
-                        : l.id
-                    }
-                    onClick={() => {
-                      if (!canCollapse) return;
-                      setCollapsedLayers((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(l.id)) next.delete(l.id);
-                        else next.add(l.id);
-                        return next;
-                      });
-                    }}
-                  >
-                    {canCollapse && (
-                      <span
-                        className={
-                          "glb-legend__caret" +
-                          (collapsed ? " glb-legend__caret--collapsed" : "")
-                        }
-                        aria-hidden="true"
-                      >
-                        ▾
-                      </span>
-                    )}
-                    <span className="glb-legend__name">{l.id}</span>
-                  </button>
-                </div>
-                {fclasses.length > 0 && l.visible && !collapsed && (
-                  <div className="glb-legend__fclasses">
-                    {fclasses.map((fc) => {
-                      const isActive = activeFclass === fc.value;
-                      const fcRowClass =
-                        "glb-legend__row glb-legend__row--fclass" +
-                        (fc.visible ? "" : " glb-legend__row--hidden") +
-                        (isActive ? " glb-legend__row--active" : "");
-                      return (
-                        <div key={fc.value} className={fcRowClass}>
-                          <button
-                            type="button"
-                            className={
-                              "glb-legend__edit-btn" +
-                              (isActive
-                                ? " glb-legend__edit-btn--active"
-                                : "")
-                            }
-                            title={
-                              isActive
-                                ? `Stop adding as "${fc.value}"`
-                                : `Add new features as "${fc.value}"`
-                            }
-                            onClick={() =>
-                              setActiveFclass((cur) =>
-                                cur === fc.value ? null : fc.value,
+      {layers && layers.length > 0 && (() => {
+        // Group layers: preserve order, emit group header when group changes.
+        const hasGroups = layers.some((l) => l.group);
+        let lastGroup: string | undefined;
+
+        const renderLayer = (l: LayerStyle) => {
+          const collapsed = collapsedLayers.has(l.id);
+          const rowClass =
+            "glb-legend__row" +
+            (l.visible ? "" : " glb-legend__row--hidden");
+          const fclasses = l.fclasses ?? [];
+          const canCollapse = fclasses.length > 0;
+          const name = l.displayName ?? l.id;
+          return (
+            <React.Fragment key={l.id}>
+              <div className={rowClass}>
+                <input
+                  type="checkbox"
+                  className="glb-legend__checkbox"
+                  checked={l.visible}
+                  onChange={() =>
+                    onToggleLayerVisibilityRef.current?.(l.id)
+                  }
+                />
+                <span
+                  className="glb-legend__swatch"
+                  // eslint-disable-next-line template/no-jsx-style-prop -- per-layer color is runtime data
+                  style={{ backgroundColor: l.color }}
+                />
+                <button
+                  type="button"
+                  className="glb-legend__name-btn"
+                  title={
+                    canCollapse
+                      ? collapsed
+                        ? `Expand ${name}`
+                        : `Collapse ${name}`
+                      : name
+                  }
+                  onClick={() => {
+                    if (!canCollapse) return;
+                    setCollapsedLayers((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(l.id)) next.delete(l.id);
+                      else next.add(l.id);
+                      return next;
+                    });
+                  }}
+                >
+                  {canCollapse && (
+                    <span
+                      className={
+                        "glb-legend__caret" +
+                        (collapsed ? " glb-legend__caret--collapsed" : "")
+                      }
+                      aria-hidden="true"
+                    >
+                      ▾
+                    </span>
+                  )}
+                  <span className="glb-legend__name">{name}</span>
+                </button>
+              </div>
+              {fclasses.length > 0 && l.visible && !collapsed && (
+                <div className="glb-legend__fclasses">
+                  {fclasses.map((fc) => {
+                    const isActive = activeFclass === fc.value;
+                    const fcRowClass =
+                      "glb-legend__row glb-legend__row--fclass" +
+                      (fc.visible ? "" : " glb-legend__row--hidden") +
+                      (isActive ? " glb-legend__row--active" : "");
+                    return (
+                      <div key={fc.value} className={fcRowClass}>
+                        <button
+                          type="button"
+                          className={
+                            "glb-legend__edit-btn" +
+                            (isActive
+                              ? " glb-legend__edit-btn--active"
+                              : "")
+                          }
+                          title={
+                            isActive
+                              ? `Stop adding as "${fc.value}"`
+                              : `Add new features as "${fc.value}"`
+                          }
+                          onClick={() =>
+                            setActiveFclass((cur) =>
+                              cur === fc.value ? null : fc.value,
+                            )
+                          }
+                          aria-pressed={isActive}
+                        >
+                          <svg
+                            width="11"
+                            height="11"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M12 20h9" />
+                            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                          </svg>
+                        </button>
+                        <label className="glb-legend__fclass-label">
+                          <input
+                            type="checkbox"
+                            className="glb-legend__checkbox"
+                            checked={fc.visible}
+                            onChange={() =>
+                              onToggleFclassVisibilityRef.current?.(
+                                l.id,
+                                fc.value,
                               )
                             }
-                            aria-pressed={isActive}
+                          />
+                          <span
+                            className="glb-legend__swatch"
+                            // eslint-disable-next-line template/no-jsx-style-prop -- per-fclass color is runtime data
+                            style={{ backgroundColor: fc.color }}
+                          />
+                          <span
+                            className="glb-legend__name"
+                            title={fc.value}
                           >
-                            <svg
-                              width="11"
-                              height="11"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2.5"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <path d="M12 20h9" />
-                              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-                            </svg>
-                          </button>
-                          <label className="glb-legend__fclass-label">
-                            <input
-                              type="checkbox"
-                              className="glb-legend__checkbox"
-                              checked={fc.visible}
-                              onChange={() =>
-                                onToggleFclassVisibilityRef.current?.(
-                                  l.id,
-                                  fc.value,
-                                )
-                              }
-                            />
-                            <span
-                              className="glb-legend__swatch"
-                              // eslint-disable-next-line template/no-jsx-style-prop -- per-fclass color is runtime data
-                              style={{ backgroundColor: fc.color }}
-                            />
-                            <span
-                              className="glb-legend__name"
-                              title={fc.value}
-                            >
-                              {fc.value}
-                            </span>
-                          </label>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </React.Fragment>
-            );
-          })}
-        </div>
-      )}
+                            {fc.value}
+                          </span>
+                        </label>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </React.Fragment>
+          );
+        };
+
+        return (
+          <div className="glb-legend">
+            <div className="glb-legend__title">Layers</div>
+            {layers.map((l) => {
+              const items: React.ReactNode[] = [];
+              if (hasGroups && l.group !== lastGroup) {
+                lastGroup = l.group;
+                if (l.group) {
+                  items.push(
+                    <div key={`grp:${l.group}`} className="glb-legend__group">
+                      {l.group}
+                    </div>
+                  );
+                }
+              }
+              items.push(renderLayer(l));
+              return items;
+            })}
+          </div>
+        );
+      })()}
 
       <DraggableToolbar
         wrapperRef={wrapperRef}

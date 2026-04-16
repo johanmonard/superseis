@@ -293,7 +293,7 @@ function ProjectFilesDialog({
   const uploadMutation = useUploadProjectFile(projectId);
   const deleteMutation = useDeleteProjectFile(projectId);
 
-  const fileInputRefs = React.useRef<Record<FileCategory, HTMLInputElement | null>>({
+  const fileInputRefs = React.useRef<Partial<Record<FileCategory, HTMLInputElement | null>>>({
     polygons: null,
     poi: null,
     layers: null,
@@ -409,7 +409,7 @@ const ROUTE_SECTIONS: Record<string, string[]> = {
   definition: ["definition"],
   partitioning: ["partitioning"],
   design: ["design", "design_options"],
-  terrain: ["terrain"],
+  survey: ["survey"],
   osm: ["osm"],
   layers: ["layers"],
   maps: ["maps"],

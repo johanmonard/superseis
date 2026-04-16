@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Section } from "@/components/features/activities/section";
 import { cn } from "@/lib/utils";
 import { useActiveProject } from "@/lib/use-active-project";
-import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
+import { useSectionData } from "@/lib/use-autosave";
 
 /* ------------------------------------------------------------------
    Tag select (matches Layers source-file picker)
@@ -532,10 +532,8 @@ export function ProjectCrew({
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      {/* Header with autosave status */}
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Crew</h2>
-        <AutosaveStatus status={status} />
       </div>
 
       {/* Option selector */}

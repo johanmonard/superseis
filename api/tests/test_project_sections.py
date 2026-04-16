@@ -48,9 +48,9 @@ async def test_put_and_get_section(client, db_session):
 async def test_put_overwrites_existing(client, db_session):
     _, project = await _setup_user_with_project(db_session)
     cookies = await _login(client)
-    await client.put(f"/project/{project.id}/sections/terrain", json={"groups": [{"name": "A"}]}, cookies=cookies)
-    await client.put(f"/project/{project.id}/sections/terrain", json={"groups": [{"name": "B"}]}, cookies=cookies)
-    resp = await client.get(f"/project/{project.id}/sections/terrain", cookies=cookies)
+    await client.put(f"/project/{project.id}/sections/survey", json={"groups": [{"name": "A"}]}, cookies=cookies)
+    await client.put(f"/project/{project.id}/sections/survey", json={"groups": [{"name": "B"}]}, cookies=cookies)
+    resp = await client.get(f"/project/{project.id}/sections/survey", cookies=cookies)
     assert resp.json()["data"]["groups"][0]["name"] == "B"
 
 
@@ -76,12 +76,12 @@ async def test_get_all_sections(client, db_session):
     _, project = await _setup_user_with_project(db_session)
     cookies = await _login(client)
     await client.put(f"/project/{project.id}/sections/definition", json={"client": "X"}, cookies=cookies)
-    await client.put(f"/project/{project.id}/sections/terrain", json={"groups": []}, cookies=cookies)
+    await client.put(f"/project/{project.id}/sections/survey", json={"groups": []}, cookies=cookies)
     resp = await client.get(f"/project/{project.id}/sections", cookies=cookies)
     assert resp.status_code == 200
     sections = {s["section"] for s in resp.json()}
     assert "definition" in sections
-    assert "terrain" in sections
+    assert "survey" in sections
 
 
 @pytest.mark.asyncio

@@ -61,7 +61,7 @@ export function ProjectGisViewer() {
   const [visibleFiles, setVisibleFiles] = React.useState<VisibleFile[]>([]);
   const colorIdx = React.useRef(0);
 
-  const fileInputRefs = React.useRef<Record<FileCategory, HTMLInputElement | null>>({
+  const fileInputRefs = React.useRef<Partial<Record<FileCategory, HTMLInputElement | null>>>({
     polygons: null,
     poi: null,
     layers: null,

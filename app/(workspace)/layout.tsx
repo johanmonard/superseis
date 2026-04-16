@@ -20,7 +20,6 @@ import {
 import { ErrorBoundary } from "../../components/ui/error-boundary";
 import { useAuthSession } from "../../lib/use-auth-session";
 import { useWorkspaceSidebar } from "../../lib/use-workspace-sidebar";
-import { getApiErrorMessage } from "../../services/api/auth";
 
 const isAuthStub = !process.env.NEXT_PUBLIC_AUTH_PROVIDER;
 
@@ -57,7 +56,7 @@ export default function WorkspaceRouteLayout({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { data: session, isLoading, error } = useAuthSession();
+  const { data: session, isLoading } = useAuthSession();
   const {
     isCollapsed: isSidebarCollapsed,
     setIsCollapsed: setIsSidebarCollapsed,
@@ -65,10 +64,10 @@ export default function WorkspaceRouteLayout({
   const isAdminRoute = pathname === "/admin" || pathname.startsWith("/admin/");
 
   React.useEffect(() => {
-    if (!isLoading && !error && !session) {
+    if (!isLoading && !session) {
       router.replace("/login");
     }
-  }, [error, isLoading, router, session]);
+  }, [isLoading, router, session]);
 
   React.useEffect(() => {
     if (!isLoading && session && isAdminRoute && !session.is_admin) {
@@ -88,19 +87,6 @@ export default function WorkspaceRouteLayout({
       <WorkspaceStatusScreen
         title="Loading workspace"
         description="Checking your current session before the workspace shell initializes."
-      />
-    );
-  }
-
-  if (error) {
-    return (
-      <WorkspaceStatusScreen
-        title="Workspace session unavailable"
-        description="The starter shell could not validate the current session."
-        detail={getApiErrorMessage(
-          error,
-          "Start the template API and verify NEXT_PUBLIC_API_BASE_URL."
-        )}
       />
     );
   }

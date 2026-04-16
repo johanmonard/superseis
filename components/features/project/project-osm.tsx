@@ -3,173 +3,197 @@
 import * as React from "react";
 import { appIcons } from "@/components/ui/icon";
 
+const { download: Download, loader: Loader, circleCheck: CircleCheck, alertTriangle: AlertTriangle } = appIcons;
+
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useActiveProject } from "@/lib/use-active-project";
-import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
-
-const { download: Download } = appIcons;
-
-/* ------------------------------------------------------------------
-   Dummy data — will come from terrain config
-   ------------------------------------------------------------------ */
-
-const DUMMY_TERRAIN_OPTIONS = ["Terrain Option 1"];
-const DUMMY_EXTENTS: Record<string, string[]> = {
-  "Terrain Option 1": ["Offsets", "Video", "GISDATA"],
-};
-
-const OSM_LAYERS = [
-  "roads",
-  "railways",
-  "waterways",
-  "water_a",
-  "buildings",
-  "landuse",
-  "transport_a",
-];
-
-type DownloadStatus = "idle" | "downloading" | "done" | "error";
-
-interface DownloadProgress {
-  status: DownloadStatus;
-  download: number;
-  clip: number;
-  tiling: number;
-  message: string;
-}
+import { useSectionData } from "@/lib/use-autosave";
+import { downloadOsmStream, clipOsmStream } from "@/services/api/project-osm";
 
 /* ------------------------------------------------------------------
-   Progress bar
+   Persisted state (saved to config.json via osm_ui)
    ------------------------------------------------------------------ */
-
-function ProgressStep({
-  label,
-  value,
-  active,
-}: {
-  label: string;
-  value: number;
-  active: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-[var(--space-1)]">
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-[var(--color-text-secondary)]">{label}</span>
-        <span className="text-xs tabular-nums text-[var(--color-text-muted)]">
-          {Math.round(value)}%
-        </span>
-      </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-bg-elevated)]">
-        <div
-          className={cn(
-            "h-full rounded-full transition-all duration-300",
-            active
-              ? "bg-[var(--color-accent)]"
-              : value >= 100
-                ? "bg-[var(--color-status-success)]"
-                : "bg-[var(--color-bg-elevated)]"
-          )}
-          // eslint-disable-next-line template/no-jsx-style-prop -- runtime sizing
-          style={{ width: `${Math.min(100, value)}%` }}
-        />
-      </div>
-    </div>
-  );
-}
 
 interface OsmData {
-  terrainOption: string;
+  surveyOption: string;
   extentName: string;
   skipIfExists: boolean;
+  selectedLayers: string[];
+  availableLayers: string[];
 }
+
 const DEFAULT_OSM: OsmData = {
-  terrainOption: "Terrain Option 1",
-  extentName: "GISDATA",
+  surveyOption: "",
+  extentName: "",
   skipIfExists: true,
+  selectedLayers: [],
+  availableLayers: [],
 };
+
+/* ------------------------------------------------------------------
+   Minimal survey types (read-only from survey section)
+   ------------------------------------------------------------------ */
+
+interface SurveyExtentInfo {
+  id: string;
+  name: string;
+}
+
+interface SurveyGroupInfo {
+  id: string;
+  name: string;
+  extents: SurveyExtentInfo[];
+}
+
+interface SurveySectionData {
+  groups: SurveyGroupInfo[];
+}
 
 /* ------------------------------------------------------------------
    Main component
    ------------------------------------------------------------------ */
 
+type StepStatus = "idle" | "running" | "done" | "error";
+
 export function ProjectOsm() {
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
 
-  const { data, update, status } = useSectionData<OsmData>(projectId, "osm", DEFAULT_OSM);
+  const { data, update } = useSectionData<OsmData>(projectId, "osm", DEFAULT_OSM);
 
-  const [progress, setProgress] = React.useState<DownloadProgress>({
-    status: "idle",
-    download: 0,
-    clip: 0,
-    tiling: 0,
-    message: "",
-  });
+  // Read survey section to populate dropdowns (read-only, no defaults to avoid seeding phantom groups)
+  const { data: surveyData } = useSectionData<SurveySectionData>(
+    projectId, "survey", { groups: [] },
+  );
+  const groups = surveyData.groups;
+  const selectedGroup = groups.find((g) => g.name === data.surveyOption);
+  const extents = selectedGroup?.extents ?? [];
 
-  const extents = data.terrainOption ? DUMMY_EXTENTS[data.terrainOption] ?? [] : [];
-  const canDownload = Boolean(data.terrainOption && data.extentName);
+  // Local workflow state
+  const [downloadStatus, setDownloadStatus] = React.useState<StepStatus>("idle");
+  const [clipStatus, setClipStatus] = React.useState<StepStatus>("idle");
+  const [downloadProgress, setDownloadProgress] = React.useState({ progress: 0, total: 0 });
+  const [clipProgress, setClipProgress] = React.useState({ progress: 0, total: 0 });
+  const [downloadMessage, setDownloadMessage] = React.useState("");
+  const [clipMessage, setClipMessage] = React.useState("");
 
-  // Simulate a download
-  const handleDownload = React.useCallback(() => {
-    if (!canDownload) return;
+  const canDownload = Boolean(data.surveyOption && data.extentName);
+  const canClip = data.availableLayers.length > 0 && data.selectedLayers.length > 0;
 
-    setProgress({ status: "downloading", download: 0, clip: 0, tiling: 0, message: "Downloading OSM data…" });
+  /* ---- Download ---- */
 
-    let step = 0;
-    const interval = setInterval(() => {
-      step++;
-      if (step <= 20) {
-        setProgress((p) => ({ ...p, download: step * 5, message: "Downloading OSM data…" }));
-      } else if (step <= 35) {
-        setProgress((p) => ({ ...p, download: 100, clip: (step - 20) * (100 / 15), message: "Clipping to extent…" }));
-      } else if (step <= 45) {
-        setProgress((p) => ({ ...p, clip: 100, tiling: (step - 35) * 10, message: "Generating tiles…" }));
-      } else {
-        clearInterval(interval);
-        setProgress({ status: "done", download: 100, clip: 100, tiling: 100, message: "OSM data ready." });
+  const handleDownload = React.useCallback(async () => {
+    if (!projectId || !canDownload) return;
+    setDownloadStatus("running");
+    setDownloadProgress({ progress: 0, total: 0 });
+    setDownloadMessage("");
+    try {
+      const final = await downloadOsmStream(
+        projectId,
+        {
+          surveyOption: data.surveyOption,
+          extentName: data.extentName,
+          skipIfExists: data.skipIfExists,
+        },
+        (evt) => {
+          setDownloadProgress({ progress: evt.progress, total: evt.total });
+        },
+      );
+      setDownloadStatus(final.ok ? "done" : "error");
+      setDownloadMessage(final.message);
+      if (final.ok && final.layers) {
+        update({ ...data, availableLayers: final.layers });
       }
-    }, 80);
-  }, [canDownload]);
+    } catch (err) {
+      setDownloadStatus("error");
+      setDownloadMessage(err instanceof Error ? err.message : "Download failed");
+    }
+  }, [projectId, canDownload, data, update]);
+
+  /* ---- Clip ---- */
+
+  const handleClip = React.useCallback(async () => {
+    if (!projectId || !canClip) return;
+    setClipStatus("running");
+    setClipProgress({ progress: 0, total: 0 });
+    setClipMessage("");
+    try {
+      const final = await clipOsmStream(
+        projectId,
+        {
+          surveyOption: data.surveyOption,
+          extentName: data.extentName,
+          layers: data.selectedLayers,
+        },
+        (evt) => {
+          setClipProgress({ progress: evt.progress, total: evt.total });
+          setClipMessage(evt.message);
+        },
+      );
+      setClipStatus(final.ok ? "done" : "error");
+      setClipMessage(final.message);
+    } catch (err) {
+      setClipStatus("error");
+      setClipMessage(err instanceof Error ? err.message : "Clip failed");
+    }
+  }, [projectId, canClip, data]);
+
+  /* ---- Layer selection ---- */
+
+  const toggleLayer = React.useCallback(
+    (layer: string) => {
+      const selected = data.selectedLayers.includes(layer)
+        ? data.selectedLayers.filter((l) => l !== layer)
+        : [...data.selectedLayers, layer];
+      update({ ...data, selectedLayers: selected });
+    },
+    [data, update],
+  );
+
+  const toggleAll = React.useCallback(() => {
+    const allSelected = data.selectedLayers.length === data.availableLayers.length;
+    update({
+      ...data,
+      selectedLayers: allSelected ? [] : [...data.availableLayers],
+    });
+  }, [data, update]);
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      {/* Header with autosave status */}
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">OSM</h2>
-        <AutosaveStatus status={status} />
-      </div>
-
-      <Field label="Terrain Option" layout="horizontal">
+      {/* Survey option selector */}
+      <Field label="Survey Option" layout="horizontal">
         <Select
-          value={data.terrainOption}
+          value={data.surveyOption}
           onChange={(e) => {
-            update({ ...data, terrainOption: e.target.value, extentName: "" });
+            update({ ...data, surveyOption: e.target.value, extentName: "" });
           }}
         >
-          <option value="">Select…</option>
-          {DUMMY_TERRAIN_OPTIONS.map((t) => (
-            <option key={t} value={t}>{t}</option>
+          <option value="">Select...</option>
+          {groups.map((g) => (
+            <option key={g.id} value={g.name}>{g.name}</option>
           ))}
         </Select>
       </Field>
 
-      <Field label="Extent Name" layout="horizontal">
+      {/* Extent selector */}
+      <Field label="Extent" layout="horizontal">
         <Select
           value={data.extentName}
           onChange={(e) => update({ ...data, extentName: e.target.value })}
-          disabled={!data.terrainOption}
+          disabled={!data.surveyOption}
         >
-          <option value="">Select…</option>
+          <option value="">Select...</option>
           {extents.map((e) => (
-            <option key={e} value={e}>{e}</option>
+            <option key={e.id} value={e.name}>{e.name}</option>
           ))}
         </Select>
       </Field>
 
+      {/* Skip if exists */}
       <Field label="Skip if Exists" layout="horizontal">
         <div className="flex items-center pt-[var(--space-1)]">
           <Checkbox
@@ -179,63 +203,124 @@ export function ProjectOsm() {
         </div>
       </Field>
 
-      <Field label="Layers" layout="horizontal">
-        <div className="flex flex-wrap gap-[var(--space-1)]">
-          {OSM_LAYERS.map((layer) => (
-            <span
-              key={layer}
-              className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)] px-[var(--space-2)] py-[var(--space-1)] text-xs text-[var(--color-text-secondary)]"
-            >
-              {layer}
-            </span>
-          ))}
-        </div>
-      </Field>
-
       <div className="h-px bg-[var(--color-border-subtle)]" />
 
-      {/* Download */}
-      <Button
-        variant="primary"
-        size="sm"
-        disabled={!canDownload || progress.status === "downloading"}
-        onClick={handleDownload}
-        className="self-start"
-      >
-        <Download size={14} className="mr-[var(--space-2)]" />
-        {progress.status === "downloading" ? "Downloading…" : "Download OSM"}
-      </Button>
-
-      {/* Progress */}
-      {progress.status !== "idle" && (
-        <div className="flex flex-col gap-[var(--space-3)] rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)] p-[var(--space-3)]">
-          <ProgressStep
-            label="Download"
-            value={progress.download}
-            active={progress.status === "downloading" && progress.download < 100}
-          />
-          <ProgressStep
-            label="Clip"
-            value={progress.clip}
-            active={progress.status === "downloading" && progress.download >= 100 && progress.clip < 100}
-          />
-          <ProgressStep
-            label="Tiling"
-            value={progress.tiling}
-            active={progress.status === "downloading" && progress.clip >= 100 && progress.tiling < 100}
-          />
-          <p
-            className={cn(
-              "text-xs",
-              progress.status === "done"
-                ? "text-[var(--color-status-success)]"
-                : progress.status === "error"
-                  ? "text-[var(--color-status-danger)]"
-                  : "text-[var(--color-text-muted)]"
-            )}
+      {/* Download button + progress */}
+      <div className="space-y-[var(--space-1)]">
+        <div className="flex items-center gap-[var(--space-3)]">
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!canDownload || downloadStatus === "running"}
+            onClick={handleDownload}
+            className="shrink-0 gap-[var(--space-2)]"
           >
-            {progress.message}
-          </p>
+            {downloadStatus === "running" ? (
+              <Loader size={14} className="animate-spin" />
+            ) : (
+              <Download size={14} />
+            )}
+            {downloadStatus === "running" ? "Downloading..." : "Download OSM"}
+          </Button>
+          {downloadStatus === "running" && downloadProgress.total > 0 && (
+            <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--color-bg-sunken)]">
+              <div
+                className="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-150"
+                // eslint-disable-next-line template/no-jsx-style-prop
+                style={{ width: `${Math.min(100, (downloadProgress.progress / downloadProgress.total) * 100)}%` }}
+              />
+            </div>
+          )}
+        </div>
+        {downloadMessage && downloadStatus !== "running" && (
+          <span className={cn(
+            "text-[11px]",
+            downloadStatus === "error"
+              ? "text-[var(--color-status-danger)]"
+              : "text-[var(--color-text-muted)]",
+          )}>
+            {downloadMessage}
+          </span>
+        )}
+      </div>
+
+      {/* Layer selection (shown after download) */}
+      {data.availableLayers.length > 0 && (
+        <>
+          <div className="h-px bg-[var(--color-border-subtle)]" />
+          <div className="space-y-[var(--space-2)]">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[var(--color-text-secondary)]">
+                Layers ({data.selectedLayers.length}/{data.availableLayers.length})
+              </span>
+              <button
+                type="button"
+                onClick={toggleAll}
+                className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+              >
+                {data.selectedLayers.length === data.availableLayers.length ? "Deselect all" : "Select all"}
+              </button>
+            </div>
+            <div className="space-y-[var(--space-1)]">
+              {data.availableLayers.map((layer) => (
+                <label
+                  key={layer}
+                  className="flex items-center gap-[var(--space-2)] text-xs text-[var(--color-text-primary)] cursor-pointer"
+                >
+                  <Checkbox
+                    checked={data.selectedLayers.includes(layer)}
+                    onCheckedChange={() => toggleLayer(layer)}
+                  />
+                  {layer}
+                </label>
+              ))}
+            </div>
+
+            {/* Clip button + progress */}
+            <div className="mt-[var(--space-3)] flex items-center gap-[var(--space-3)]">
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={!canClip || clipStatus === "running"}
+                onClick={handleClip}
+                className="shrink-0 gap-[var(--space-2)]"
+              >
+                {clipStatus === "running" ? (
+                  <Loader size={14} className="animate-spin" />
+                ) : (
+                  <Download size={14} />
+                )}
+                {clipStatus === "running" ? "Clipping..." : "Clip Selected Layers"}
+              </Button>
+              {clipStatus === "running" && clipProgress.total > 0 && (
+                <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--color-bg-sunken)]">
+                  <div
+                    className="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-150"
+                    // eslint-disable-next-line template/no-jsx-style-prop
+                    style={{ width: `${Math.min(100, (clipProgress.progress / clipProgress.total) * 100)}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Clip status message */}
+      {clipMessage && clipStatus !== "idle" && (
+        <div
+          className={cn(
+            "flex items-center gap-[var(--space-2)] rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-2)] text-xs",
+            clipStatus === "done"
+              ? "border border-[var(--color-status-success-border,#34d399)] bg-[var(--color-status-success-bg,#d1fae5)] text-[var(--color-status-success-text,#065f46)]"
+              : clipStatus === "error"
+                ? "border border-[var(--color-status-danger)] bg-[var(--color-bg-elevated)] text-[var(--color-status-danger)]"
+                : "text-[var(--color-text-muted)]"
+          )}
+        >
+          {clipStatus === "done" && <CircleCheck size={13} />}
+          {clipStatus === "error" && <AlertTriangle size={13} />}
+          {clipMessage}
         </div>
       )}
     </div>

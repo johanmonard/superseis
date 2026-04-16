@@ -10,6 +10,7 @@ type RequestOptions = {
   authMode?: 'session' | 'apiKey' | 'hybrid'
   keepalive?: boolean
   signal?: AbortSignal
+  timeoutMs?: number
 }
 
 export class ApiError extends Error {
@@ -60,7 +61,8 @@ async function parseErrorBody(response: Response): Promise<unknown> {
 export async function requestJson<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { apiKey, requestTimeoutMs } = getRuntimeConfig()
   const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => controller.abort(), requestTimeoutMs)
+  const timeout = options.timeoutMs ?? requestTimeoutMs
+  const timeoutId = window.setTimeout(() => controller.abort(), timeout)
 
   const abortListener = () => controller.abort()
   options.signal?.addEventListener('abort', abortListener, { once: true })

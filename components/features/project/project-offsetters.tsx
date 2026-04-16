@@ -10,7 +10,7 @@ import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { useActiveProject } from "@/lib/use-active-project";
-import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
+import { useSectionData } from "@/lib/use-autosave";
 
 const { check: Check, chevronLeft: ChevronLeft, chevronRight: ChevronRight, gripVertical: GripVertical, minus: Minus, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
 
@@ -554,10 +554,8 @@ export function ProjectOffsetters() {
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      {/* Header with autosave status */}
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Offsetters</h2>
-        <AutosaveStatus status={status} />
       </div>
 
       {/* Config selector */}

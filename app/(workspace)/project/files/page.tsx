@@ -1,5 +1,5 @@
-import { ProjectGisViewer } from "@/components/features/project/project-gis-viewer";
+import { ProjectGisGlobe } from "@/components/features/project/project-gis-globe";
 
 export default function ProjectFilesPage() {
-  return <ProjectGisViewer />;
+  return <ProjectGisGlobe />;
 }

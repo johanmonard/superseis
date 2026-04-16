@@ -8,7 +8,7 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { useActiveProject } from "@/lib/use-active-project";
-import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
+import { useSectionData } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
 
 const { plus: Plus, trash: Trash2, x: X } = appIcons;
@@ -230,11 +230,6 @@ export function ProjectLayers() {
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      {/* Autosave status */}
-      <div className="flex justify-end">
-        <AutosaveStatus status={status} />
-      </div>
-
       {/* Layer selector */}
       <div className="flex flex-col gap-[var(--space-2)]">
         <div className="flex flex-wrap items-center gap-[var(--space-1)]">

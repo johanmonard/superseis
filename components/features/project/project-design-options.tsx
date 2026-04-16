@@ -8,10 +8,12 @@ import { Button } from "@/components/ui/button";
 const { check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
 import { CoordinateInput } from "@/components/ui/coordinate-input";
 import { Field } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { useActiveProject } from "@/lib/use-active-project";
-import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
+import { useSectionData } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
+import { useProjectSection } from "@/services/query/project-sections";
 
 /* ------------------------------------------------------------------
    Types
@@ -32,13 +34,16 @@ interface DesignOption {
   name: string;
   partitioning: string;
   rows: OptionRow[];
+  resolution: string;
+  gridOriginX: string;
+  gridOriginY: string;
 }
 
-function createRow(): OptionRow {
+function createRow(region = ""): OptionRow {
   return {
     id: crypto.randomUUID(),
     design: "",
-    region: "",
+    region,
     spShiftX: "0",
     spShiftY: "0",
     rpShiftX: "0",
@@ -52,6 +57,9 @@ function createOption(name: string): DesignOption {
     name,
     partitioning: "",
     rows: [createRow()],
+    resolution: "",
+    gridOriginX: "0",
+    gridOriginY: "0",
   };
 }
 
@@ -66,23 +74,38 @@ const DEFAULT_DESIGN_OPTIONS: DesignOptionsData = {
 };
 
 /* ------------------------------------------------------------------
-   Dummy data — will come from actual Design / Partitioning state
-   ------------------------------------------------------------------ */
-
-const DUMMY_DESIGNS = ["Design 1"];
-const DUMMY_PARTITIONINGS = ["Design", "Zipper"];
-const DUMMY_REGIONS: Record<string, string[]> = {
-  Design: ["design_reg"],
-  Zipper: ["zipper_reg_a", "zipper_reg_b"],
-};
-
-/* ------------------------------------------------------------------
    Component
    ------------------------------------------------------------------ */
 
 export function ProjectDesignOptions() {
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
+
+  // Read design groups for the Design dropdown
+  const { data: designSection } = useProjectSection(projectId, "design");
+  const designNames = React.useMemo(() => {
+    const groups = (designSection?.data as { groups?: { name: string }[] } | undefined)?.groups;
+    return (groups ?? []).map((g) => g.name);
+  }, [designSection]);
+
+  // Read partitioning groups for the Partitioning dropdown and region (polygon) lists
+  const { data: partitioningSection } = useProjectSection(projectId, "partitioning");
+  const partitioningGroups: { name: string; polygons: string[] }[] = React.useMemo(() => {
+    const groups = (partitioningSection?.data as { groups?: { name: string; polygons: string[] }[] } | undefined)?.groups;
+    return groups ?? [];
+  }, [partitioningSection]);
+
+  const partitioningNames = React.useMemo(
+    () => partitioningGroups.map((g) => g.name),
+    [partitioningGroups],
+  );
+  const partitioningRegions = React.useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const g of partitioningGroups) {
+      map[g.name] = g.polygons ?? [];
+    }
+    return map;
+  }, [partitioningGroups]);
 
   const { data, update, status } = useSectionData<DesignOptionsData>(projectId, "design_options", DEFAULT_DESIGN_OPTIONS);
   const options = data.options;
@@ -155,7 +178,7 @@ export function ProjectDesignOptions() {
   );
 
   const regions = activeOption.partitioning
-    ? DUMMY_REGIONS[activeOption.partitioning] ?? []
+    ? partitioningRegions[activeOption.partitioning] ?? []
     : [];
 
   const [editingId, setEditingId] = React.useState<string | null>(null);
@@ -175,10 +198,6 @@ export function ProjectDesignOptions() {
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      <div className="flex items-center justify-end">
-        <AutosaveStatus status={status} />
-      </div>
-
       {/* Option tabs */}
       <div className="flex flex-col gap-[var(--space-2)]">
         <div className="flex flex-wrap items-center gap-[var(--space-1)]">
@@ -274,12 +293,18 @@ export function ProjectDesignOptions() {
       <Field label="Partitioning" layout="horizontal">
         <Select
           value={activeOption.partitioning}
-          onChange={(e) =>
-            updateOption(activeId, { partitioning: e.target.value })
-          }
+          onChange={(e) => {
+            const name = e.target.value;
+            const polygons = partitioningRegions[name] ?? [];
+            // Auto-create one row per region polygon
+            const rows = polygons.length > 0
+              ? polygons.map((p) => createRow(p))
+              : [createRow()];
+            updateOption(activeId, { partitioning: name, rows });
+          }}
         >
           <option value="">Select…</option>
-          {DUMMY_PARTITIONINGS.map((p) => (
+          {partitioningNames.map((p) => (
             <option key={p} value={p}>
               {p}
             </option>
@@ -293,10 +318,10 @@ export function ProjectDesignOptions() {
           {/* Header */}
           <div className="flex items-center gap-[var(--space-2)]">
             <span className="w-[110px] shrink-0 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-              Design
+              Region
             </span>
             <span className="w-[110px] shrink-0 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-              Region
+              Design
             </span>
             <span className="flex-1 text-right text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
               SP Shift
@@ -315,23 +340,23 @@ export function ProjectDesignOptions() {
             >
               <div className="w-[110px] shrink-0">
                 <Select
-                  value={row.design}
-                  onChange={(e) => updateRow(row.id, { design: e.target.value })}
-                >
-                  <option value="">—</option>
-                  {DUMMY_DESIGNS.map((d) => (
-                    <option key={d} value={d}>{d}</option>
-                  ))}
-                </Select>
-              </div>
-              <div className="w-[110px] shrink-0">
-                <Select
                   value={row.region}
                   onChange={(e) => updateRow(row.id, { region: e.target.value })}
                 >
                   <option value="">—</option>
                   {regions.map((r) => (
                     <option key={r} value={r}>{r}</option>
+                  ))}
+                </Select>
+              </div>
+              <div className="w-[110px] shrink-0">
+                <Select
+                  value={row.design}
+                  onChange={(e) => updateRow(row.id, { design: e.target.value })}
+                >
+                  <option value="">—</option>
+                  {designNames.map((d) => (
+                    <option key={d} value={d}>{d}</option>
                   ))}
                 </Select>
               </div>
@@ -369,6 +394,28 @@ export function ProjectDesignOptions() {
           </Button>
         </div>
       )}
+
+      <div className="h-px bg-[var(--color-border-subtle)]" />
+
+      <Field label="Resolution" htmlFor="opt-resolution" layout="horizontal">
+        <Input
+          id="opt-resolution"
+          type="number"
+          value={activeOption.resolution}
+          onChange={(e) =>
+            updateOption(activeId, { resolution: e.target.value })
+          }
+        />
+      </Field>
+
+      <Field label="Grid Origin" layout="horizontal">
+        <CoordinateInput
+          x={activeOption.gridOriginX}
+          y={activeOption.gridOriginY}
+          onXChange={(v) => updateOption(activeId, { gridOriginX: v })}
+          onYChange={(v) => updateOption(activeId, { gridOriginY: v })}
+        />
+      </Field>
     </div>
   );
 }

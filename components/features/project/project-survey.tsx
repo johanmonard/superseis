@@ -5,13 +5,15 @@ import { appIcons } from "@/components/ui/icon";
 
 const { check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
 
+import { AngleInput } from "@/components/ui/angle-input";
 import { CoordinateInput } from "@/components/ui/coordinate-input";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { useActiveProject } from "@/lib/use-active-project";
-import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
+import { useSectionData } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
+import { useProjectFiles } from "@/services/query/project-files";
 
 /* ------------------------------------------------------------------
    Types
@@ -24,13 +26,10 @@ interface ExtentTab {
   marginLeft: string;
   marginRight: string;
   marginBottom: string;
-  gridOriginX: string;
-  gridOriginY: string;
   rlAngle: string;
-  resolution: string;
 }
 
-interface TerrainGroup {
+interface SurveyGroup {
   id: string;
   name: string;
   acquisitionPolygon: string;
@@ -38,22 +37,6 @@ interface TerrainGroup {
   extents: ExtentTab[];
   activeExtentId: string;
 }
-
-const DUMMY_POLYGONS = [
-  "exclusion_zone_north",
-  "survey_boundary_v2",
-  "river_buffer_500m",
-  "protected_area_east",
-  "camp_exclusion",
-];
-
-const DUMMY_POIS = [
-  "well_locations",
-  "camp_sites",
-  "access_roads",
-  "river_crossings",
-  "villages",
-];
 
 function createExtent(name: string): ExtentTab {
   return {
@@ -63,34 +46,30 @@ function createExtent(name: string): ExtentTab {
     marginLeft: "1000",
     marginRight: "1000",
     marginBottom: "1000",
-    gridOriginX: "0",
-    gridOriginY: "0",
     rlAngle: "0",
-    resolution: "",
   };
 }
 
-function createGroup(name: string): TerrainGroup {
-  const offsets = createExtent("Offsets");
-  const video = createExtent("Video");
-  const gisdata = createExtent("GISDATA");
+function createGroup(name: string): SurveyGroup {
+  const layers = createExtent("Terrain model");
+  const simulation = createExtent("Simulation");
   return {
     id: crypto.randomUUID(),
     name,
     acquisitionPolygon: "",
     pois: [],
-    extents: [offsets, video, gisdata],
-    activeExtentId: offsets.id,
+    extents: [layers, simulation],
+    activeExtentId: layers.id,
   };
 }
 
-interface TerrainData {
-  groups: TerrainGroup[];
+interface SurveyData {
+  groups: SurveyGroup[];
   activeGroupId: string;
 }
 
-const DEFAULT_TERRAIN: TerrainData = {
-  groups: [createGroup("Terrain Option 1")],
+const DEFAULT_SURVEY: SurveyData = {
+  groups: [createGroup("Survey Option 1")],
   activeGroupId: "",
 };
 
@@ -262,58 +241,71 @@ function TagList({
    Margin box — visual representation
    ------------------------------------------------------------------ */
 
-function MarginBox({
+/* ------------------------------------------------------------------
+   Margin box — visual spatial editor
+   ------------------------------------------------------------------ */
+
+function MarginInput({
+  value,
+  onChange,
+  "aria-label": ariaLabel,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  "aria-label": string;
+}) {
+  return (
+    <input
+      type="number"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label={ariaLabel}
+      className="h-6 w-14 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)] px-1 text-center text-xs tabular-nums text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-accent)] focus:ring-1 focus:ring-[var(--color-focus-ring)]"
+    />
+  );
+}
+
+function MarginAzimuthBox({
   top, left, right, bottom,
   onTopChange, onLeftChange, onRightChange, onBottomChange,
+  azimuth,
+  onAzimuthChange,
 }: {
   top: string; left: string; right: string; bottom: string;
   onTopChange: (v: string) => void;
   onLeftChange: (v: string) => void;
   onRightChange: (v: string) => void;
   onBottomChange: (v: string) => void;
+  azimuth: number;
+  onAzimuthChange: (v: number) => void;
 }) {
   return (
-    <div className="flex flex-col gap-[var(--space-1)]">
-      {/* Top */}
-      <div className="flex justify-center">
-        <Input
-          type="number"
-          value={top}
-          onChange={(e) => onTopChange(e.target.value)}
-          className="w-20 text-center"
-          aria-label="Margin top"
-        />
-      </div>
-      {/* Middle row: Left — box — Right */}
-      <div className="flex items-center gap-[var(--space-1)]">
-        <Input
-          type="number"
-          value={left}
-          onChange={(e) => onLeftChange(e.target.value)}
-          className="flex-1 text-center"
-          aria-label="Margin left"
-        />
-        <div className="flex h-14 w-20 shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-dashed border-[var(--color-border-strong)] text-[10px] text-[var(--color-text-muted)]">
-          extent
+    <div className="flex flex-col items-center gap-[var(--space-2)]">
+      {/* Top input */}
+      <MarginInput value={top} onChange={onTopChange} aria-label="Margin top" />
+
+      {/* Middle row: left input — azimuth dial — right input */}
+      <div className="flex items-center gap-[var(--space-3)]">
+        <MarginInput value={left} onChange={onLeftChange} aria-label="Margin left" />
+
+        {/* Azimuth dial as the center element */}
+        <div className="relative shrink-0">
+          {/* Dashed outer boundary */}
+          <div className="absolute inset-[-8px] rounded-[var(--radius-md)] border border-dashed border-[var(--color-border-subtle)]" />
+          <AngleInput
+            value={azimuth}
+            onChange={onAzimuthChange}
+            min={0}
+            max={360}
+            step={0.01}
+          />
         </div>
-        <Input
-          type="number"
-          value={right}
-          onChange={(e) => onRightChange(e.target.value)}
-          className="flex-1 text-center"
-          aria-label="Margin right"
-        />
+
+        <MarginInput value={right} onChange={onRightChange} aria-label="Margin right" />
       </div>
-      {/* Bottom */}
-      <div className="flex justify-center">
-        <Input
-          type="number"
-          value={bottom}
-          onChange={(e) => onBottomChange(e.target.value)}
-          className="w-20 text-center"
-          aria-label="Margin bottom"
-        />
-      </div>
+
+      {/* Bottom input */}
+      <MarginInput value={bottom} onChange={onBottomChange} aria-label="Margin bottom" />
     </div>
   );
 }
@@ -430,14 +422,40 @@ function ExtentTabs({
 }
 
 /* ------------------------------------------------------------------
+   Viewport data exposed to parent
+   ------------------------------------------------------------------ */
+
+export interface SurveyViewportData {
+  projectId: number | null;
+  acquisitionPolygon: string; // name without .gpkg
+  pois: string[];             // names without .gpkg
+  margins: { top: number; left: number; right: number; bottom: number };
+  azimuth: number;            // degrees
+}
+
+/* ------------------------------------------------------------------
    Main component
    ------------------------------------------------------------------ */
 
-export function ProjectTerrain() {
+export function ProjectSurvey({
+  onViewportChange,
+}: {
+  onViewportChange?: (data: SurveyViewportData) => void;
+} = {}) {
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
 
-  const { data, update, status } = useSectionData<TerrainData>(projectId, "terrain", DEFAULT_TERRAIN);
+  const { data: projectFiles } = useProjectFiles(projectId);
+  const availablePolygons = React.useMemo(
+    () => (projectFiles?.polygons ?? []).map((f) => f.replace(/\.gpkg$/, "")),
+    [projectFiles?.polygons],
+  );
+  const availablePois = React.useMemo(
+    () => (projectFiles?.poi ?? []).map((f) => f.replace(/\.gpkg$/, "")),
+    [projectFiles?.poi],
+  );
+
+  const { data, update, status } = useSectionData<SurveyData>(projectId, "survey", DEFAULT_SURVEY);
   const groups = data.groups;
   const activeGroupId = data.activeGroupId || groups[0]?.id || "";
 
@@ -446,15 +464,37 @@ export function ProjectTerrain() {
     activeGroup.extents.find((e) => e.id === activeGroup.activeExtentId) ??
     activeGroup.extents[0];
 
+  // Notify parent about viewport data
+  React.useEffect(() => {
+    onViewportChange?.({
+      projectId,
+      acquisitionPolygon: activeGroup.acquisitionPolygon,
+      pois: activeGroup.pois,
+      margins: {
+        top: Number(activeExtent.marginTop) || 0,
+        left: Number(activeExtent.marginLeft) || 0,
+        right: Number(activeExtent.marginRight) || 0,
+        bottom: Number(activeExtent.marginBottom) || 0,
+      },
+      azimuth: Number(activeExtent.rlAngle) || 0,
+    });
+  }, [
+    onViewportChange, projectId,
+    activeGroup.acquisitionPolygon, activeGroup.pois,
+    activeExtent.marginTop, activeExtent.marginLeft,
+    activeExtent.marginRight, activeExtent.marginBottom,
+    activeExtent.rlAngle,
+  ]);
+
   const updateGroup = React.useCallback(
-    (id: string, patch: Partial<TerrainGroup>) => {
+    (id: string, patch: Partial<SurveyGroup>) => {
       update({ ...data, groups: data.groups.map((g) => (g.id === id ? { ...g, ...patch } : g)) });
     },
     [data, update]
   );
 
   const addGroup = React.useCallback(() => {
-    const g = createGroup(`Terrain Option ${groups.length + 1}`);
+    const g = createGroup(`Survey Option ${groups.length + 1}`);
     update({ groups: [...data.groups, g], activeGroupId: g.id });
   }, [data, groups.length, update]);
 
@@ -516,11 +556,6 @@ export function ProjectTerrain() {
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      {/* Autosave status */}
-      <div className="flex justify-end">
-        <AutosaveStatus status={status} />
-      </div>
-
       {/* Group selector */}
       <GroupSelector
         groups={groups}
@@ -544,7 +579,7 @@ export function ProjectTerrain() {
           onChange={(e) => updateGroup(activeGroupId, { acquisitionPolygon: e.target.value })}
         >
           <option value="">None</option>
-          {DUMMY_POLYGONS.map((p) => (
+          {availablePolygons.map((p) => (
             <option key={p} value={p}>{p}</option>
           ))}
         </Select>
@@ -553,7 +588,7 @@ export function ProjectTerrain() {
       <Field label="Points of Interest" layout="horizontal">
         <TagList
           selected={activeGroup.pois}
-          available={DUMMY_POIS}
+          available={availablePois}
           onAdd={(v) => updateGroup(activeGroupId, { pois: [...activeGroup.pois, v] })}
           onRemove={(i) =>
             updateGroup(activeGroupId, {
@@ -580,8 +615,9 @@ export function ProjectTerrain() {
       />
 
       {/* Extent fields — labels on top */}
-      <Field label="Margins">
-        <MarginBox
+      <Field label="Margins & RL Azimuth">
+        <div className="pt-[var(--space-4)]">
+        <MarginAzimuthBox
           top={activeExtent.marginTop}
           left={activeExtent.marginLeft}
           right={activeExtent.marginRight}
@@ -590,38 +626,11 @@ export function ProjectTerrain() {
           onLeftChange={(v) => updateExtent(activeExtent.id, { marginLeft: v })}
           onRightChange={(v) => updateExtent(activeExtent.id, { marginRight: v })}
           onBottomChange={(v) => updateExtent(activeExtent.id, { marginBottom: v })}
+          azimuth={Number(activeExtent.rlAngle) || 0}
+          onAzimuthChange={(v) => updateExtent(activeExtent.id, { rlAngle: String(v) })}
         />
+        </div>
       </Field>
-
-      <div className="grid grid-cols-3 gap-[var(--space-3)]">
-        <Field label="Grid Origin" htmlFor="ter-grid-origin">
-          <CoordinateInput
-            align="left"
-            x={activeExtent.gridOriginX}
-            y={activeExtent.gridOriginY}
-            onXChange={(v) => updateExtent(activeExtent.id, { gridOriginX: v })}
-            onYChange={(v) => updateExtent(activeExtent.id, { gridOriginY: v })}
-          />
-        </Field>
-
-        <Field label="RL Angle" htmlFor="ter-rl-angle">
-          <Input
-            id="ter-rl-angle"
-            type="number"
-            value={activeExtent.rlAngle}
-            onChange={(e) => updateExtent(activeExtent.id, { rlAngle: e.target.value })}
-          />
-        </Field>
-
-        <Field label="Resolution" htmlFor="ter-resolution">
-          <Input
-            id="ter-resolution"
-            type="number"
-            value={activeExtent.resolution}
-            onChange={(e) => updateExtent(activeExtent.id, { resolution: e.target.value })}
-          />
-        </Field>
-      </div>
     </div>
   );
 }

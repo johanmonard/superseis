@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   Activity,
+  AlertTriangle,
   BarChart3,
   Blocks,
   Braces,
@@ -9,7 +10,9 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CircleCheck,
   ClipboardList,
+  Clock,
   Compass,
   Download,
   FolderOpen,
@@ -20,6 +23,7 @@ import {
   Layers,
   LayoutDashboard,
   ListChecks,
+  Loader,
   LogOut,
   Map,
   MapPin,
@@ -27,6 +31,7 @@ import {
   Moon,
   Mountain,
   Pencil,
+  Play,
   Plus,
   Plane,
   RefreshCw,
@@ -118,6 +123,11 @@ export const appIcons = {
   user: User,
   users: Users,
   workshop: Wrench,
+  alertTriangle: AlertTriangle,
+  circleCheck: CircleCheck,
+  clock: Clock,
+  loader: Loader,
+  play: Play,
   x: X,
 } as const;
 

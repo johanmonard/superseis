@@ -59,14 +59,21 @@ export function CountryMap({ country }: CountryMapProps) {
   const [isDragging, setIsDragging] = React.useState(false);
   const dragging = React.useRef(false);
   const lastPos = React.useRef({ x: 0, y: 0 });
+  const rotationRef = React.useRef(rotation);
+  const zoomRef = React.useRef(zoom);
+
+  React.useEffect(() => {
+    rotationRef.current = rotation;
+    zoomRef.current = zoom;
+  }, [rotation, zoom]);
 
   // Smooth animated rotation (and optional zoom) to a target
   const animateTo = React.useCallback((target: [number, number, number], targetZoom?: number) => {
     cancelAnimationFrame(animFrame.current);
     const duration = 1000;
     let start: number | null = null;
-    const from = [...rotation] as [number, number, number];
-    const fromZoom = zoom;
+    const from = [...rotationRef.current] as [number, number, number];
+    const fromZoom = zoomRef.current;
 
     // Normalize longitude difference to shortest path
     let dLon = target[0] - from[0];
@@ -91,7 +98,7 @@ export function CountryMap({ country }: CountryMapProps) {
       }
     };
     animFrame.current = requestAnimationFrame(step);
-  }, [rotation, zoom]);
+  }, []);
 
   // Measure container and fit globe to it
   React.useEffect(() => {
@@ -107,28 +114,20 @@ export function CountryMap({ country }: CountryMapProps) {
 
   const globeRadius = size * SCALE_RATIO * zoom;
 
-  const isFirstLoad = React.useRef(true);
-  const pendingGeos = React.useRef<{ properties: { name: string }; type: string; geometry: GeoJSON.Geometry }[] | null>(null);
+  const [geoData, setGeoData] = React.useState<{ properties: { name: string }; type: string; geometry: GeoJSON.Geometry }[] | null>(null);
 
-  // Process geo data in an effect to avoid setState during render
+  // Process geo data once available
   React.useEffect(() => {
-    if (initialized || !pendingGeos.current) return;
-    const geographies = pendingGeos.current;
-    pendingGeos.current = null;
-    const target = geographies.find((g) => g.properties.name === targetName);
+    if (initialized || !geoData) return;
+    const target = geoData.find((g) => g.properties.name === targetName);
     if (target) {
       const [lon, lat] = geoCentroid(target as GeoJSON.Feature);
       const rot: [number, number, number] = [-lon, -lat, 0];
       centeredRotation.current = rot;
-      if (isFirstLoad.current) {
-        setRotation(rot);
-        isFirstLoad.current = false;
-      } else {
-        animateTo(rot);
-      }
+      animateTo(rot);
     }
     setInitialized(true);
-  }, [initialized, targetName, animateTo]);
+  }, [initialized, targetName, geoData, animateTo]);
 
   const prevCountry = React.useRef(country);
   React.useEffect(() => {
@@ -226,7 +225,10 @@ export function CountryMap({ country }: CountryMapProps) {
         />
         <Geographies geography={GEO_URL}>
           {({ geographies }) => {
-            if (!initialized) pendingGeos.current = geographies;
+            if (!initialized && !geoData) {
+              // Schedule state update outside of render
+              queueMicrotask(() => setGeoData(geographies));
+            }
             return geographies.map((geo) => {
               const name = geo.properties.name;
               const isSelected = name === targetName;

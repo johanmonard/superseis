@@ -17,6 +17,7 @@ from api.db.engine import get_db
 from api.db.models import Project
 from api.dojo import get_dojo_project_service
 
+from dojo.v3.domain.config import GridOption, Margins, SurveyExtent, SurveyOption
 from dojo.v3.services.project_service import ProjectNotFoundError, ProjectService
 
 router = APIRouter(prefix="/project/{project_id}/sections", tags=["project-sections"])
@@ -31,7 +32,7 @@ _DEFINITION_FIELDS = (
 
 VALID_SECTIONS = frozenset([
     "definition",
-    "terrain",
+    "survey",
     "osm",
     "layers",
     "maps",
@@ -94,23 +95,28 @@ def _read_section(section: str, dojo_svc: ProjectService, project_id: int) -> di
     if section == "gis_styles":
         return cfg.gis_styles
 
-    # Other sections: pass through as-is from config dict for now
-    # (will be reshaped as each section is migrated)
-    config_dict = cfg.model_dump()
-    section_map = {
-        "terrain": "survey",
-        "design": "grid",
-        "design_options": "grid",
-        "partitioning": "grid",
-        "layers": "layers",
-        "maps": "mappers",
-        "offsetters": "offsetters",
-        "crew": "crew",
-        "osm": None,
+    if section == "partitioning":
+        return cfg.partitioning
+
+    if section == "design":
+        return cfg.design
+
+    if section == "design_options":
+        return cfg.design_options
+
+    # Remaining UI sections — each stored in its own field
+    _ui_section_map = {
+        "survey": "survey_ui",
+        "layers": "layers_ui",
+        "maps": "maps_ui",
+        "offsetters": "offsetters_ui",
+        "crew": "crew_ui",
+        "osm": "osm_ui",
     }
-    config_key = section_map.get(section)
-    if config_key and config_key in config_dict:
-        return config_dict[config_key]
+    attr = _ui_section_map.get(section)
+    if attr:
+        return getattr(cfg, attr, {})
+
     return {}
 
 
@@ -135,8 +141,90 @@ def _write_section(section: str, data: dict[str, Any], dojo_svc: ProjectService,
         cfg.save(str(project_dir / "config.json"))
         return
 
-    # Other sections: not yet reshaped — store raw for now
-    # (will be implemented as each section is migrated)
+    if section == "partitioning":
+        cfg.partitioning = data
+        cfg.save(str(project_dir / "config.json"))
+        return
+
+    if section == "design":
+        cfg.design = data
+        cfg.save(str(project_dir / "config.json"))
+        return
+
+    if section == "survey":
+        # Save full UI state
+        cfg.survey_ui = data
+        # Bridge: populate typed cfg.survey from UI groups
+        cfg.survey.clear()
+        groups = data.get("groups", [])
+        active_group_id = data.get("activeGroupId", "")
+        active_group_name = ""
+        for group in groups:
+            name = group.get("name", "")
+            if not name:
+                continue
+            if group.get("id") == active_group_id:
+                active_group_name = name
+            extents = {}
+            for ext in group.get("extents", []):
+                ext_id = ext.get("id", ext.get("name", ""))
+                extents[ext_id] = SurveyExtent(
+                    name=ext.get("name", ""),
+                    margins=Margins(
+                        top=int(float(ext.get("marginTop") or 0)),
+                        bottom=int(float(ext.get("marginBottom") or 0)),
+                        left=int(float(ext.get("marginLeft") or 0)),
+                        right=int(float(ext.get("marginRight") or 0)),
+                    ),
+                    rl_angle=float(ext.get("rlAngle") or 0),
+                )
+            cfg.survey[name] = SurveyOption(
+                acq_polygon=group.get("acquisitionPolygon", ""),
+                pois=group.get("pois", []),
+                extents=extents,
+            )
+        if active_group_name:
+            cfg.active_options.survey = active_group_name
+        cfg.save(str(project_dir / "config.json"))
+        return
+
+    if section == "design_options":
+        cfg.design_options = data
+        # Bridge: populate cfg.grid resolution + origin from design options
+        options = data.get("options", [])
+        active_id = data.get("activeId", "")
+        active_name = ""
+        for opt in options:
+            name = opt.get("name", "")
+            if not name:
+                continue
+            if opt.get("id") == active_id:
+                active_name = name
+            resolution = float(opt.get("resolution") or 1) or 1.0
+            origin_x = float(opt.get("gridOriginX") or 0)
+            origin_y = float(opt.get("gridOriginY") or 0)
+            if name not in cfg.grid:
+                cfg.grid[name] = GridOption()
+            cfg.grid[name].resolution = resolution
+            cfg.grid[name].origin = (origin_x, origin_y)
+        if active_name:
+            cfg.active_options.grid = active_name
+        cfg.save(str(project_dir / "config.json"))
+        return
+
+    # Remaining UI sections
+    _ui_section_map = {
+        "layers": "layers_ui",
+        "maps": "maps_ui",
+        "offsetters": "offsetters_ui",
+        "crew": "crew_ui",
+        "osm": "osm_ui",
+    }
+    attr = _ui_section_map.get(section)
+    if attr:
+        setattr(cfg, attr, data)
+        cfg.save(str(project_dir / "config.json"))
+        return
 
 
 # ---------------------------------------------------------------------------

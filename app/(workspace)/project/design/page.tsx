@@ -1,12 +1,16 @@
 "use client";
 
 import * as React from "react";
-import { ProjectSettingsPage } from "@/components/features/project/project-settings-page";
 import { ProjectDesign } from "@/components/features/project/project-design";
 import type { DesignGroup } from "@/components/features/project/project-design";
 import { ProjectDesignOptions } from "@/components/features/project/project-design-options";
 import { PatchViewport } from "@/components/features/project/patch-viewport";
+import { ViewportPlaceholder } from "@/components/features/project/viewport-placeholder";
 import type { PatchParams } from "@/components/features/project/patch-viewport";
+import { ProjectSettingsPage } from "@/components/features/project/project-settings-page";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+
+type DesignTab = "attributes" | "region";
 
 function toParams(g: DesignGroup): PatchParams {
   return {
@@ -22,25 +26,40 @@ function toParams(g: DesignGroup): PatchParams {
 }
 
 export default function DesignPage() {
+  const [tab, setTab] = React.useState<DesignTab>("attributes");
   const [params, setParams] = React.useState<PatchParams | null>(null);
 
   const handleActiveChange = React.useCallback((group: DesignGroup) => {
     setParams(toParams(group));
   }, []);
 
-  return (
-    <ProjectSettingsPage
-      title="Design"
-      panelTitle="Attributes"
-      viewport={params ? <PatchViewport params={params} /> : undefined}
-    >
-      <ProjectDesign onActiveChange={handleActiveChange} />
-      <div className="mt-[var(--control-height-md)]">
-        <h2 className="mb-[var(--space-4)] text-sm font-semibold text-[var(--color-text-primary)]">
-          Options
-        </h2>
-        <ProjectDesignOptions />
+  const viewport =
+    tab === "attributes" && params ? (
+      <PatchViewport params={params} />
+    ) : (
+      <div className="flex h-full flex-col items-center justify-center p-[var(--space-4)]">
+        <ViewportPlaceholder />
       </div>
+    );
+
+  return (
+    <ProjectSettingsPage title="Design" panelTitle="Design" viewport={viewport}>
+      <Tabs
+        value={tab}
+        onValueChange={(v) => setTab(v as DesignTab)}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <TabsList>
+          <TabsTrigger value="attributes">Attributes</TabsTrigger>
+          <TabsTrigger value="region">Region assignment</TabsTrigger>
+        </TabsList>
+        <TabsContent value="attributes" className="min-h-0 flex-1 overflow-y-auto">
+          <ProjectDesign onActiveChange={handleActiveChange} />
+        </TabsContent>
+        <TabsContent value="region" className="min-h-0 flex-1 overflow-y-auto">
+          <ProjectDesignOptions />
+        </TabsContent>
+      </Tabs>
     </ProjectSettingsPage>
   );
 }

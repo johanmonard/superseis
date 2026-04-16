@@ -155,7 +155,7 @@ const STEPS = [
   { id: "definition", number: 1, label: "Definition", description: "Project base information.", href: "/project/definition" },
   { id: "partitioning", number: 2, label: "Partitioning", description: "Partition the project area in regions.", href: "/project/partitioning" },
   { id: "design", number: 3, label: "Design", description: "Survey design parameters & region assignment.", href: "/project/design" },
-  { id: "terrain", number: 4, label: "Terrain", description: "Define project extents and boundaries.", href: "/project/terrain" },
+  { id: "survey", number: 4, label: "Survey", description: "Define survey extents and boundaries.", href: "/project/survey" },
   { id: "osm", number: 5, label: "OSM", description: "OpenStreetMap data configuration.", href: "/project/osm" },
   { id: "layers", number: 6, label: "Layers", description: "Layer management and configuration.", href: "/project/layers" },
   { id: "maps", number: 7, label: "Maps", description: "Map layer composition and sorting.", href: "/project/maps" },

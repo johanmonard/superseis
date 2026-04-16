@@ -264,9 +264,13 @@ interface GisViewerViewportProps {
   projectId: number | null;
   visibleFiles: VisibleFile[];
   onStyleChange: (category: FileCategory, filename: string, patch: Partial<GisLayerStyle>) => void;
+  /** Additional deck.gl layers rendered on top of file layers */
+  extraLayers?: unknown[];
+  /** Extra content rendered at the bottom of the legend */
+  legendExtra?: React.ReactNode;
 }
 
-export function GisViewerViewport({ projectId, visibleFiles, onStyleChange }: GisViewerViewportProps) {
+export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extraLayers, legendExtra }: GisViewerViewportProps) {
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const mapContainerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<MLMap | null>(null);
@@ -303,7 +307,6 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange }: Gi
       zoom: 2,
       attributionControl: false,
     });
-    map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
     map.on("zoom", () => setZoomDisplay(Math.round(map.getZoom() * 10) / 10));
     map.on("pitch", () => setPitchDisplay(Math.round(map.getPitch())));
     map.on("style.load", () => setStyleReady(true));
@@ -391,36 +394,45 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange }: Gi
       })
       .filter(Boolean);
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (extraLayers) layers.push(...(extraLayers as any[]));
     overlay.setProps({ layers });
-  }, [visibleFiles, loadedKeys, styleReady]);
+  }, [visibleFiles, loadedKeys, styleReady, extraLayers]);
 
-  // Fit bounds when first file loads
-  const hasFitted = React.useRef(false);
+  // Fit bounds to the combined extent of all visible files
+  const fittedKeysRef = React.useRef("");
   React.useEffect(() => {
-    if (hasFitted.current || visibleFiles.length === 0) return;
+    if (visibleFiles.length === 0) return;
     const map = mapRef.current;
     if (!map) return;
-    // Find first loaded file and fit to its bounds
+
+    // Build a stable key for the current set of visible+loaded files
+    const currentKeys = visibleFiles
+      .filter((f) => geojsonCache.current.has(`${f.category}/${f.filename}`))
+      .map((f) => `${f.category}/${f.filename}`)
+      .sort()
+      .join("|");
+    if (!currentKeys || currentKeys === fittedKeysRef.current) return;
+
+    const bounds = new maplibregl.LngLatBounds();
+    const addCoord = (c: number[]) => bounds.extend([c[0], c[1]] as [number, number]);
+    const walkCoords = (coords: unknown) => {
+      if (!Array.isArray(coords)) return;
+      if (typeof coords[0] === "number") { addCoord(coords as number[]); return; }
+      for (const c of coords) walkCoords(c);
+    };
+
     for (const f of visibleFiles) {
-      const key = `${f.category}/${f.filename}`;
-      const data = geojsonCache.current.get(key);
-      if (data && data.features.length > 0) {
-        const bounds = new maplibregl.LngLatBounds();
-        for (const feature of data.features) {
-          const addCoord = (c: number[]) => bounds.extend([c[0], c[1]] as [number, number]);
-          const walkCoords = (coords: unknown) => {
-            if (!Array.isArray(coords)) return;
-            if (typeof coords[0] === "number") { addCoord(coords as number[]); return; }
-            for (const c of coords) walkCoords(c);
-          };
-          if (feature.geometry) walkCoords((feature.geometry as GeoJSON.Geometry & { coordinates: unknown }).coordinates);
-        }
-        if (bounds.getNorthEast() && bounds.getSouthWest()) {
-          map.fitBounds(bounds, { padding: 60, maxZoom: 14 });
-          hasFitted.current = true;
-        }
-        break;
+      const data = geojsonCache.current.get(`${f.category}/${f.filename}`);
+      if (!data) continue;
+      for (const feature of data.features) {
+        if (feature.geometry) walkCoords((feature.geometry as GeoJSON.Geometry & { coordinates: unknown }).coordinates);
       }
+    }
+
+    if (bounds.getNorthEast() && bounds.getSouthWest()) {
+      map.fitBounds(bounds, { padding: 60, maxZoom: 14 });
+      fittedKeysRef.current = currentKeys;
     }
   }, [visibleFiles, loadedKeys]);
 
@@ -519,6 +531,7 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange }: Gi
               </div>
             );
           })}
+          {legendExtra}
         </div>
       )}
 

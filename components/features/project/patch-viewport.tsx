@@ -186,9 +186,19 @@ export function PatchViewport({ params }: { params: PatchParams }) {
   const patch1 = buildPatch(p, 0, 0, geo);
   const patch2 = buildPatch(p, offset2.x, offset2.y, geo);
 
-  // Compute base bounding box of both patches
-  const allX = [0, geo.recLineLength, offset2.x, offset2.x + geo.recLineLength];
-  const allY = [0, geo.recPatchHeight, offset2.y, offset2.y + geo.recPatchHeight];
+  // Compute base bounding box of both patches (including source lines that
+  // may extend beyond the receiver patch area)
+  const allX = [
+    patch1.bounds.x, patch1.bounds.x + patch1.bounds.w,
+    patch2.bounds.x, patch2.bounds.x + patch2.bounds.w,
+    patch1.srcLine.x, patch2.srcLine.x,
+  ];
+  const allY = [
+    patch1.bounds.y, patch1.bounds.y + patch1.bounds.h,
+    patch2.bounds.y, patch2.bounds.y + patch2.bounds.h,
+    patch1.srcLine.y1, patch1.srcLine.y2,
+    patch2.srcLine.y1, patch2.srcLine.y2,
+  ];
   const minX = Math.min(...allX);
   const maxX = Math.max(...allX);
   const minY = Math.min(...allY);
@@ -197,14 +207,25 @@ export function PatchViewport({ params }: { params: PatchParams }) {
   const contentW = maxX - minX || 1;
   const contentH = maxY - minY || 1;
 
-  // Base viewBox (fit-all with padding)
+  // Base viewBox (fit-all with padding, matched to container aspect ratio)
   const padding = 0.15;
   const padW = contentW * padding;
   const padH = contentH * padding;
-  const baseVbX = minX - padW;
-  const baseVbY = minY - padH;
-  const baseVbW = contentW + padW * 2;
-  const baseVbH = contentH + padH * 2;
+  let baseVbW = contentW + padW * 2;
+  let baseVbH = contentH + padH * 2;
+
+  // Expand the viewBox to match the container aspect ratio so
+  // the content fills both the horizontal and vertical extent.
+  const containerAR = size.w / (size.h || 1);
+  const contentAR = baseVbW / (baseVbH || 1);
+  if (containerAR > contentAR) {
+    baseVbW = baseVbH * containerAR;
+  } else {
+    baseVbH = baseVbW / containerAR;
+  }
+
+  const baseVbX = (minX + maxX) / 2 - baseVbW / 2;
+  const baseVbY = (minY + maxY) / 2 - baseVbH / 2;
 
   // Apply zoom and pan to viewBox
   const baseCx = baseVbX + baseVbW / 2;

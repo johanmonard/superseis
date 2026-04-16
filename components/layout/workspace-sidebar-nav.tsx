@@ -526,7 +526,7 @@ export function WorkspaceSidebarNav({
               <div
                 className={
                   isExpanded
-                    ? "max-h-96 overflow-hidden opacity-100 transition-all duration-150 ease-out"
+                    ? "max-h-[600px] overflow-hidden opacity-100 transition-all duration-150 ease-out"
                     : "max-h-0 overflow-hidden opacity-0 transition-all duration-150 ease-out"
                 }
               >

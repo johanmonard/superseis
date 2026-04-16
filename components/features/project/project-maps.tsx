@@ -5,7 +5,7 @@ import { appIcons } from "@/components/ui/icon";
 
 import { Button } from "@/components/ui/button";
 import { useActiveProject } from "@/lib/use-active-project";
-import { useSectionData, AutosaveStatus } from "@/lib/use-autosave";
+import { useSectionData } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
 
 const { check: Check, gripVertical: GripVertical, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
@@ -284,11 +284,6 @@ export function ProjectMaps() {
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      {/* Autosave status */}
-      <div className="flex justify-end">
-        <AutosaveStatus status={status} />
-      </div>
-
       {/* Map selector */}
       <div className="flex flex-col gap-[var(--space-2)]">
         <div className="flex flex-wrap items-center gap-[var(--space-1)]">
