@@ -16,9 +16,12 @@ import {
 import type { FileCategory } from "@/services/api/project-files";
 import { getRuntimeConfig } from "@/services/config/runtimeConfig";
 import { ProjectSettingsPage } from "./project-settings-page";
+import { Dialog, DialogHeader, DialogTitle, DialogBody, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { appIcons } from "@/components/ui/icon";
 
-const { pencil: Pencil } = appIcons;
+const { pencil: Pencil, plus: Plus } = appIcons;
 import {
   gpkgToGeoJSON,
   insertGpkgFeatures,
@@ -141,6 +144,11 @@ const SIDEBAR_SECTIONS: SidebarSection[] = [
   { key: "poi", label: "Points Of Interest", category: "poi" },
   { key: "layers", label: "OSM Layers", category: "layers" },
 ];
+
+const CATEGORY_GEOM_TYPE: Partial<Record<FileCategory, GpkgInitGeomType>> = {
+  polygons: "POLYGON",
+  poi: "POINT",
+};
 
 // --------------------------------------------------------------------------
 // Component
@@ -478,6 +486,66 @@ export function ProjectGisGlobe() {
     },
     [editModesActive]
   );
+
+  // ------------------------------------------------------------------
+  // Create new GPKG file
+  // ------------------------------------------------------------------
+
+  const [createDialog, setCreateDialog] = React.useState<{
+    open: boolean;
+    category: FileCategory;
+    name: string;
+    saving: boolean;
+  }>({ open: false, category: "polygons", name: "", saving: false });
+
+  const openCreateDialog = React.useCallback((category: FileCategory) => {
+    setCreateDialog({ open: true, category, name: "", saving: false });
+  }, []);
+
+  const closeCreateDialog = React.useCallback(() => {
+    setCreateDialog((prev) => ({ ...prev, open: false }));
+  }, []);
+
+  const handleCreateFile = React.useCallback(async () => {
+    if (!projectId || !createDialog.name.trim()) return;
+    const { category, name } = createDialog;
+    const geomType = CATEGORY_GEOM_TYPE[category];
+    if (!geomType) return;
+
+    setCreateDialog((prev) => ({ ...prev, saving: true }));
+
+    try {
+      const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
+      const db = new SQL.Database();
+      const tableName = name.trim().replace(/\s+/g, "_").toLowerCase();
+      initializeGpkgSchema(db, { tableName, geometryType: geomType });
+      const bytes = exportDatabase(db);
+      const filename = `${tableName}.gpkg`;
+
+      await saveProjectFileRaw(
+        projectId,
+        category,
+        filename,
+        bytes.buffer as ArrayBuffer
+      );
+      db.close();
+
+      // Refresh the file list, then auto-select and edit the new file
+      await queryClient.invalidateQueries({
+        queryKey: projectFileKeys.project(projectId),
+      });
+
+      const fileKey = `${category}/${filename}`;
+      setSelectedFiles((prev) =>
+        prev.includes(fileKey) ? prev : [...prev, fileKey]
+      );
+      setEditingFileKey(fileKey);
+      setCreateDialog({ open: false, category: "polygons", name: "", saving: false });
+    } catch (e) {
+      setError(`Failed to create file: ${String(e)}`);
+      setCreateDialog((prev) => ({ ...prev, saving: false }));
+    }
+  }, [projectId, createDialog, queryClient]);
 
   const toggleLayerVisibility = React.useCallback((file: string) => {
     setHiddenFiles((prev) => {
@@ -1394,9 +1462,19 @@ export function ProjectGisGlobe() {
           const files = fileList?.[key] ?? [];
           return (
             <div key={key} className="flex flex-col gap-[var(--space-2)]">
-              <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-                {label}
-              </span>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+                  {label}
+                </span>
+                <button
+                  type="button"
+                  title={`Create new ${key === "poi" ? "POI" : "polygon"} file`}
+                  onClick={() => openCreateDialog(category)}
+                  className="rounded p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
               <div className="flex max-h-[200px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] p-[var(--space-2)]">
                 {files.length === 0 ? (
                   <p className="text-xs text-[var(--color-text-muted)]">
@@ -1604,6 +1682,40 @@ export function ProjectGisGlobe() {
           </p>
         )}
       </div>
+
+      {/* Create new file dialog */}
+      <Dialog open={createDialog.open} onOpenChange={(open) => !open && closeCreateDialog()}>
+        <DialogHeader>
+          <DialogTitle>
+            New {createDialog.category === "poi" ? "POI" : "Polygon"} file
+          </DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          <Input
+            autoFocus
+            placeholder="File name"
+            value={createDialog.name}
+            onChange={(e) =>
+              setCreateDialog((prev) => ({ ...prev, name: e.target.value }))
+            }
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && createDialog.name.trim()) handleCreateFile();
+            }}
+          />
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="ghost" size="sm" onClick={closeCreateDialog}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            disabled={!createDialog.name.trim() || createDialog.saving}
+            onClick={handleCreateFile}
+          >
+            {createDialog.saving ? "Creating..." : "Create"}
+          </Button>
+        </DialogFooter>
+      </Dialog>
     </ProjectSettingsPage>
   );
 }
