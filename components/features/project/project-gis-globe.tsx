@@ -4,8 +4,9 @@ import * as React from "react";
 import dynamic from "next/dynamic";
 import initSqlJs from "sql.js";
 import type { Database } from "sql.js";
+import { useQueryClient } from "@tanstack/react-query";
 import { useActiveProject } from "@/lib/use-active-project";
-import { useProjectFiles } from "@/services/query/project-files";
+import { useProjectFiles, projectFileKeys } from "@/services/query/project-files";
 import {
   fetchProjectFileRaw,
   saveProjectFileRaw,
@@ -15,6 +16,9 @@ import {
 import type { FileCategory } from "@/services/api/project-files";
 import { getRuntimeConfig } from "@/services/config/runtimeConfig";
 import { ProjectSettingsPage } from "./project-settings-page";
+import { appIcons } from "@/components/ui/icon";
+
+const { pencil: Pencil } = appIcons;
 import {
   gpkgToGeoJSON,
   insertGpkgFeatures,
@@ -145,6 +149,7 @@ const SIDEBAR_SECTIONS: SidebarSection[] = [
 export function ProjectGisGlobe() {
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
+  const queryClient = useQueryClient();
   const { data: fileList } = useProjectFiles(projectId);
 
   // Selected files keyed as "category/filename" for uniqueness
@@ -197,13 +202,18 @@ export function ProjectGisGlobe() {
   >(new Map());
   // Source files whose in-memory DB has been mutated and needs PUT on save.
   const dirtySourceFilesRef = React.useRef<Set<string>>(new Set());
-  // Tracks whether the 3 edit files have been bootstrapped.
-  const editFilesBootstrappedRef = React.useRef(false);
 
-  // A selected file key is "category/filename". The active file is for
-  // single-selection editing.
+
+  // The file designated for editing (independent of visibility selection).
+  const [editingFileKey, setEditingFileKey] = React.useState<string | null>(
+    null
+  );
+
+  // The active file is the one with the edit button toggled on.
   const activeFile =
-    selectedFiles.length === 1 ? selectedFiles[0] : null;
+    editingFileKey && selectedFiles.includes(editingFileKey)
+      ? editingFileKey
+      : null;
   const canEdit = activeFile != null;
 
   // Resolve category + filename from a composite key like "polygons/my.gpkg"
@@ -225,8 +235,7 @@ export function ProjectGisGlobe() {
   // ------------------------------------------------------------------
 
   React.useEffect(() => {
-    if (!projectId || editFilesBootstrappedRef.current) return;
-    editFilesBootstrappedRef.current = true;
+    if (!projectId) return;
     let cancelled = false;
 
     (async () => {
@@ -261,6 +270,7 @@ export function ProjectGisGlobe() {
       }
 
       for (const { key, db } of results) {
+        dbsRef.current.get(key)?.close();
         dbsRef.current.set(key, db);
       }
       setLayerData((prev) => {
@@ -439,19 +449,34 @@ export function ProjectGisGlobe() {
   // File selection
   // ------------------------------------------------------------------
 
-  const selectionLocked =
+  const toggleFileSelected = React.useCallback(
+    (key: string) => {
+      setSelectedFiles((prev) => {
+        const removing = prev.includes(key);
+        if (removing) {
+          // If unchecking the file that is currently designated for editing,
+          // clear the edit target.
+          setEditingFileKey((cur) => (cur === key ? null : cur));
+          return prev.filter((f) => f !== key);
+        }
+        return [...prev, key];
+      });
+      setDirty(false);
+    },
+    []
+  );
+
+  const editModesActive =
     editing || adding || freehand || autoPoly || autoVessel || autoSegment ||
     simplifying || smoothing || deleting || reclassifying;
 
-  const toggleFileSelected = React.useCallback(
+  const toggleEditTarget = React.useCallback(
     (key: string) => {
-      if (selectionLocked) return;
-      setSelectedFiles((prev) =>
-        prev.includes(key) ? prev.filter((f) => f !== key) : [...prev, key]
-      );
-      setDirty(false);
+      // Don't switch edit target while an edit mode is active.
+      if (editModesActive) return;
+      setEditingFileKey((cur) => (cur === key ? null : key));
     },
-    [selectionLocked]
+    [editModesActive]
   );
 
   const toggleLayerVisibility = React.useCallback((file: string) => {
@@ -580,7 +605,10 @@ export function ProjectGisGlobe() {
       const key = EDIT_FILE_KEYS[kind];
       const db = dbsRef.current.get(key);
       const entry = layerData.get(key);
-      if (!db || !entry) return null;
+      if (!db || !entry) {
+        console.error(`[GIS] insertIntoUserEditsFile: DB or entry missing for "${key}" (kind=${kind}, db=${!!db}, entry=${!!entry})`);
+        return null;
+      }
       const pks = insertGpkgFeatures(
         db,
         entry.meta,
@@ -1224,6 +1252,7 @@ export function ProjectGisGlobe() {
     try {
       // 1. Inline-edited source files (polygons/poi/user_edits) — already
       //    mutated, just export and PUT
+      console.log(`[GIS] handleSave: ${dirtySourceFilesRef.current.size} dirty source files:`, [...dirtySourceFilesRef.current]);
       for (const key of dirtySourceFilesRef.current) {
         const db = dbsRef.current.get(key);
         if (!db) continue;
@@ -1261,12 +1290,14 @@ export function ProjectGisGlobe() {
       dirtySourceFilesRef.current.clear();
       deletedPksByFileRef.current.clear();
       setDirty(false);
+      // Refresh sidebar file list so newly created files (e.g. user_edits) appear
+      queryClient.invalidateQueries({ queryKey: projectFileKeys.project(projectId) });
     } catch (e) {
       setError(String(e));
     } finally {
       setSaving(false);
     }
-  }, [projectId, layerData, parseFileKey]);
+  }, [projectId, layerData, parseFileKey, queryClient]);
 
   // ------------------------------------------------------------------
   // DEM URL overrides for viewport
@@ -1375,25 +1406,36 @@ export function ProjectGisGlobe() {
                   files.map((f) => {
                     const fileKey = `${category}/${f}`;
                     const checked = selectedFiles.includes(fileKey);
+                    const isEditTarget = editingFileKey === fileKey;
                     return (
-                      <label
+                      <div
                         key={f}
-                        className="flex min-w-0 cursor-pointer items-center gap-2 text-xs leading-tight"
+                        className="flex min-w-0 items-center gap-2 text-xs leading-tight"
                       >
                         <input
                           type="checkbox"
                           checked={checked}
-                          disabled={selectionLocked}
                           onChange={() => toggleFileSelected(fileKey)}
-                          className="shrink-0 cursor-pointer disabled:cursor-not-allowed"
+                          className="shrink-0 cursor-pointer"
                         />
                         <span
                           className={`block size-3 shrink-0 rounded-[3px] border border-slate-900/25 ${checked ? "opacity-100" : "opacity-35"}`}
                           // eslint-disable-next-line template/no-jsx-style-prop
                           style={{ backgroundColor: colorFor(fileKey) }}
                         />
-                        <span className="min-w-0 truncate">{f}</span>
-                      </label>
+                        <span className="min-w-0 flex-1 truncate">{f}</span>
+                        {checked && (
+                          <button
+                            type="button"
+                            title={isEditTarget ? "Stop editing this layer" : "Edit this layer"}
+                            disabled={!isEditTarget && editModesActive}
+                            onClick={() => toggleEditTarget(fileKey)}
+                            className={`shrink-0 rounded p-0.5 ${isEditTarget ? "text-[var(--color-accent)]" : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"} disabled:cursor-not-allowed disabled:opacity-40`}
+                          >
+                            <Pencil size={11} />
+                          </button>
+                        )}
+                      </div>
                     );
                   })
                 )}
@@ -1417,25 +1459,36 @@ export function ProjectGisGlobe() {
                 {(fileList?.layers ?? []).map((f) => {
                   const fileKey = `layers/${f}`;
                   const checked = selectedFiles.includes(fileKey);
+                  const isEditTarget = editingFileKey === fileKey;
                   return (
-                    <label
+                    <div
                       key={f}
-                      className="flex min-w-0 cursor-pointer items-center gap-2 text-xs leading-tight"
+                      className="flex min-w-0 items-center gap-2 text-xs leading-tight"
                     >
                       <input
                         type="checkbox"
                         checked={checked}
-                        disabled={selectionLocked}
                         onChange={() => toggleFileSelected(fileKey)}
-                        className="shrink-0 cursor-pointer disabled:cursor-not-allowed"
+                        className="shrink-0 cursor-pointer"
                       />
                       <span
                         className={`block size-3 shrink-0 rounded-[3px] border border-slate-900/25 ${checked ? "opacity-100" : "opacity-35"}`}
                         // eslint-disable-next-line template/no-jsx-style-prop
                         style={{ backgroundColor: colorFor(fileKey) }}
                       />
-                      <span className="min-w-0 truncate">{f}</span>
-                    </label>
+                      <span className="min-w-0 flex-1 truncate">{f}</span>
+                      {checked && (
+                        <button
+                          type="button"
+                          title={isEditTarget ? "Stop editing this layer" : "Edit this layer"}
+                          disabled={!isEditTarget && editModesActive}
+                          onClick={() => toggleEditTarget(fileKey)}
+                          className={`shrink-0 rounded p-0.5 ${isEditTarget ? "text-[var(--color-accent)]" : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"} disabled:cursor-not-allowed disabled:opacity-40`}
+                        >
+                          <Pencil size={11} />
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
 
@@ -1446,25 +1499,36 @@ export function ProjectGisGlobe() {
                 {userEditFiles.map((f) => {
                   const fileKey = `user_edits/${f}`;
                   const checked = selectedFiles.includes(fileKey);
+                  const isEditTarget = editingFileKey === fileKey;
                   return (
-                    <label
+                    <div
                       key={f}
-                      className="flex min-w-0 cursor-pointer items-center gap-2 text-xs leading-tight"
+                      className="flex min-w-0 items-center gap-2 text-xs leading-tight"
                     >
                       <input
                         type="checkbox"
                         checked={checked}
-                        disabled={selectionLocked}
                         onChange={() => toggleFileSelected(fileKey)}
-                        className="shrink-0 cursor-pointer disabled:cursor-not-allowed"
+                        className="shrink-0 cursor-pointer"
                       />
                       <span
                         className={`block size-3 shrink-0 rounded-[3px] border border-slate-900/25 ${checked ? "opacity-100" : "opacity-35"}`}
                         // eslint-disable-next-line template/no-jsx-style-prop
                         style={{ backgroundColor: colorFor(fileKey) }}
                       />
-                      <span className="min-w-0 truncate">{f}</span>
-                    </label>
+                      <span className="min-w-0 flex-1 truncate">{f}</span>
+                      {checked && (
+                        <button
+                          type="button"
+                          title={isEditTarget ? "Stop editing this layer" : "Edit this layer"}
+                          disabled={!isEditTarget && editModesActive}
+                          onClick={() => toggleEditTarget(fileKey)}
+                          className={`shrink-0 rounded p-0.5 ${isEditTarget ? "text-[var(--color-accent)]" : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"} disabled:cursor-not-allowed disabled:opacity-40`}
+                        >
+                          <Pencil size={11} />
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
               </>
@@ -1505,12 +1569,6 @@ export function ProjectGisGlobe() {
             )}
           </div>
         </div>
-
-        {selectedFiles.length >= 2 && (
-          <p className="text-xs text-[var(--color-text-muted)]">
-            Editing is disabled while multiple layers are selected.
-          </p>
-        )}
 
         {loading && (
           <p className="text-xs text-[var(--color-text-muted)]">Loading...</p>
