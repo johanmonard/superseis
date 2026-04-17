@@ -2903,6 +2903,113 @@ const GLOBE_CSS = `
   }
   [data-theme="dark"] .glb-cursor-readout__label { color: #94a3b8; }
 
+  .glb-info-popup {
+    position: absolute;
+    z-index: 5;
+    min-width: 200px;
+    max-width: 320px;
+    max-height: 320px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 0.96);
+    border: 1px solid rgba(15, 23, 42, 0.16);
+    box-shadow: 0 6px 20px rgba(15, 23, 42, 0.22);
+    backdrop-filter: blur(8px);
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 11px;
+    color: #1e293b;
+    user-select: text;
+  }
+  [data-theme="dark"] .glb-info-popup {
+    background-color: rgba(15, 23, 42, 0.94);
+    border-color: rgba(255, 255, 255, 0.14);
+    color: #e2e8f0;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  }
+  .glb-info-popup__header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+    font-weight: 600;
+    font-size: 11px;
+    color: #334155;
+    background-color: rgba(15, 23, 42, 0.04);
+  }
+  [data-theme="dark"] .glb-info-popup__header {
+    border-bottom-color: rgba(255, 255, 255, 0.08);
+    color: #cbd5e1;
+    background-color: rgba(255, 255, 255, 0.04);
+  }
+  .glb-info-popup__title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .glb-info-popup__close {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: #64748b;
+    cursor: pointer;
+    border-radius: 3px;
+    line-height: 1;
+    font-size: 14px;
+  }
+  .glb-info-popup__close:hover {
+    background-color: rgba(15, 23, 42, 0.08);
+    color: #1e293b;
+  }
+  [data-theme="dark"] .glb-info-popup__close:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #e2e8f0;
+  }
+  .glb-info-popup__body {
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+  .glb-info-popup__row {
+    display: flex;
+    gap: 8px;
+    padding: 3px 8px;
+    line-height: 1.4;
+  }
+  .glb-info-popup__row:nth-child(odd) {
+    background-color: rgba(15, 23, 42, 0.03);
+  }
+  [data-theme="dark"] .glb-info-popup__row:nth-child(odd) {
+    background-color: rgba(255, 255, 255, 0.03);
+  }
+  .glb-info-popup__key {
+    flex-shrink: 0;
+    min-width: 80px;
+    color: #64748b;
+    font-weight: 500;
+  }
+  [data-theme="dark"] .glb-info-popup__key { color: #94a3b8; }
+  .glb-info-popup__value {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: #0f172a;
+  }
+  [data-theme="dark"] .glb-info-popup__value { color: #f1f5f9; }
+  .glb-info-popup__empty {
+    padding: 8px;
+    color: #64748b;
+    font-style: italic;
+  }
+
   .glb-legend {
     position: absolute;
     top: 10px;
@@ -3169,6 +3276,9 @@ const DELETE_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>';
 const RECLASSIFY_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41 13.41 20.59a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.5" fill="currentColor"/></svg>';
+// Info / Identify: lowercase i in a circle
+const INFO_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="11" x2="12" y2="17"/><circle cx="12" cy="7.5" r="0.5" fill="currentColor"/></svg>';
 // Discard: X mark — cancel/reject changes
 const DISCARD_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>';
@@ -3188,6 +3298,9 @@ const EDIT_HOVER_CURSOR =
 
 const DEM_HOVER_CURSOR =
   "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><path d='M5 21 L11 11 L15 17 L18 13 L23 21 Z'/><circle cx='19' cy='8' r='2.6' fill='%23ffffff'/><path d='M5 21 L11 11 L15 17 L18 13 L23 21 Z' stroke='%233b82f6' stroke-width='2'/><circle cx='19' cy='8' r='1.6' fill='%233b82f6' stroke='%233b82f6' stroke-width='1'/></svg>\") 14 14, pointer";
+
+const INFO_HOVER_CURSOR =
+  "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><circle cx='14' cy='14' r='10'/><line x1='14' y1='13' x2='14' y2='19'/><circle cx='14' cy='9' r='0.5' fill='%23ffffff'/><circle cx='14' cy='14' r='10' stroke='%233b82f6' stroke-width='2'/><line x1='14' y1='13' x2='14' y2='19' stroke='%233b82f6' stroke-width='2'/><circle cx='14' cy='9' r='1' fill='%233b82f6' stroke='%233b82f6'/></svg>\") 14 14, pointer";
 
 const DELETE_HOVER_CURSOR =
   "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><polyline points='5 8 7 8 23 8'/><path d='M21 8 l-1 14 a2 2 0 0 1 -2 2 H10 a2 2 0 0 1 -2 -2 L7 8'/><path d='M12 13 v6'/><path d='M16 13 v6'/><path d='M11 8 V6 a2 2 0 0 1 2 -2 h2 a2 2 0 0 1 2 2 v2'/><polyline points='5 8 7 8 23 8' stroke='%23ef4444' stroke-width='2'/><path d='M21 8 l-1 14 a2 2 0 0 1 -2 2 H10 a2 2 0 0 1 -2 -2 L7 8' stroke='%23ef4444' stroke-width='2'/><path d='M12 13 v6' stroke='%23ef4444' stroke-width='2'/><path d='M16 13 v6' stroke='%23ef4444' stroke-width='2'/><path d='M11 8 V6 a2 2 0 0 1 2 -2 h2 a2 2 0 0 1 2 2 v2' stroke='%23ef4444' stroke-width='2'/></svg>\") 14 14, pointer";
@@ -3359,6 +3472,14 @@ export function GisGlobeViewport({
     lng: number;
     lat: number;
     alt: number | null;
+  } | null>(null);
+  // Info / Identify tool state
+  const [infoMode, setInfoMode] = React.useState(false);
+  const [infoPopup, setInfoPopup] = React.useState<{
+    x: number;
+    y: number;
+    layer: string;
+    properties: Record<string, unknown>;
   } | null>(null);
   const toolbarRef = React.useRef<HTMLDivElement>(null);
   const terrainBtnRef = React.useRef<HTMLButtonElement>(null);
@@ -7204,6 +7325,76 @@ export function GisGlobeViewport({
   }, [deleting, styleReady]);
 
   // ------------------------------------------------------------------
+  // Info / Identify mode — click a feature to show its attributes
+  // ------------------------------------------------------------------
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady || !infoMode) {
+      setInfoPopup(null);
+      return;
+    }
+
+    const HIT_TOLERANCE = 6;
+    const onMapClick = (e: maplibregl.MapMouseEvent) => {
+      const layers = [
+        FEATURES_FILL_LAYER,
+        FEATURES_LINE_LAYER,
+        FEATURES_CIRCLE_LAYER,
+      ].filter((id) => !!map.getLayer(id));
+      if (layers.length === 0) return;
+      const bbox: [maplibregl.PointLike, maplibregl.PointLike] = [
+        [e.point.x - HIT_TOLERANCE, e.point.y - HIT_TOLERANCE],
+        [e.point.x + HIT_TOLERANCE, e.point.y + HIT_TOLERANCE],
+      ];
+      const hits = map.queryRenderedFeatures(bbox, { layers });
+      if (hits.length === 0) {
+        setInfoPopup(null);
+        return;
+      }
+      const top = hits[0];
+      const props = { ...(top.properties ?? {}) } as Record<string, unknown>;
+      const layerKey = (props.__layer as string | undefined) ?? "";
+      delete props.__layer;
+      setInfoPopup({
+        x: e.point.x,
+        y: e.point.y,
+        layer: layerKey,
+        properties: props,
+      });
+    };
+
+    const canvas = map.getCanvas();
+    let hoverDepth = 0;
+    const setHoverCursor = () => {
+      hoverDepth += 1;
+      canvas.style.cursor = INFO_HOVER_CURSOR;
+    };
+    const clearHoverCursor = () => {
+      hoverDepth = Math.max(0, hoverDepth - 1);
+      if (hoverDepth === 0) canvas.style.cursor = "";
+    };
+    const hoverLayers = [
+      FEATURES_FILL_LAYER,
+      FEATURES_LINE_LAYER,
+      FEATURES_CIRCLE_LAYER,
+    ].filter((id) => !!map.getLayer(id));
+    for (const layerId of hoverLayers) {
+      map.on("mouseenter", layerId, setHoverCursor);
+      map.on("mouseleave", layerId, clearHoverCursor);
+    }
+    map.on("click", onMapClick);
+
+    return () => {
+      map.off("click", onMapClick);
+      for (const layerId of hoverLayers) {
+        map.off("mouseenter", layerId, setHoverCursor);
+        map.off("mouseleave", layerId, clearHoverCursor);
+      }
+      canvas.style.cursor = "";
+    };
+  }, [infoMode, styleReady]);
+
+  // ------------------------------------------------------------------
   // DEM overlay: read the selected .tif client-side, render it as a
   // hypsometric-tinted PNG and add it as an `image` source covering the
   // file's actual bbox. The .tif is in EPSG:3857 (Web Mercator) so we
@@ -7832,6 +8023,12 @@ export function GisGlobeViewport({
           ))}
         </select>
         <div className="glb-fs-divider" />
+        <ToolbarButton
+          title={infoMode ? "Stop identify" : "Identify feature (click a feature to see its attributes)"}
+          icon={INFO_ICON}
+          active={infoMode}
+          onClick={() => setInfoMode((v) => !v)}
+        />
         <ToolbarGroup
           icon={ADD_GROUP_ICON}
           title="Add features"
@@ -8556,6 +8753,50 @@ export function GisGlobeViewport({
                 : "—"}
             </div>
           )}
+        </div>
+      )}
+
+      {infoPopup && (
+        <div
+          className="glb-info-popup"
+          // eslint-disable-next-line template/no-jsx-style-prop -- runtime click position
+          style={{
+            left: `${Math.min(infoPopup.x + 12, (wrapperRef.current?.clientWidth ?? 800) - 340)}px`,
+            top: `${Math.min(infoPopup.y + 12, (wrapperRef.current?.clientHeight ?? 600) - 340)}px`,
+          }}
+        >
+          <div className="glb-info-popup__header">
+            <span
+              className="glb-info-popup__title"
+              title={infoPopup.layer || "(unknown)"}
+            >
+              {infoPopup.layer
+                ? infoPopup.layer.split("/").pop()
+                : "(unknown)"}
+            </span>
+            <button
+              type="button"
+              className="glb-info-popup__close"
+              onClick={() => setInfoPopup(null)}
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
+          <div className="glb-info-popup__body">
+            {Object.keys(infoPopup.properties).length === 0 ? (
+              <div className="glb-info-popup__empty">No attributes</div>
+            ) : (
+              Object.entries(infoPopup.properties).map(([k, v]) => (
+                <div key={k} className="glb-info-popup__row">
+                  <span className="glb-info-popup__key">{k}</span>
+                  <span className="glb-info-popup__value">
+                    {v == null ? "—" : String(v)}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       )}
     </div>

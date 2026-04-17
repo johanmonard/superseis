@@ -6,9 +6,11 @@ import initSqlJs from "sql.js";
 import type { Database } from "sql.js";
 import { useQueryClient } from "@tanstack/react-query";
 import { useActiveProject } from "@/lib/use-active-project";
+import { useSectionData } from "@/lib/use-autosave";
 import { useProjectFiles, projectFileKeys } from "@/services/query/project-files";
 import {
   fetchProjectFileRaw,
+  fetchFileGeoJson,
   saveProjectFileRaw,
   projectDemTileUrl,
   projectDemManifestUrl,
@@ -21,7 +23,13 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { appIcons } from "@/components/ui/icon";
 
-const { pencil: Pencil, plus: Plus } = appIcons;
+const { pencil: Pencil, plus: Plus, download: Download, loader: Loader, circleCheck: CircleCheck, alertTriangle: AlertTriangle } = appIcons;
+import { AngleInput } from "@/components/ui/angle-input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Field } from "@/components/ui/field";
+import { Select } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+import { downloadOsmStream, clipOsmStream } from "@/services/api/project-osm";
 import {
   gpkgToGeoJSON,
   insertGpkgFeatures,
@@ -151,6 +159,559 @@ const CATEGORY_GEOM_TYPE: Partial<Record<FileCategory, GpkgInitGeomType>> = {
 };
 
 // --------------------------------------------------------------------------
+// Margin box
+// --------------------------------------------------------------------------
+
+function MarginInput({
+  value,
+  onChange,
+  "aria-label": ariaLabel,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  "aria-label": string;
+}) {
+  return (
+    <input
+      type="number"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label={ariaLabel}
+      className="h-6 w-14 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)] px-1 text-center text-xs tabular-nums text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-accent)] focus:ring-1 focus:ring-[var(--color-focus-ring)]"
+    />
+  );
+}
+
+function MarginAzimuthBox({
+  top, left, right, bottom,
+  onTopChange, onLeftChange, onRightChange, onBottomChange,
+  azimuth, onAzimuthChange,
+}: {
+  top: string; left: string; right: string; bottom: string;
+  onTopChange: (v: string) => void;
+  onLeftChange: (v: string) => void;
+  onRightChange: (v: string) => void;
+  onBottomChange: (v: string) => void;
+  azimuth: number;
+  onAzimuthChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-[var(--space-2)]">
+      <MarginInput value={top} onChange={onTopChange} aria-label="Margin top" />
+      <div className="flex items-center gap-[var(--space-3)]">
+        <MarginInput value={left} onChange={onLeftChange} aria-label="Margin left" />
+        <div className="relative shrink-0">
+          <div className="absolute inset-[-8px] rounded-[var(--radius-md)] border border-dashed border-[var(--color-border-subtle)]" />
+          <AngleInput value={azimuth} onChange={onAzimuthChange} min={0} max={360} step={0.01} />
+        </div>
+        <MarginInput value={right} onChange={onRightChange} aria-label="Margin right" />
+      </div>
+      <MarginInput value={bottom} onChange={onBottomChange} aria-label="Margin bottom" />
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+// OSM Download Panel (middle panel content)
+// --------------------------------------------------------------------------
+
+type StepStatus = "idle" | "running" | "done" | "error";
+
+// --------------------------------------------------------------------------
+// Margin rectangle computation (shared with survey page)
+// --------------------------------------------------------------------------
+
+const EARTH_R = 6_371_008.8;
+
+function computeMarginRect(
+  features: GeoJSON.Feature[],
+  margins: { top: number; left: number; right: number; bottom: number },
+  azimuthDeg: number,
+): [number, number][] | null {
+  const coords: [number, number][] = [];
+  const walk = (c: unknown) => {
+    if (!Array.isArray(c)) return;
+    if (typeof c[0] === "number" && typeof c[1] === "number") {
+      coords.push([c[0] as number, c[1] as number]);
+      return;
+    }
+    for (const sub of c) walk(sub);
+  };
+  for (const f of features) {
+    if (f.geometry) walk((f.geometry as GeoJSON.Geometry & { coordinates: unknown }).coordinates);
+  }
+  if (coords.length === 0) return null;
+
+  let cLon = 0, cLat = 0;
+  for (const [lon, lat] of coords) { cLon += lon; cLat += lat; }
+  cLon /= coords.length;
+  cLat /= coords.length;
+
+  const cosLat = Math.cos((cLat * Math.PI) / 180);
+  const DEG_TO_M_LAT = (Math.PI / 180) * EARTH_R;
+  const DEG_TO_M_LON = DEG_TO_M_LAT * cosLat;
+
+  const local = coords.map(([lon, lat]) => ({
+    x: (lon - cLon) * DEG_TO_M_LON,
+    y: (lat - cLat) * DEG_TO_M_LAT,
+  }));
+
+  const azRad = ((azimuthDeg - 90) * Math.PI) / 180;
+  const cosA = Math.cos(azRad);
+  const sinA = Math.sin(azRad);
+  const rotated = local.map(({ x, y }) => ({
+    x: x * cosA - y * sinA,
+    y: x * sinA + y * cosA,
+  }));
+
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const { x, y } of rotated) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+
+  minX -= margins.left;
+  maxX += margins.right;
+  minY -= margins.bottom;
+  maxY += margins.top;
+
+  const corners = [
+    { x: minX, y: minY },
+    { x: maxX, y: minY },
+    { x: maxX, y: maxY },
+    { x: minX, y: maxY },
+  ];
+
+  const cosB = Math.cos(-azRad);
+  const sinB = Math.sin(-azRad);
+  const result: [number, number][] = corners.map(({ x, y }) => {
+    const gx = x * cosB - y * sinB;
+    const gy = x * sinB + y * cosB;
+    return [cLon + gx / DEG_TO_M_LON, cLat + gy / DEG_TO_M_LAT] as [number, number];
+  });
+  result.push(result[0]);
+  return result;
+}
+
+export interface OsmViewportData {
+  polygonName: string;
+  margins: { top: number; left: number; right: number; bottom: number };
+  azimuth: number;
+}
+
+const CLIPPING_FILE = "osm_clipping_boundaries.gpkg";
+
+interface OsmPanelData {
+  refPolygon: string;
+  marginTop: string;
+  marginLeft: string;
+  marginRight: string;
+  marginBottom: string;
+  rlAngle: string;
+  skipIfExists: boolean;
+  selectedLayers: string[];
+  availableLayers: string[];
+}
+
+const DEFAULT_OSM_PANEL: OsmPanelData = {
+  refPolygon: "",
+  marginTop: "1000",
+  marginLeft: "1000",
+  marginRight: "1000",
+  marginBottom: "1000",
+  rlAngle: "0",
+  skipIfExists: true,
+  selectedLayers: [],
+  availableLayers: [],
+};
+
+// Standard subset of OSM layers preselected for clipping
+const DEFAULT_CLIP_LAYERS = [
+  "gis_osm_buildings_a_free_1",
+  "gis_osm_landuse_a_free_1",
+  "gis_osm_railways_free_1",
+  "gis_osm_roads_free_1",
+  "gis_osm_water_a_free_1",
+  "gis_osm_waterways_free_1",
+];
+
+function OsmDownloadPanel({
+  projectId,
+  onClose,
+  onLayersClipped,
+  onViewportChange,
+}: {
+  projectId: number | null;
+  onClose: () => void;
+  onLayersClipped?: () => void;
+  onViewportChange?: (data: OsmViewportData | null) => void;
+}) {
+  // Own persisted state (no survey dependency)
+  const { data: osmData, update: updateOsm } = useSectionData<OsmPanelData>(
+    projectId, "osm", DEFAULT_OSM_PANEL,
+  );
+
+  // Read polygon files
+  const { data: projectFiles } = useProjectFiles(projectId);
+  const availablePolygons = React.useMemo(
+    () => (projectFiles?.polygons ?? [])
+      .filter((f) => f !== CLIPPING_FILE)
+      .map((f) => f.replace(/\.gpkg$/, "")),
+    [projectFiles?.polygons],
+  );
+
+  // Notify parent about viewport data
+  React.useEffect(() => {
+    if (!osmData.refPolygon) {
+      onViewportChange?.(null);
+      return;
+    }
+    onViewportChange?.({
+      polygonName: osmData.refPolygon,
+      margins: {
+        top: Number(osmData.marginTop) || 0,
+        left: Number(osmData.marginLeft) || 0,
+        right: Number(osmData.marginRight) || 0,
+        bottom: Number(osmData.marginBottom) || 0,
+      },
+      azimuth: Number(osmData.rlAngle) || 0,
+    });
+  }, [
+    onViewportChange, osmData.refPolygon,
+    osmData.marginTop, osmData.marginLeft,
+    osmData.marginRight, osmData.marginBottom,
+    osmData.rlAngle,
+  ]);
+
+  // Workflow state
+  const [downloadStatus, setDownloadStatus] = React.useState<StepStatus>("idle");
+  const [clipStatus, setClipStatus] = React.useState<StepStatus>("idle");
+  const [downloadProgress, setDownloadProgress] = React.useState({ progress: 0, total: 0 });
+  const [clipProgress, setClipProgress] = React.useState({ progress: 0, total: 0 });
+  const [downloadMessage, setDownloadMessage] = React.useState("");
+  const [clipMessage, setClipMessage] = React.useState("");
+
+  const canDownload = Boolean(osmData.refPolygon);
+  const canClip = osmData.availableLayers.length > 0 && osmData.selectedLayers.length > 0;
+
+  /**
+   * Fetch the reference polygon GeoJSON, compute the margin rectangle,
+   * and save it as osm_clipping_boundaries.gpkg via the backend PUT endpoint.
+   */
+  const saveClippingBoundaries = React.useCallback(async (): Promise<boolean> => {
+    if (!projectId || !osmData.refPolygon) return false;
+    // 1. Fetch reference polygon GeoJSON
+    const geojson = await fetchFileGeoJson(
+      projectId, "polygons", `${osmData.refPolygon}.gpkg`,
+    );
+    // 2. Compute margin rectangle
+    const margins = {
+      top: Number(osmData.marginTop) || 0,
+      left: Number(osmData.marginLeft) || 0,
+      right: Number(osmData.marginRight) || 0,
+      bottom: Number(osmData.marginBottom) || 0,
+    };
+    const rect = computeMarginRect(geojson.features, margins, Number(osmData.rlAngle) || 0);
+    if (!rect) return false;
+    // 3. Build a GPKG with the rectangle polygon
+    const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
+    const db = new SQL.Database();
+    initializeGpkgSchema(db, { tableName: "clipping_boundaries", geometryType: "POLYGON" });
+    const { meta } = gpkgToGeoJSON(db);
+    insertGpkgFeatures(db, meta, [{
+      type: "Feature",
+      geometry: { type: "Polygon", coordinates: [rect] },
+      properties: {},
+    }]);
+    const bytes = exportDatabase(db);
+    db.close();
+    // 4. Save to disk
+    await saveProjectFileRaw(projectId, "polygons", CLIPPING_FILE, bytes.buffer as ArrayBuffer);
+    return true;
+  }, [projectId, osmData.refPolygon, osmData.marginTop, osmData.marginLeft, osmData.marginRight, osmData.marginBottom, osmData.rlAngle]);
+
+  const handleDownload = React.useCallback(async () => {
+    if (!projectId || !canDownload) return;
+    setDownloadStatus("running");
+    setDownloadProgress({ progress: 0, total: 0 });
+    setDownloadMessage("");
+    try {
+      const saved = await saveClippingBoundaries();
+      if (!saved) { setDownloadStatus("error"); setDownloadMessage("Failed to compute clipping boundaries"); return; }
+
+      const final = await downloadOsmStream(
+        projectId,
+        { polygonFile: CLIPPING_FILE, skipIfExists: osmData.skipIfExists },
+        (evt) => setDownloadProgress({ progress: evt.progress, total: evt.total }),
+      );
+      setDownloadStatus(final.ok ? "done" : "error");
+      setDownloadMessage(final.message);
+      if (final.ok && final.layers) {
+        // Preselect the standard subset, intersected with what's actually available
+        const preselected = DEFAULT_CLIP_LAYERS.filter((l) => final.layers!.includes(l));
+        updateOsm({ ...osmData, availableLayers: final.layers, selectedLayers: preselected });
+        onLayersClipped?.(); // refresh file list + dataset extent on viewport
+      }
+    } catch (err) {
+      setDownloadStatus("error");
+      setDownloadMessage(err instanceof Error ? err.message : "Download failed");
+    }
+  }, [projectId, canDownload, osmData, updateOsm, saveClippingBoundaries, onLayersClipped]);
+
+  const handleClip = React.useCallback(async () => {
+    if (!projectId || !canClip) return;
+    setClipStatus("running");
+    setClipProgress({ progress: 0, total: 0 });
+    setClipMessage("");
+    try {
+      const saved = await saveClippingBoundaries();
+      if (!saved) { setClipStatus("error"); setClipMessage("Failed to compute clipping boundaries"); return; }
+
+      const final = await clipOsmStream(
+        projectId,
+        { polygonFile: CLIPPING_FILE, layers: osmData.selectedLayers },
+        (evt) => {
+          setClipProgress({ progress: evt.progress, total: evt.total });
+          setClipMessage(evt.message);
+        },
+      );
+      setClipStatus(final.ok ? "done" : "error");
+      setClipMessage(final.message);
+      if (final.ok) onLayersClipped?.();
+    } catch (err) {
+      setClipStatus("error");
+      setClipMessage(err instanceof Error ? err.message : "Clip failed");
+    }
+  }, [projectId, canClip, osmData, onLayersClipped, saveClippingBoundaries]);
+
+  const toggleLayer = React.useCallback(
+    (layer: string) => {
+      const selected = osmData.selectedLayers.includes(layer)
+        ? osmData.selectedLayers.filter((l) => l !== layer)
+        : [...osmData.selectedLayers, layer];
+      updateOsm({ ...osmData, selectedLayers: selected });
+    },
+    [osmData, updateOsm],
+  );
+
+  const toggleAll = React.useCallback(() => {
+    const allSelected = osmData.selectedLayers.length === osmData.availableLayers.length;
+    updateOsm({
+      ...osmData,
+      selectedLayers: allSelected ? [] : [...osmData.availableLayers],
+    });
+  }, [osmData, updateOsm]);
+
+  return (
+    <div className="p-[var(--space-4)]">
+      <div className="mb-[var(--space-4)] flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
+          Download OSM Layers
+        </h2>
+        <button
+          type="button"
+          onClick={onClose}
+          className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+          aria-label="Close panel"
+        >
+          &times;
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-[var(--space-4)]">
+        {/* Polygon */}
+        <Field label="Ref. Polygon" layout="horizontal">
+          <Select
+            value={osmData.refPolygon}
+            onChange={(e) => updateOsm({ ...osmData, refPolygon: e.target.value })}
+          >
+            <option value="">None</option>
+            {availablePolygons.map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </Select>
+        </Field>
+
+        {/* Margins & RL Azimuth */}
+        <Field label="Margins & RL Azimuth">
+          <div className="pt-[var(--space-2)]">
+            <MarginAzimuthBox
+              top={osmData.marginTop}
+              left={osmData.marginLeft}
+              right={osmData.marginRight}
+              bottom={osmData.marginBottom}
+              onTopChange={(v) => updateOsm({ ...osmData, marginTop: v })}
+              onLeftChange={(v) => updateOsm({ ...osmData, marginLeft: v })}
+              onRightChange={(v) => updateOsm({ ...osmData, marginRight: v })}
+              onBottomChange={(v) => updateOsm({ ...osmData, marginBottom: v })}
+              azimuth={Number(osmData.rlAngle) || 0}
+              onAzimuthChange={(v) => updateOsm({ ...osmData, rlAngle: String(v) })}
+            />
+          </div>
+        </Field>
+
+        <div className="h-px bg-[var(--color-border-subtle)]" />
+
+        {/* Download button + progress */}
+        <div className="space-y-[var(--space-1)]">
+          <div className="flex items-center gap-[var(--space-3)]">
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={!canDownload || downloadStatus === "running"}
+              onClick={handleDownload}
+              className="shrink-0 gap-[var(--space-2)]"
+            >
+              {downloadStatus === "running" ? (
+                <Loader size={14} className="animate-spin" />
+              ) : (
+                <Download size={14} />
+              )}
+              {downloadStatus === "running" ? "Downloading..." : "Download"}
+              {downloadStatus !== "running" && (
+                <span
+                  role="checkbox"
+                  aria-checked={!osmData.skipIfExists}
+                  aria-label="Force download"
+                  title="Force download"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    updateOsm({ ...osmData, skipIfExists: osmData.skipIfExists === false });
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === " " || e.key === "Enter") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      updateOsm({ ...osmData, skipIfExists: osmData.skipIfExists === false });
+                    }
+                  }}
+                  className={cn(
+                    "ml-1 inline-flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-[3px] border",
+                    !osmData.skipIfExists
+                      ? "border-white/90 bg-white/25"
+                      : "border-white/50 bg-transparent hover:border-white/80",
+                  )}
+                >
+                  {!osmData.skipIfExists && (
+                    <span
+                      className="block h-2 w-2 rounded-[1px]"
+                      // eslint-disable-next-line template/no-jsx-style-prop -- inverse color on primary button
+                      style={{ backgroundColor: "currentColor" }}
+                    />
+                  )}
+                </span>
+              )}
+            </Button>
+            {downloadStatus === "running" && downloadProgress.total > 0 && (
+              <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--color-bg-sunken)]">
+                <div
+                  className="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-150"
+                  // eslint-disable-next-line template/no-jsx-style-prop
+                  style={{ width: `${Math.min(100, (downloadProgress.progress / downloadProgress.total) * 100)}%` }}
+                />
+              </div>
+            )}
+          </div>
+          {downloadMessage && downloadStatus !== "running" && (
+            <span className={cn(
+              "text-[11px]",
+              downloadStatus === "error"
+                ? "text-[var(--color-status-danger)]"
+                : "text-[var(--color-text-muted)]",
+            )}>
+              {downloadMessage}
+            </span>
+          )}
+        </div>
+
+        {/* Layer selection (shown after download) */}
+        {osmData.availableLayers.length > 0 && (
+          <>
+            <div className="h-px bg-[var(--color-border-subtle)]" />
+            <div className="space-y-[var(--space-2)]">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-[var(--color-text-secondary)]">
+                  Layers ({osmData.selectedLayers.length}/{osmData.availableLayers.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={toggleAll}
+                  className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                >
+                  {osmData.selectedLayers.length === osmData.availableLayers.length ? "Deselect all" : "Select all"}
+                </button>
+              </div>
+              <div className="space-y-[var(--space-1)]">
+                {osmData.availableLayers.map((layer: string) => (
+                  <label
+                    key={layer}
+                    className="flex items-center gap-[var(--space-2)] text-xs text-[var(--color-text-primary)] cursor-pointer"
+                  >
+                    <Checkbox
+                      checked={osmData.selectedLayers.includes(layer)}
+                      onCheckedChange={() => toggleLayer(layer)}
+                    />
+                    {layer}
+                  </label>
+                ))}
+              </div>
+
+              {/* Clip button + progress */}
+              <div className="mt-[var(--space-3)] flex items-center gap-[var(--space-3)]">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={!canClip || clipStatus === "running"}
+                  onClick={handleClip}
+                  className="shrink-0 gap-[var(--space-2)]"
+                >
+                  {clipStatus === "running" ? (
+                    <Loader size={14} className="animate-spin" />
+                  ) : (
+                    <Download size={14} />
+                  )}
+                  {clipStatus === "running" ? "Clipping..." : "Clip Selected"}
+                </Button>
+                {clipStatus === "running" && clipProgress.total > 0 && (
+                  <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--color-bg-sunken)]">
+                    <div
+                      className="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-150"
+                      // eslint-disable-next-line template/no-jsx-style-prop
+                      style={{ width: `${Math.min(100, (clipProgress.progress / clipProgress.total) * 100)}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Clip status message */}
+        {clipMessage && clipStatus !== "idle" && (
+          <div
+            className={cn(
+              "flex items-center gap-[var(--space-2)] rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-2)] text-xs",
+              clipStatus === "done"
+                ? "border border-[var(--color-status-success-border,#34d399)] bg-[var(--color-status-success-bg,#d1fae5)] text-[var(--color-status-success-text,#065f46)]"
+                : clipStatus === "error"
+                  ? "border border-[var(--color-status-danger)] bg-[var(--color-bg-elevated)] text-[var(--color-status-danger)]"
+                  : "text-[var(--color-text-muted)]"
+            )}
+          >
+            {clipStatus === "done" && <CircleCheck size={13} />}
+            {clipStatus === "error" && <AlertTriangle size={13} />}
+            {clipMessage}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------
 // Component
 // --------------------------------------------------------------------------
 
@@ -177,6 +738,8 @@ export function ProjectGisGlobe() {
   const [demOpacity, setDemOpacity] = React.useState(0.85);
   const [demColorRamp, setDemColorRamp] =
     React.useState<RampName>("hypsometric");
+  const [osmPanelOpen, setOsmPanelOpen] = React.useState(false);
+  const [osmVp, setOsmVp] = React.useState<OsmViewportData | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -663,6 +1226,85 @@ export function ProjectGisGlobe() {
     hiddenFclasses,
     uniqueFclasses,
   ]);
+
+  // ------------------------------------------------------------------
+  // OSM panel viewport override: show only polygon + margin rectangle
+  // ------------------------------------------------------------------
+
+  const [osmPolyGeoJson, setOsmPolyGeoJson] = React.useState<GeoJSON.FeatureCollection | null>(null);
+  const [osmDatasetExtent, setOsmDatasetExtent] = React.useState<GeoJSON.FeatureCollection | null>(null);
+  const osmPolyKeyRef = React.useRef("");
+
+  React.useEffect(() => {
+    if (!osmPanelOpen || !projectId || !osmVp?.polygonName) {
+      setOsmPolyGeoJson(null);
+      setOsmDatasetExtent(null);
+      osmPolyKeyRef.current = "";
+      return;
+    }
+    const key = `${projectId}/${osmVp.polygonName}`;
+    if (key === osmPolyKeyRef.current) return;
+    osmPolyKeyRef.current = key;
+
+    let cancelled = false;
+    fetchFileGeoJson(projectId, "polygons", `${osmVp.polygonName}.gpkg`)
+      .then((data) => { if (!cancelled) setOsmPolyGeoJson(data); })
+      .catch(() => { if (!cancelled) setOsmPolyGeoJson(null); });
+    // Also try to load the existing dataset extent (may not exist yet)
+    fetchFileGeoJson(projectId, "polygons", "osm_dataset_extent.gpkg")
+      .then((data) => { if (!cancelled) setOsmDatasetExtent(data); })
+      .catch(() => { if (!cancelled) setOsmDatasetExtent(null); });
+    return () => { cancelled = true; };
+  }, [osmPanelOpen, projectId, osmVp?.polygonName]);
+
+  const osmOverrideData = React.useMemo<GeoJSONFeatureCollection | null>(() => {
+    if (!osmPanelOpen || !osmPolyGeoJson || !osmVp) return null;
+    const features: GeoJSONFeatureCollection["features"] = [];
+
+    // Add reference polygon features
+    for (const f of osmPolyGeoJson.features) {
+      features.push({
+        type: "Feature",
+        geometry: f.geometry as GeoJSONFeatureCollection["features"][0]["geometry"],
+        properties: { ...f.properties, __layer: "__osm_polygon" },
+      });
+    }
+
+    // Add margin rectangle (clipping boundaries)
+    const rect = computeMarginRect(osmPolyGeoJson.features, osmVp.margins, osmVp.azimuth);
+    if (rect) {
+      features.push({
+        type: "Feature",
+        geometry: { type: "Polygon", coordinates: [rect] },
+        properties: { __layer: "__osm_clipping" },
+      });
+    }
+
+    // Add dataset extent (if previously downloaded)
+    if (osmDatasetExtent) {
+      for (const f of osmDatasetExtent.features) {
+        features.push({
+          type: "Feature",
+          geometry: f.geometry as GeoJSONFeatureCollection["features"][0]["geometry"],
+          properties: { ...f.properties, __layer: "__osm_dataset" },
+        });
+      }
+    }
+
+    return features.length > 0 ? { type: "FeatureCollection", features } : null;
+  }, [osmPanelOpen, osmPolyGeoJson, osmVp, osmDatasetExtent]);
+
+  const osmOverrideLayers = React.useMemo<LayerStyle[]>(() => {
+    if (!osmOverrideData) return [];
+    const result: LayerStyle[] = [
+      { id: "__osm_polygon", color: "#f97316", visible: true, fclasses: [] },
+      { id: "__osm_clipping", color: "#64c8ff", visible: true, fclasses: [] },
+    ];
+    if (osmDatasetExtent) {
+      result.push({ id: "__osm_dataset", color: "#a855f7", visible: true, fclasses: [] });
+    }
+    return result;
+  }, [osmOverrideData, osmDatasetExtent]);
 
   // ------------------------------------------------------------------
   // Insert into a user_edits file (via dbsRef/layerData)
@@ -1401,31 +2043,31 @@ export function ProjectGisGlobe() {
       panelTitle="GIS Files"
       viewport={
         <GisGlobeViewport
-          data={combinedData}
-          layers={layers}
+          data={osmPanelOpen && osmOverrideData ? osmOverrideData : combinedData}
+          layers={osmPanelOpen && osmOverrideLayers.length > 0 ? osmOverrideLayers : layers}
           onToggleLayerVisibility={toggleLayerVisibility}
           onToggleFclassVisibility={toggleFclassVisibility}
-          dataKey={`project:${loadId}`}
+          dataKey={osmPanelOpen ? `osm-preview:${osmVp?.polygonName ?? ""}:${osmDatasetExtent ? "has-extent" : "no-extent"}` : `project:${loadId}`}
           discardKey={discardId}
-          editing={editing}
-          adding={adding}
-          freehand={freehand}
-          autoPoly={autoPoly}
-          autoVessel={autoVessel}
-          autoSegment={autoSegment}
-          simplifying={simplifying}
-          smoothing={smoothing}
-          importingDem={importingDem}
-          deleting={deleting}
-          reclassifying={reclassifying}
-          demFile={selectedDem}
+          editing={osmPanelOpen ? false : editing}
+          adding={osmPanelOpen ? false : adding}
+          freehand={osmPanelOpen ? false : freehand}
+          autoPoly={osmPanelOpen ? false : autoPoly}
+          autoVessel={osmPanelOpen ? false : autoVessel}
+          autoSegment={osmPanelOpen ? false : autoSegment}
+          simplifying={osmPanelOpen ? false : simplifying}
+          smoothing={osmPanelOpen ? false : smoothing}
+          importingDem={osmPanelOpen ? false : importingDem}
+          deleting={osmPanelOpen ? false : deleting}
+          reclassifying={osmPanelOpen ? false : reclassifying}
+          demFile={osmPanelOpen ? "" : selectedDem}
           demOpacity={demOpacity}
           demColorRamp={demColorRamp}
-          terrainOn={terrainOn}
+          terrainOn={osmPanelOpen ? false : terrainOn}
           terrainExaggeration={terrainExaggeration}
-          dirty={dirty}
-          saving={saving}
-          canEdit={canEdit}
+          dirty={osmPanelOpen ? false : dirty}
+          saving={osmPanelOpen ? false : saving}
+          canEdit={osmPanelOpen ? false : canEdit}
           geometryType={metaRef.current?.geometryType ?? "GEOMETRY"}
           onToggleEdit={handleToggleEdit}
           onToggleAdd={handleToggleAdd}
@@ -1455,6 +2097,22 @@ export function ProjectGisGlobe() {
           demManifestUrl={demManifestUrlValue}
         />
       }
+      middlePanel={osmPanelOpen ? (
+        <OsmDownloadPanel
+          projectId={projectId}
+          onClose={() => { setOsmPanelOpen(false); setOsmVp(null); }}
+          onViewportChange={setOsmVp}
+          onLayersClipped={() => {
+            queryClient.invalidateQueries({ queryKey: projectFileKeys.project(projectId ?? 0) });
+            // Refresh dataset extent polygon on viewport
+            if (projectId) {
+              fetchFileGeoJson(projectId, "polygons", "osm_dataset_extent.gpkg")
+                .then(setOsmDatasetExtent)
+                .catch(() => {});
+            }
+          }}
+        />
+      ) : undefined}
     >
       <div className="space-y-[var(--space-4)]">
         {/* Polygons, POI sections */}
@@ -1524,9 +2182,19 @@ export function ProjectGisGlobe() {
 
         {/* OSM Layers section + user edit files after separator */}
         <div className="flex flex-col gap-[var(--space-2)]">
-          <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-            OSM Layers
-          </span>
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+              OSM Layers
+            </span>
+            <button
+              type="button"
+              title="Download OSM layers"
+              onClick={() => setOsmPanelOpen((v) => !v)}
+              className={`rounded p-0.5 ${osmPanelOpen ? "text-[var(--color-accent)]" : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"}`}
+            >
+              <Plus size={14} />
+            </button>
+          </div>
           <div className="flex max-h-[280px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] p-[var(--space-2)]">
             {(fileList?.layers ?? []).length === 0 && userEditFiles.length === 0 ? (
               <p className="text-xs text-[var(--color-text-muted)]">

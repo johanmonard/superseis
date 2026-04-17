@@ -1,14 +1,12 @@
 import { getRuntimeConfig } from '../config/runtimeConfig'
 
 export interface OsmDownloadRequest {
-  surveyOption: string
-  extentName: string
+  polygonFile: string
   skipIfExists: boolean
 }
 
 export interface OsmClipRequest {
-  surveyOption: string
-  extentName: string
+  polygonFile: string
   layers: string[]
 }
 

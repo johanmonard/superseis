@@ -95,8 +95,7 @@ export function ProjectOsm() {
       const final = await downloadOsmStream(
         projectId,
         {
-          surveyOption: data.surveyOption,
-          extentName: data.extentName,
+          polygonFile: "osm_clipping_boundaries.gpkg",
           skipIfExists: data.skipIfExists,
         },
         (evt) => {
@@ -125,8 +124,7 @@ export function ProjectOsm() {
       const final = await clipOsmStream(
         projectId,
         {
-          surveyOption: data.surveyOption,
-          extentName: data.extentName,
+          polygonFile: "osm_clipping_boundaries.gpkg",
           layers: data.selectedLayers,
         },
         (evt) => {

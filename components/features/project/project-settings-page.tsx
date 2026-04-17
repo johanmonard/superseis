@@ -18,11 +18,13 @@ export function ProjectSettingsPage({
   panelTitle = "Parameters",
   children,
   viewport,
+  middlePanel,
 }: {
   title: string;
   panelTitle?: string;
   children?: React.ReactNode;
   viewport?: React.ReactNode;
+  middlePanel?: React.ReactNode;
 }) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [leftFraction, setLeftFraction] = React.useState(DEFAULT_LEFT_FRACTION);
@@ -124,6 +126,19 @@ export function ProjectSettingsPage({
         >
           <div className="w-[3px] h-12 rounded-full bg-[var(--color-border-subtle)] transition-colors hover:bg-[var(--color-border-strong)]" />
         </div>
+      )}
+
+      {/* Middle panel (optional) */}
+      {middlePanel && (
+        <>
+          <div className="min-w-0 flex-shrink-0 overflow-y-auto border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]"
+            // eslint-disable-next-line template/no-jsx-style-prop -- runtime sizing
+            style={{ width: "clamp(240px, 22%, 360px)" }}
+          >
+            {middlePanel}
+          </div>
+          <div className="w-2 shrink-0" />
+        </>
       )}
 
       {/* Viewport panel */}

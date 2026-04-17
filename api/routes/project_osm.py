@@ -1,18 +1,22 @@
 """OSM download and clip endpoints.
 
-Step 1 — Download OSM shapefiles for the terrain extent into depots/osm/.
+Step 1 — Download OSM shapefiles for the polygon extent into depots/osm/.
 Step 2 — Clip selected layers to inputs/gis/gis_layers/ as .gpkg files.
 
 Both endpoints stream progress via SSE (text/event-stream).  Each line is a
 JSON object with ``{"progress", "total", "message"}``.  The final line also
 contains the result fields (``layers`` for download, ``files`` for clip).
+
+The polygon is read from a GPKG file in inputs/gis/polygons/ (typically
+``osm_clipping_boundaries.gpkg``).  After download, the actual bounding box
+used is saved as ``osm_dataset_extent.gpkg`` in the same directory.
 """
 
 import asyncio
 import json
 import time
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -51,19 +55,18 @@ async def _get_project_for_user(
     return project
 
 
-def _resolve_terrain(
+def _load_polygon(
     dojo_svc: ProjectService,
     project_id: int,
-    terrain_option: str,
-    extent_name: str,
+    polygon_file: str,
 ):
-    """Resolve terrain option + extent into a terrain polygon and CRS.
+    """Load a polygon GPKG and return (terrain_poly, crs_xy, project_dir).
 
-    Returns (terrain_poly, crs_xy, project_dir).
+    The polygon is read from inputs/gis/polygons/{polygon_file}, reprojected
+    to the project EPSG, and returned as a numpy (N,2) array.
     """
     import numpy as np
     from dojo.v3.domain.geo import load_polygon
-    from dojo.v3.domain.referentials import compute_referential
 
     try:
         cfg = dojo_svc.get_config(project_id)
@@ -71,32 +74,6 @@ def _resolve_terrain(
         raise HTTPException(status_code=404, detail="Project not found in dojo")
 
     project_dir = dojo_svc.get_project_dir(project_id)
-
-    # --- survey_ui lookup ---
-    survey_ui = cfg.survey_ui
-    groups = survey_ui.get("groups", [])
-
-    group = next((g for g in groups if g.get("name") == terrain_option), None)
-    if group is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Terrain option '{terrain_option}' not found",
-        )
-
-    extent = next((e for e in group.get("extents", []) if e.get("name") == extent_name), None)
-    if extent is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Extent '{extent_name}' not found in '{terrain_option}'",
-        )
-
-    # --- acquisition polygon ---
-    acq_poly_name = group.get("acquisitionPolygon", "")
-    if not acq_poly_name:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="No acquisition polygon selected for this terrain option",
-        )
 
     epsg = cfg.metadata.epsg
     if not epsg:
@@ -106,35 +83,32 @@ def _resolve_terrain(
         )
     crs_xy = int(epsg)
 
-    poly_path = project_dir / "inputs" / "gis" / "polygons" / f"{acq_poly_name}.gpkg"
+    poly_path = project_dir / "inputs" / "gis" / "polygons" / polygon_file
     if not poly_path.exists():
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Polygon file not found: {acq_poly_name}.gpkg",
+            detail=f"Polygon file not found: {polygon_file}",
         )
 
     polygon = load_polygon(poly_path, crs_out=crs_xy)
+    return polygon, crs_xy, project_dir
 
-    # --- compute referential (we only need terrain_poly) ---
-    margins = {
-        "left": int(float(extent.get("marginLeft") or 0)),
-        "right": int(float(extent.get("marginRight") or 0)),
-        "top": int(float(extent.get("marginTop") or 0)),
-        "bottom": int(float(extent.get("marginBottom") or 0)),
-    }
-    rl_angle = float(extent.get("rlAngle") or 0)
-    resolution = float(extent.get("resolution") or 1) or 1.0
 
-    terrain_poly, _crs_wkt, _affine = compute_referential(
-        crs_xy=crs_xy,
-        polygon=polygon,
-        margins=margins,
-        origin=(0, 0),
-        rl_angle=rl_angle,
-        resolution=resolution,
-    )
+def _save_dataset_extent(
+    terrain_poly,
+    crs_xy: int,
+    project_dir: Path,
+) -> None:
+    """Query Geofabrik to find the actual extent of downloaded OSM regions
+    and save it as osm_dataset_extent.gpkg."""
+    from dojo.v3.domain.gis_files import get_osm_dataset_extent
 
-    return terrain_poly, crs_xy, project_dir
+    extent_gdf = get_osm_dataset_extent(terrain_poly, crs_xy)
+    if extent_gdf is None:
+        return
+    out_path = project_dir / "inputs" / "gis" / "polygons" / "osm_dataset_extent.gpkg"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    extent_gdf.to_file(out_path, driver="GPKG")
 
 
 def _sse_line(data: dict) -> str:
@@ -153,8 +127,7 @@ def _dir_size_mb(path: Path) -> float:
 # ---------------------------------------------------------------------------
 
 class DownloadRequest(BaseModel):
-    surveyOption: str
-    extentName: str
+    polygonFile: str
     skipIfExists: bool = True
 
 
@@ -168,8 +141,8 @@ async def download_osm(
 ):
     await _get_project_for_user(project_id, principal, db)
 
-    terrain_poly, crs_xy, project_dir = _resolve_terrain(
-        dojo_svc, project_id, body.surveyOption, body.extentName,
+    terrain_poly, crs_xy, project_dir = _load_polygon(
+        dojo_svc, project_id, body.polygonFile,
     )
 
     osm_dir = project_dir / "depots" / "osm"
@@ -212,6 +185,8 @@ async def download_osm(
             nonlocal error
             try:
                 download_osm_files(terrain_poly, crs_xy, osm_dir, _on_progress)
+                # Save the dataset extent after successful download
+                _save_dataset_extent(terrain_poly, crs_xy, project_dir)
             except Exception as exc:
                 error = exc
             finally:
@@ -247,8 +222,7 @@ async def download_osm(
 # ---------------------------------------------------------------------------
 
 class ClipRequest(BaseModel):
-    surveyOption: str
-    extentName: str
+    polygonFile: str
     layers: list[str]
 
 
@@ -268,8 +242,8 @@ async def clip_osm(
             detail="No layers selected",
         )
 
-    terrain_poly, crs_xy, project_dir = _resolve_terrain(
-        dojo_svc, project_id, body.surveyOption, body.extentName,
+    terrain_poly, crs_xy, project_dir = _load_polygon(
+        dojo_svc, project_id, body.polygonFile,
     )
 
     osm_dir = project_dir / "depots" / "osm"
