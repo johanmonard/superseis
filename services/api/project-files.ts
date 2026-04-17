@@ -64,6 +64,30 @@ export async function fetchFileGeoJson(
   return r.json()
 }
 
+export interface FileGeoJsonBundle {
+  data: GeoJSON.FeatureCollection
+  /** Raw JSON byte size, from Content-Length when available, otherwise the payload length. */
+  byteSize: number
+}
+
+export async function fetchFileGeoJsonWithSize(
+  projectId: number,
+  category: FileCategory,
+  filename: string,
+  signal?: AbortSignal,
+): Promise<FileGeoJsonBundle> {
+  const { apiBaseUrl } = getRuntimeConfig()
+  const r = await fetch(
+    `${apiBaseUrl}/project/${projectId}/files/${category}/${encodeURIComponent(filename)}/geojson`,
+    { credentials: 'include', signal },
+  )
+  if (!r.ok) throw new ApiError('Failed to fetch GeoJSON', r.status)
+  const headerSize = Number(r.headers.get('content-length') ?? '0')
+  const text = await r.text()
+  const byteSize = headerSize > 0 ? headerSize : new Blob([text]).size
+  return { data: JSON.parse(text) as GeoJSON.FeatureCollection, byteSize }
+}
+
 export async function fetchFileDistinctValues(
   projectId: number,
   category: FileCategory,

@@ -9,8 +9,10 @@ import maplibregl, {
 import "maplibre-gl/dist/maplibre-gl.css";
 import { GeoJsonLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
+import { DataFilterExtension } from "@deck.gl/extensions";
 
-import { fetchFileGeoJson, type FileCategory } from "@/services/api/project-files";
+import { type FileCategory } from "@/services/api/project-files";
+import { useProjectFilesGeoJson } from "@/services/query/project-files";
 import type { VisibleFile, GisLayerStyle } from "./project-gis-viewer";
 
 // ---------------------------------------------------------------------------
@@ -74,6 +76,12 @@ function hexToRgba(hex: string, alpha = 255): [number, number, number, number] {
   const b = parseInt(hex.slice(5, 7), 16);
   return [r, g, b, alpha];
 }
+
+// Shared DataFilterExtension instance — deck.gl handles fclass filtering on the
+// GPU via getFilterCategory/filterCategories, avoiding CPU-side re-filtering and
+// GPU re-uploads when the user toggles fclass selections.
+const FCLASS_FILTER_EXT = new DataFilterExtension({ categorySize: 1 });
+const FCLASS_MATCH_ALL = "__all__";
 
 // ---------------------------------------------------------------------------
 // CSS
@@ -282,9 +290,25 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
   const [, setIsFullscreen] = React.useState(false);
   const [legendSliders, setLegendSliders] = React.useState(false);
 
-  // GeoJSON cache: key → FeatureCollection
-  const geojsonCache = React.useRef<Map<string, GeoJSON.FeatureCollection>>(new Map());
-  const [loadedKeys, setLoadedKeys] = React.useState<Set<string>>(new Set());
+  // GeoJSON data comes from react-query so it persists across pages and is
+  // deduplicated automatically. A stable derived map keeps lookup fast.
+  const fileRefs = React.useMemo(
+    () => visibleFiles.map((f) => ({ category: f.category, filename: f.filename })),
+    [visibleFiles],
+  );
+  const geojsonQueries = useProjectFilesGeoJson(projectId, fileRefs);
+  const geojsonByKey = React.useMemo(() => {
+    const m = new Map<string, GeoJSON.FeatureCollection>();
+    visibleFiles.forEach((f, i) => {
+      const bundle = geojsonQueries[i]?.data;
+      if (bundle) m.set(`${f.category}/${f.filename}`, bundle.data);
+    });
+    return m;
+  }, [visibleFiles, geojsonQueries]);
+  const loadedKeys = React.useMemo(
+    () => new Set(geojsonByKey.keys()),
+    [geojsonByKey],
+  );
 
   // Inject CSS
   React.useEffect(() => {
@@ -334,35 +358,6 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
     map.setStyle(buildStyle(TILE_SOURCES[tileIndex]));
   }, [tileIndex]);
 
-  // Fetch GeoJSON for visible files
-  React.useEffect(() => {
-    if (!projectId) return;
-    let cancelled = false;
-    const toFetch = visibleFiles.filter((f) => {
-      const key = `${f.category}/${f.filename}`;
-      return !geojsonCache.current.has(key);
-    });
-    if (toFetch.length === 0) return;
-
-    Promise.all(
-      toFetch.map(async (f) => {
-        const key = `${f.category}/${f.filename}`;
-        try {
-          const geojson = await fetchFileGeoJson(projectId, f.category, f.filename);
-          if (!cancelled) {
-            geojsonCache.current.set(key, geojson);
-          }
-        } catch { /* skip failed loads */ }
-      })
-    ).then(() => {
-      if (!cancelled) {
-        setLoadedKeys(new Set(geojsonCache.current.keys()));
-      }
-    });
-
-    return () => { cancelled = true; };
-  }, [projectId, visibleFiles]);
-
   // Update deck.gl layers
   React.useEffect(() => {
     const overlay = overlayRef.current;
@@ -372,19 +367,8 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
       .filter((f) => f.style.visible)
       .map((f) => {
         const key = `${f.category}/${f.filename}`;
-        const cached = geojsonCache.current.get(key);
+        const cached = geojsonByKey.get(key);
         if (!cached) return null;
-        let data: GeoJSON.FeatureCollection = cached;
-        if (f.fclassFilter) {
-          const allowed = new Set(f.fclassFilter);
-          data = {
-            ...cached,
-            features: cached.features.filter((feat) => {
-              const v = feat.properties?.fclass;
-              return v != null && allowed.has(String(v));
-            }),
-          };
-        }
         const alpha = Math.round(f.style.opacity * 255);
         const rgba = hexToRgba(f.style.color, alpha);
         const fillAlpha =
@@ -392,9 +376,13 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
             ? Math.round(f.style.fillOpacity * 255)
             : Math.round(alpha * 0.3);
         const fillRgba = hexToRgba(f.style.color, fillAlpha);
+        const hasFilter = f.fclassFilter != null && f.fclassFilter.length > 0;
+        const filterKey = hasFilter ? (f.fclassFilter as readonly string[]).join("|") : "";
         return new GeoJsonLayer({
           id: key,
-          data,
+          // Always pass the full cached FeatureCollection — filtering happens
+          // on the GPU via DataFilterExtension so geometry buffers stay hot.
+          data: cached,
           pickable: true,
           stroked: true,
           filled: f.style.filled,
@@ -406,6 +394,22 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
           pointRadiusUnits: "meters" as const,
           pointRadiusMinPixels: 1,
           pointRadiusMaxPixels: 20,
+          extensions: [FCLASS_FILTER_EXT],
+          // When no filter is set, every feature reports the sentinel category
+          // and the allowed list contains only that sentinel → all pass.
+          getFilterCategory: hasFilter
+            ? (feat: GeoJSON.Feature) => {
+                const v = (feat.properties as Record<string, unknown> | null)?.fclass;
+                return v == null ? "" : String(v);
+              }
+            : () => FCLASS_MATCH_ALL,
+          filterCategories: hasFilter
+            ? [...(f.fclassFilter as readonly string[])]
+            : [FCLASS_MATCH_ALL],
+          updateTriggers: {
+            getFilterCategory: filterKey,
+            filterCategories: filterKey,
+          },
         });
       })
       .filter(Boolean);
@@ -413,10 +417,23 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (extraLayers) layers.push(...(extraLayers as any[]));
     overlay.setProps({ layers });
-  }, [visibleFiles, loadedKeys, styleReady, extraLayers]);
+  }, [visibleFiles, loadedKeys, geojsonByKey, styleReady, extraLayers]);
 
-  // Fit bounds to the combined extent of all visible files
+  // Fit bounds to the combined extent of all visible files. Tracks the file
+  // LIST (not filter selections) so changing the source files re-fits, while
+  // toggling fclass filters keeps the current view.
   const fittedKeysRef = React.useRef("");
+  const fileListKey = React.useMemo(
+    () => visibleFiles.map((f) => `${f.category}/${f.filename}`).sort().join("|"),
+    [visibleFiles],
+  );
+  // Reset the cached fit when the file list changes so a new set of files
+  // triggers a fresh fit once their data is ready.
+  const prevFileListKeyRef = React.useRef("");
+  if (prevFileListKeyRef.current !== fileListKey) {
+    prevFileListKeyRef.current = fileListKey;
+    fittedKeysRef.current = "";
+  }
   React.useEffect(() => {
     if (visibleFiles.length === 0) return;
     const map = mapRef.current;
@@ -424,7 +441,7 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
 
     // Build a stable key for the current set of visible+loaded files
     const currentKeys = visibleFiles
-      .filter((f) => geojsonCache.current.has(`${f.category}/${f.filename}`))
+      .filter((f) => geojsonByKey.has(`${f.category}/${f.filename}`))
       .map((f) => `${f.category}/${f.filename}`)
       .sort()
       .join("|");
@@ -439,7 +456,7 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
     };
 
     for (const f of visibleFiles) {
-      const data = geojsonCache.current.get(`${f.category}/${f.filename}`);
+      const data = geojsonByKey.get(`${f.category}/${f.filename}`);
       if (!data) continue;
       for (const feature of data.features) {
         if (feature.geometry) walkCoords((feature.geometry as GeoJSON.Geometry & { coordinates: unknown }).coordinates);
@@ -450,7 +467,7 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
       map.fitBounds(bounds, { padding: 60, maxZoom: 14 });
       fittedKeysRef.current = currentKeys;
     }
-  }, [visibleFiles, loadedKeys]);
+  }, [visibleFiles, loadedKeys, geojsonByKey, styleReady]);
 
   // Toolbar handlers
   const handleZoomIn = () => mapRef.current?.zoomIn();

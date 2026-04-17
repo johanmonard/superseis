@@ -7,9 +7,8 @@ import type { Database } from "sql.js";
 import { useQueryClient } from "@tanstack/react-query";
 import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
-import { useProjectFiles, projectFileKeys } from "@/services/query/project-files";
+import { ensureProjectFileRaw, useProjectFiles, projectFileKeys } from "@/services/query/project-files";
 import {
-  fetchProjectFileRaw,
   fetchFileGeoJson,
   saveProjectFileRaw,
   projectDemTileUrl,
@@ -830,7 +829,7 @@ export function ProjectGisGlobe() {
           const fileName = EDIT_FILES[kind];
           let db: Database;
           try {
-            const buf = await fetchProjectFileRaw(projectId, "osm_edits", fileName);
+            const buf = await ensureProjectFileRaw(queryClient, projectId, "osm_edits", fileName);
             db = new SQL.Database(new Uint8Array(buf));
           } catch {
             db = new SQL.Database();
@@ -876,7 +875,7 @@ export function ProjectGisGlobe() {
     });
 
     return () => { cancelled = true; };
-  }, [projectId]);
+  }, [projectId, queryClient]);
 
   // ------------------------------------------------------------------
   // Load/unload GPKG files as selection changes
@@ -944,10 +943,11 @@ export function ProjectGisGlobe() {
           const kind = EDIT_KINDS.find((k) => EDIT_FILE_KEYS[k] === key);
           let db: Database;
           try {
-            const buf = await fetchProjectFileRaw(
+            const buf = await ensureProjectFileRaw(
+              queryClient,
               projectId,
               parsed.category,
-              parsed.filename
+              parsed.filename,
             );
             db = new SQL.Database(new Uint8Array(buf));
           } catch {
@@ -1961,10 +1961,11 @@ export function ProjectGisGlobe() {
           const kind = EDIT_KINDS.find((k) => EDIT_FILE_KEYS[k] === key);
           let db: Database;
           try {
-            const buf = await fetchProjectFileRaw(
+            const buf = await ensureProjectFileRaw(
+              queryClient,
               projectId,
               parsed.category,
-              parsed.filename
+              parsed.filename,
             );
             db = new SQL.Database(new Uint8Array(buf));
           } catch {
@@ -1994,7 +1995,7 @@ export function ProjectGisGlobe() {
 
     setDirty(false);
     setDiscardId((n) => n + 1);
-  }, [projectId, parseFileKey]);
+  }, [projectId, parseFileKey, queryClient]);
 
   // ------------------------------------------------------------------
   // Save

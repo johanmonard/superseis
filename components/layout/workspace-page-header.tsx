@@ -27,6 +27,8 @@ import {
 } from "../ui/tooltip";
 import { cn } from "../../lib/utils";
 import { useActiveProject } from "../../lib/use-active-project";
+import { useGeoJsonProjectScopePrune } from "../../services/query/project-files";
+import { GisPreloadToggle } from "../features/project/gis-preload-toggle";
 import { useLogoutMutation } from "../../lib/use-auth-session";
 import { useThemePreferences } from "../../lib/use-theme-preferences";
 import type { ThemeDensity } from "../../lib/theme";
@@ -79,6 +81,7 @@ export function WorkspacePageHeader({
 
   const pathname = usePathname();
   const { activeProject, setActiveProject } = useActiveProject();
+  useGeoJsonProjectScopePrune(activeProject?.id ?? null);
   const userInitials = session.email.slice(0, 2).toUpperCase();
   const isProjectPage = pathname.startsWith("/project") || pathname === "/";
   const [showFilesDialog, setShowFilesDialog] = React.useState(false);
@@ -107,6 +110,8 @@ export function WorkspacePageHeader({
                 <span className="pl-[var(--space-1)] pr-[1ch] text-xs font-semibold text-[var(--color-text-primary)]">
                   {activeProject.name}
                 </span>
+                <div className="h-4 w-px bg-[var(--color-border-subtle)]" />
+                <GisPreloadToggle projectId={activeProject.id} />
                 <div className="h-4 w-px bg-[var(--color-border-subtle)]" />
                 <Tooltip>
                   <TooltipTrigger asChild>
