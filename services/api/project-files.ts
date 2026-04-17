@@ -4,12 +4,12 @@ import { ApiError } from './client'
 export interface ProjectFiles {
   polygons: string[]
   poi: string[]
-  layers: string[]
-  user_edits: string[]
+  gis_layers: string[]
+  osm_edits: string[]
   dem: string[]
 }
 
-export type FileCategory = 'polygons' | 'poi' | 'layers' | 'user_edits' | 'dem'
+export type FileCategory = 'polygons' | 'poi' | 'gis_layers' | 'osm_edits' | 'dem'
 
 export function fetchProjectFiles(
   projectId: number,
@@ -61,6 +61,22 @@ export async function fetchFileGeoJson(
     { credentials: 'include', signal },
   )
   if (!r.ok) throw new ApiError('Failed to fetch GeoJSON', r.status)
+  return r.json()
+}
+
+export async function fetchFileDistinctValues(
+  projectId: number,
+  category: FileCategory,
+  filename: string,
+  column: string,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const { apiBaseUrl } = getRuntimeConfig()
+  const r = await fetch(
+    `${apiBaseUrl}/project/${projectId}/files/${category}/${encodeURIComponent(filename)}/distinct/${encodeURIComponent(column)}`,
+    { credentials: 'include', signal },
+  )
+  if (!r.ok) throw new ApiError(`Failed to fetch distinct ${column}`, r.status)
   return r.json()
 }
 

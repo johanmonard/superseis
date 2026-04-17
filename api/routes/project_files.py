@@ -33,8 +33,8 @@ from dojo.v3.services.project_service import ProjectNotFoundError, ProjectServic
 
 router = APIRouter(prefix="/project/{project_id}/files", tags=["project-files"])
 
-VALID_CATEGORIES = frozenset(["polygons", "poi", "layers", "user_edits", "dem"])
-UPLOAD_CATEGORIES = frozenset(["polygons", "poi", "layers"])
+VALID_CATEGORIES = frozenset(["polygons", "poi", "gis_layers", "osm_edits", "dem"])
+UPLOAD_CATEGORIES = frozenset(["polygons", "poi", "gis_layers"])
 ALLOWED_EXTENSIONS = frozenset([".gpkg", ".kml", ".zip"])
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 
@@ -55,8 +55,8 @@ def _validate_category(category: str) -> str:
 _CATEGORY_DIR_MAP = {
     "polygons": "polygons",
     "poi": "poi",
-    "layers": "gis_layers",
-    "user_edits": "user_edits",
+    "gis_layers": "gis_layers",
+    "osm_edits": "osm_edits",
     "dem": "dem",
 }
 
@@ -125,8 +125,8 @@ def _convert_zip_to_gpkg(zip_path: Path, dest_path: Path) -> None:
 class FileListResponse(BaseModel):
     polygons: list[str]
     poi: list[str]
-    layers: list[str]
-    user_edits: list[str]
+    gis_layers: list[str]
+    osm_edits: list[str]
     dem: list[str]
 
 
@@ -144,7 +144,7 @@ async def list_all_files(
     """List all GIS files across all categories."""
     await _get_project_for_user(project_id, principal, db)
     result: dict[str, list[str]] = {}
-    for cat in ("polygons", "poi", "layers", "user_edits"):
+    for cat in ("polygons", "poi", "gis_layers", "osm_edits"):
         gis_path = _gis_dir(dojo_svc, project_id, cat)
         if gis_path.exists():
             result[cat] = sorted(
@@ -166,7 +166,7 @@ async def list_all_files(
 
 
 # ---------------------------------------------------------------------------
-# Routes — upload (polygons, poi, layers only)
+# Routes — upload (polygons, poi, gis_layers only)
 # ---------------------------------------------------------------------------
 
 @router.post("/{category}", status_code=status.HTTP_201_CREATED)
@@ -253,6 +253,44 @@ async def delete_file(
 # ---------------------------------------------------------------------------
 # Routes — GeoJSON
 # ---------------------------------------------------------------------------
+
+@router.get("/{category}/{filename}/distinct/{column}")
+async def get_distinct_values(
+    project_id: int,
+    category: str,
+    filename: str,
+    column: str,
+    principal: AuthPrincipal = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    dojo_svc: ProjectService = Depends(get_dojo_project_service),
+) -> list[str]:
+    """Return the sorted unique non-null values of *column* in a .gpkg file.
+
+    Reads only the requested column (no geometries) for speed.
+    """
+    _validate_category(category)
+    if not _SAFE_NAME_RE.match(column):
+        raise HTTPException(status_code=400, detail="Invalid column name")
+    await _get_project_for_user(project_id, principal, db)
+
+    dest_dir = _gis_dir(dojo_svc, project_id, category)
+    file_path = _safe_file_path(dest_dir, filename)
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    try:
+        # pyogrio supports read_geometry=False + columns= for fast metadata reads
+        gdf = gpd.read_file(file_path, columns=[column], read_geometry=False)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to read file: {e}",
+        )
+    if column not in gdf.columns:
+        return []
+    series = gdf[column].dropna().astype(str)
+    return sorted(set(series.tolist()))
+
 
 @router.get("/{category}/{filename}/geojson")
 async def get_geojson(

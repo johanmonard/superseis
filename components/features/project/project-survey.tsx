@@ -3,25 +3,23 @@
 import * as React from "react";
 import { appIcons } from "@/components/ui/icon";
 
-const { check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
+const { alertTriangle: AlertTriangle, check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
 
 import { AngleInput } from "@/components/ui/angle-input";
-import { CoordinateInput } from "@/components/ui/coordinate-input";
+import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
 import { useProjectFiles } from "@/services/query/project-files";
+import { useProjectSection } from "@/services/query/project-sections";
 
 /* ------------------------------------------------------------------
    Types
    ------------------------------------------------------------------ */
 
-interface ExtentTab {
-  id: string;
-  name: string;
+interface SimulationExtent {
   marginTop: string;
   marginLeft: string;
   marginRight: string;
@@ -32,34 +30,28 @@ interface ExtentTab {
 interface SurveyGroup {
   id: string;
   name: string;
+  designOption: string;
   acquisitionPolygon: string;
   pois: string[];
-  extents: ExtentTab[];
-  activeExtentId: string;
+  simulation: SimulationExtent;
 }
 
-function createExtent(name: string): ExtentTab {
-  return {
-    id: crypto.randomUUID(),
-    name,
-    marginTop: "1000",
-    marginLeft: "1000",
-    marginRight: "1000",
-    marginBottom: "1000",
-    rlAngle: "0",
-  };
-}
+const DEFAULT_SIMULATION: SimulationExtent = {
+  marginTop: "1000",
+  marginLeft: "1000",
+  marginRight: "1000",
+  marginBottom: "1000",
+  rlAngle: "0",
+};
 
 function createGroup(name: string): SurveyGroup {
-  const layers = createExtent("Terrain model");
-  const simulation = createExtent("Simulation");
   return {
     id: crypto.randomUUID(),
     name,
+    designOption: "",
     acquisitionPolygon: "",
     pois: [],
-    extents: [layers, simulation],
-    activeExtentId: layers.id,
+    simulation: { ...DEFAULT_SIMULATION },
   };
 }
 
@@ -185,10 +177,52 @@ function GroupSelector({
 }
 
 /* ------------------------------------------------------------------
-   Tag list with dropdown to add
+   POI list with add button + popover
    ------------------------------------------------------------------ */
 
-function TagList({
+function PoiAddButton({
+  pois,
+  onAdd,
+}: {
+  pois: string[];
+  onAdd: (name: string) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative self-start">
+      <Button variant="ghost" size="sm" onClick={() => setOpen(!open)}>
+        <Plus size={12} className="mr-[var(--space-1)]" /> POI
+      </Button>
+      {open && (
+        <div className="absolute left-0 top-full z-20 mt-1 max-h-48 min-w-[12rem] overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] p-[var(--space-1)] shadow-[0_4px_12px_var(--color-shadow-alpha)]">
+          {pois.map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => { onAdd(p); setOpen(false); }}
+              className="flex w-full items-center rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-2)] text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PoiList({
   selected,
   available,
   onAdd,
@@ -196,7 +230,7 @@ function TagList({
 }: {
   selected: string[];
   available: string[];
-  onAdd: (v: string) => void;
+  onAdd: (name: string) => void;
   onRemove: (index: number) => void;
 }) {
   const unselected = available.filter((p) => !selected.includes(p));
@@ -204,35 +238,33 @@ function TagList({
   return (
     <div className="flex flex-col gap-[var(--space-2)]">
       {selected.length > 0 && (
-        <div className="flex flex-wrap gap-[var(--space-1)]">
+        <div className="flex flex-col gap-[var(--space-1)]">
           {selected.map((name, i) => (
-            <span
+            <div
               key={`${name}-${i}`}
-              className="inline-flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)] px-[var(--space-2)] py-[var(--space-1)] text-xs text-[var(--color-text-secondary)]"
+              className="flex shrink-0 items-center justify-between rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)] px-[var(--space-3)] py-[var(--space-2)]"
             >
-              {name}
+              <span className="truncate text-xs text-[var(--color-text-secondary)]">
+                {name}
+              </span>
               <button
                 type="button"
                 onClick={() => onRemove(i)}
-                className="text-[var(--color-text-muted)] hover:text-[var(--color-status-danger)]"
+                className="ml-[var(--space-2)] shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-status-danger)]"
               >
-                <X size={10} />
+                <X size={12} />
               </button>
-            </span>
+            </div>
           ))}
         </div>
       )}
-      {unselected.length > 0 && (
-        <Select
-          value=""
-          onChange={(e) => { if (e.target.value) onAdd(e.target.value); }}
-        >
-          <option value="">Add POI…</option>
-          {unselected.map((p) => (
-            <option key={p} value={p}>{p}</option>
-          ))}
-        </Select>
-      )}
+      {unselected.length > 0 ? (
+        <PoiAddButton pois={unselected} onAdd={onAdd} />
+      ) : selected.length === 0 ? (
+        <p className="text-xs text-[var(--color-text-muted)]">
+          No POIs available. Upload POI files first.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -270,6 +302,8 @@ function MarginAzimuthBox({
   onTopChange, onLeftChange, onRightChange, onBottomChange,
   azimuth,
   onAzimuthChange,
+  azimuthTone = "default",
+  azimuthDisabled = false,
 }: {
   top: string; left: string; right: string; bottom: string;
   onTopChange: (v: string) => void;
@@ -278,6 +312,8 @@ function MarginAzimuthBox({
   onBottomChange: (v: string) => void;
   azimuth: number;
   onAzimuthChange: (v: number) => void;
+  azimuthTone?: "default" | "warning";
+  azimuthDisabled?: boolean;
 }) {
   return (
     <div className="flex flex-col items-center gap-[var(--space-2)]">
@@ -298,6 +334,8 @@ function MarginAzimuthBox({
             min={0}
             max={360}
             step={0.01}
+            tone={azimuthTone}
+            disabled={azimuthDisabled}
           />
         </div>
 
@@ -306,117 +344,6 @@ function MarginAzimuthBox({
 
       {/* Bottom input */}
       <MarginInput value={bottom} onChange={onBottomChange} aria-label="Margin bottom" />
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------
-   Extent tabs (secondary style)
-   ------------------------------------------------------------------ */
-
-function ExtentTabs({
-  items,
-  activeId,
-  onSelect,
-  onAdd,
-  onRename,
-  onDelete,
-}: {
-  items: { id: string; name: string }[];
-  activeId: string;
-  onSelect: (id: string) => void;
-  onAdd: () => void;
-  onRename: (id: string, name: string) => void;
-  onDelete: (id: string) => void;
-}) {
-  const [editingId, setEditingId] = React.useState<string | null>(null);
-  const [editValue, setEditValue] = React.useState("");
-  const inputRef = React.useRef<HTMLInputElement>(null);
-
-  React.useEffect(() => {
-    if (editingId) setTimeout(() => inputRef.current?.focus(), 0);
-  }, [editingId]);
-
-  const commitEdit = () => {
-    if (editingId && editValue.trim()) onRename(editingId, editValue.trim());
-    setEditingId(null);
-  };
-
-  return (
-    <div className="flex flex-col gap-[var(--space-2)]">
-      <div className="flex flex-wrap items-center gap-[var(--space-1)]">
-        {items.map((item) => {
-          if (item.id === editingId) {
-            return (
-              <div
-                key={item.id}
-                className="flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] border border-[var(--color-accent)] bg-[var(--color-bg-surface)] px-[var(--space-1)]"
-              >
-                <input
-                  ref={inputRef}
-                  value={editValue}
-                  onChange={(e) => setEditValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") commitEdit();
-                    if (e.key === "Escape") setEditingId(null);
-                  }}
-                  className="h-6 w-20 bg-transparent px-[var(--space-1)] text-xs text-[var(--color-text-primary)] outline-none"
-                />
-                <button type="button" onClick={commitEdit} className="flex h-5 w-5 items-center justify-center text-[var(--color-status-success)]">
-                  <Check size={10} />
-                </button>
-                <button type="button" onClick={() => setEditingId(null)} className="flex h-5 w-5 items-center justify-center text-[var(--color-text-muted)]">
-                  <X size={10} />
-                </button>
-              </div>
-            );
-          }
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onSelect(item.id)}
-              className={cn(
-                "rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-1)] text-xs font-medium transition-colors",
-                item.id === activeId
-                  ? "bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border-strong)]"
-                  : "bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-              )}
-            >
-              {item.name}
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          onClick={onAdd}
-          className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
-          aria-label="Add extent"
-        >
-          <Plus size={12} />
-        </button>
-      </div>
-      <div className="flex items-center gap-[var(--space-1)]">
-        <button
-          type="button"
-          onClick={() => {
-            const active = items.find((i) => i.id === activeId);
-            if (active) { setEditingId(active.id); setEditValue(active.name); }
-          }}
-          className="flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] px-[var(--space-2)] py-[var(--space-1)] text-xs text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
-        >
-          <Pencil size={10} /> Rename
-        </button>
-        {items.length > 1 && (
-          <button
-            type="button"
-            onClick={() => onDelete(activeId)}
-            className="flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] px-[var(--space-2)] py-[var(--space-1)] text-xs text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-status-danger)]"
-          >
-            <Trash2 size={10} /> Delete
-          </button>
-        )}
-      </div>
     </div>
   );
 }
@@ -455,14 +382,36 @@ export function ProjectSurvey({
     [projectFiles?.poi],
   );
 
-  const { data, update, status } = useSectionData<SurveyData>(projectId, "survey", DEFAULT_SURVEY);
+  const { data: designOptionsSection } = useProjectSection(projectId, "design_options");
+  const designOptionsList = React.useMemo(() => {
+    const options = (designOptionsSection?.data as {
+      options?: { name: string; rows?: { design: string }[] }[];
+    } | undefined)?.options;
+    return options ?? [];
+  }, [designOptionsSection]);
+  const availableDesignOptions = React.useMemo(
+    () => designOptionsList.map((o) => o.name).filter(Boolean),
+    [designOptionsList],
+  );
+
+  const { data: designSection } = useProjectSection(projectId, "design");
+  const designAzimuths = React.useMemo(() => {
+    const groups = (designSection?.data as {
+      groups?: { name: string; rlAzimuth?: string }[];
+    } | undefined)?.groups;
+    const map: Record<string, string> = {};
+    for (const g of groups ?? []) {
+      map[g.name] = g.rlAzimuth ?? "0";
+    }
+    return map;
+  }, [designSection]);
+
+  const { data, update } = useSectionData<SurveyData>(projectId, "survey", DEFAULT_SURVEY);
   const groups = data.groups;
   const activeGroupId = data.activeGroupId || groups[0]?.id || "";
 
   const activeGroup = groups.find((g) => g.id === activeGroupId) ?? groups[0];
-  const activeExtent =
-    activeGroup.extents.find((e) => e.id === activeGroup.activeExtentId) ??
-    activeGroup.extents[0];
+  const simulation = activeGroup.simulation ?? DEFAULT_SIMULATION;
 
   // Notify parent about viewport data
   React.useEffect(() => {
@@ -471,19 +420,19 @@ export function ProjectSurvey({
       acquisitionPolygon: activeGroup.acquisitionPolygon,
       pois: activeGroup.pois,
       margins: {
-        top: Number(activeExtent.marginTop) || 0,
-        left: Number(activeExtent.marginLeft) || 0,
-        right: Number(activeExtent.marginRight) || 0,
-        bottom: Number(activeExtent.marginBottom) || 0,
+        top: Number(simulation.marginTop) || 0,
+        left: Number(simulation.marginLeft) || 0,
+        right: Number(simulation.marginRight) || 0,
+        bottom: Number(simulation.marginBottom) || 0,
       },
-      azimuth: Number(activeExtent.rlAngle) || 0,
+      azimuth: Number(simulation.rlAngle) || 0,
     });
   }, [
     onViewportChange, projectId,
     activeGroup.acquisitionPolygon, activeGroup.pois,
-    activeExtent.marginTop, activeExtent.marginLeft,
-    activeExtent.marginRight, activeExtent.marginBottom,
-    activeExtent.rlAngle,
+    simulation.marginTop, simulation.marginLeft,
+    simulation.marginRight, simulation.marginBottom,
+    simulation.rlAngle,
   ]);
 
   const updateGroup = React.useCallback(
@@ -507,52 +456,49 @@ export function ProjectSurvey({
     [data, activeGroupId, update]
   );
 
-  const updateExtent = React.useCallback(
-    (extentId: string, patch: Partial<ExtentTab>) => {
+  const updateSimulation = React.useCallback(
+    (patch: Partial<SimulationExtent>) => {
       update({
         ...data,
-        groups: data.groups.map((g) => {
-          if (g.id !== activeGroupId) return g;
-          return {
-            ...g,
-            extents: g.extents.map((e) => (e.id === extentId ? { ...e, ...patch } : e)),
-          };
-        }),
+        groups: data.groups.map((g) =>
+          g.id === activeGroupId
+            ? { ...g, simulation: { ...(g.simulation ?? DEFAULT_SIMULATION), ...patch } }
+            : g
+        ),
       });
     },
     [data, activeGroupId, update]
   );
 
-  const addExtent = React.useCallback(() => {
-    const ext = createExtent(`Extent ${activeGroup.extents.length + 1}`);
-    update({
-      ...data,
-      groups: data.groups.map((g) =>
-        g.id === activeGroupId
-          ? { ...g, extents: [...g.extents, ext], activeExtentId: ext.id }
-          : g
-      ),
-    });
-  }, [data, activeGroup, activeGroupId, update]);
+  // Azimuths referenced by the designs of the selected option
+  const optionAzimuths = React.useMemo(() => {
+    const selected = designOptionsList.find((o) => o.name === activeGroup.designOption);
+    if (!selected) return [] as string[];
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+    for (const row of selected.rows ?? []) {
+      if (!row.design) continue;
+      const raw = designAzimuths[row.design];
+      if (raw === undefined) continue;
+      const key = Number(raw).toString();
+      if (!seen.has(key)) {
+        seen.add(key);
+        ordered.push(key);
+      }
+    }
+    return ordered;
+  }, [designOptionsList, designAzimuths, activeGroup.designOption]);
 
-  const deleteExtent = React.useCallback(
-    (extentId: string) => {
-      const nextExtents = activeGroup.extents.filter((e) => e.id !== extentId);
-      const newActiveExtentId =
-        activeGroup.activeExtentId === extentId && nextExtents.length > 0
-          ? nextExtents[0].id
-          : activeGroup.activeExtentId;
-      update({
-        ...data,
-        groups: data.groups.map((g) =>
-          g.id === activeGroupId
-            ? { ...g, extents: nextExtents, activeExtentId: newActiveExtentId }
-            : g
-        ),
-      });
-    },
-    [data, activeGroup, activeGroupId, update]
-  );
+  const azimuthMismatch = optionAzimuths.length > 1;
+  const firstOptionAzimuth = optionAzimuths[0];
+  const hasLinkedAzimuth = firstOptionAzimuth !== undefined;
+
+  // When an option is selected, derive the simulation angle from its first design
+  React.useEffect(() => {
+    if (firstOptionAzimuth === undefined) return;
+    if (simulation.rlAngle === firstOptionAzimuth) return;
+    updateSimulation({ rlAngle: firstOptionAzimuth });
+  }, [firstOptionAzimuth, simulation.rlAngle, updateSimulation]);
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
@@ -568,10 +514,20 @@ export function ProjectSurvey({
 
       <div className="h-px bg-[var(--color-border-subtle)]" />
 
-      {/* Features */}
-      <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-        Features
-      </span>
+      <Field label="Design option" layout="horizontal">
+        <Select
+          value={activeGroup.designOption ?? ""}
+          onChange={(e) => updateGroup(activeGroupId, { designOption: e.target.value })}
+          disabled={availableDesignOptions.length === 0}
+        >
+          <option value="">
+            {availableDesignOptions.length === 0 ? "No design options" : "None"}
+          </option>
+          {availableDesignOptions.map((o) => (
+            <option key={o} value={o}>{o}</option>
+          ))}
+        </Select>
+      </Field>
 
       <Field label="Acq. Polygon" layout="horizontal">
         <Select
@@ -586,7 +542,7 @@ export function ProjectSurvey({
       </Field>
 
       <Field label="Points of Interest" layout="horizontal">
-        <TagList
+        <PoiList
           selected={activeGroup.pois}
           available={availablePois}
           onAdd={(v) => updateGroup(activeGroupId, { pois: [...activeGroup.pois, v] })}
@@ -598,39 +554,38 @@ export function ProjectSurvey({
         />
       </Field>
 
-      <div className="h-px bg-[var(--color-border-subtle)]" />
-
-      {/* Extents Definition */}
-      <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-        Extents Definition
-      </span>
-
-      <ExtentTabs
-        items={activeGroup.extents}
-        activeId={activeGroup.activeExtentId}
-        onSelect={(id) => updateGroup(activeGroupId, { activeExtentId: id })}
-        onAdd={addExtent}
-        onRename={(id, name) => updateExtent(id, { name })}
-        onDelete={deleteExtent}
-      />
-
-      {/* Extent fields — labels on top */}
-      <Field label="Margins & RL Azimuth">
+      <Field label="Simulation extent">
         <div className="pt-[var(--space-4)]">
-        <MarginAzimuthBox
-          top={activeExtent.marginTop}
-          left={activeExtent.marginLeft}
-          right={activeExtent.marginRight}
-          bottom={activeExtent.marginBottom}
-          onTopChange={(v) => updateExtent(activeExtent.id, { marginTop: v })}
-          onLeftChange={(v) => updateExtent(activeExtent.id, { marginLeft: v })}
-          onRightChange={(v) => updateExtent(activeExtent.id, { marginRight: v })}
-          onBottomChange={(v) => updateExtent(activeExtent.id, { marginBottom: v })}
-          azimuth={Number(activeExtent.rlAngle) || 0}
-          onAzimuthChange={(v) => updateExtent(activeExtent.id, { rlAngle: String(v) })}
-        />
+          <MarginAzimuthBox
+            top={simulation.marginTop}
+            left={simulation.marginLeft}
+            right={simulation.marginRight}
+            bottom={simulation.marginBottom}
+            onTopChange={(v) => updateSimulation({ marginTop: v })}
+            onLeftChange={(v) => updateSimulation({ marginLeft: v })}
+            onRightChange={(v) => updateSimulation({ marginRight: v })}
+            onBottomChange={(v) => updateSimulation({ marginBottom: v })}
+            azimuth={Number(simulation.rlAngle) || 0}
+            onAzimuthChange={(v) => updateSimulation({ rlAngle: String(v) })}
+            azimuthTone={azimuthMismatch ? "warning" : "default"}
+            azimuthDisabled={hasLinkedAzimuth}
+          />
         </div>
       </Field>
+
+      {azimuthMismatch && (
+        <div
+          role="alert"
+          className="flex items-start gap-[var(--space-2)] rounded-[var(--radius-sm)] border border-[var(--color-status-warning)] bg-[var(--color-status-warning-bg)] px-[var(--space-3)] py-[var(--space-2)] text-xs text-[var(--color-status-warning-text)]"
+        >
+          <AlertTriangle size={14} className="mt-[1px] shrink-0" />
+          <span>
+            Selected designs have different RL Azimuths (
+            {optionAzimuths.map((a) => `${a}°`).join(", ")}). Consider aligning
+            them before computing the simulation extent.
+          </span>
+        </div>
+      )}
     </div>
   );
 }

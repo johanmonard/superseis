@@ -10,6 +10,7 @@ export interface AngleInputProps {
   max?: number;
   step?: number;
   disabled?: boolean;
+  tone?: "default" | "warning";
   className?: string;
 }
 
@@ -25,6 +26,7 @@ export function AngleInput({
   max = 360,
   step = 0.01,
   disabled = false,
+  tone = "default",
   className,
 }: AngleInputProps) {
   const [inputValue, setInputValue] = React.useState(String(value));
@@ -203,7 +205,12 @@ export function AngleInput({
               if (e.key === "Enter") commit(inputValue);
             }}
             disabled={disabled}
-            className="h-5 w-14 rounded-[var(--radius-sm)] border-none bg-transparent px-0 text-center text-xs tabular-nums text-[var(--color-text-primary)] outline-none"
+            className={cn(
+              "h-5 w-14 rounded-[var(--radius-sm)] border-none bg-transparent px-0 text-center text-xs tabular-nums outline-none",
+              tone === "warning"
+                ? "text-[var(--color-status-danger)]"
+                : "text-[var(--color-text-primary)]",
+            )}
           />
           <span className="text-[9px] text-[var(--color-text-muted)]">°</span>
         </div>

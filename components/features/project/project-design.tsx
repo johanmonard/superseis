@@ -3,6 +3,7 @@
 import * as React from "react";
 import { appIcons } from "@/components/ui/icon";
 
+import { AngleInput } from "@/components/ui/angle-input";
 import { Field } from "@/components/ui/field";
 
 const { check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
@@ -26,6 +27,7 @@ interface DesignGroup {
   activeRp: string;
   spSalvo: string;
   roll: string;
+  rlAzimuth: string;
 }
 
 function createGroup(name: string, overrides?: Partial<DesignGroup>): DesignGroup {
@@ -40,6 +42,7 @@ function createGroup(name: string, overrides?: Partial<DesignGroup>): DesignGrou
     activeRp: "0",
     spSalvo: "0",
     roll: "0",
+    rlAzimuth: "0",
     ...overrides,
   };
 }
@@ -330,6 +333,16 @@ export function ProjectDesign({
             min={1}
             max={10}
             step={1}
+          />
+        </Field>
+
+        <Field label="RL Azimuth" layout="horizontal">
+          <AngleInput
+            value={Number(activeGroup.rlAzimuth) || 0}
+            onChange={(v) => updateGroup(activeGroup.id, { rlAzimuth: String(v) })}
+            min={0}
+            max={360}
+            step={0.01}
           />
         </Field>
       </div>

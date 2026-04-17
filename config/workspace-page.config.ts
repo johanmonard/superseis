@@ -71,11 +71,6 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
     subtitle: "Define survey extents and boundaries.",
   },
   {
-    href: "/project/osm",
-    title: "OSM",
-    subtitle: "OpenStreetMap data configuration.",
-  },
-  {
     href: "/project/layers",
     title: "Layers",
     subtitle: "Layer management and configuration.",

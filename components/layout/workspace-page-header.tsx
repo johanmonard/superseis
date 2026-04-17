@@ -275,7 +275,7 @@ import {
 const FILE_CATEGORIES: { key: FileCategory; label: string }[] = [
   { key: "polygons", label: "Polygons" },
   { key: "poi", label: "POI" },
-  { key: "layers", label: "Layers" },
+  { key: "gis_layers", label: "Layers" },
 ];
 
 const ACCEPTED_EXTENSIONS = ".gpkg,.kml,.zip";
@@ -296,7 +296,7 @@ function ProjectFilesDialog({
   const fileInputRefs = React.useRef<Partial<Record<FileCategory, HTMLInputElement | null>>>({
     polygons: null,
     poi: null,
-    layers: null,
+    gis_layers: null,
   });
 
   const handleUpload = React.useCallback(

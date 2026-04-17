@@ -7,11 +7,40 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { useQueries } from "@tanstack/react-query";
 import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
+import { fetchFileDistinctValues } from "@/services/api/project-files";
+import type { FileCategory } from "@/services/api/project-files";
+import { useProjectFiles } from "@/services/query/project-files";
 
 const { plus: Plus, trash: Trash2, x: X } = appIcons;
+
+/* ------------------------------------------------------------------
+   Geofabrik OSM filename → osm_edits target
+
+   Convention (standard Geofabrik shapefile package):
+   - any name containing "_a_"  → polygon
+   - railways, roads, waterways → line
+   - natural, places, pofw, pois, traffic, transport (without _a_) → point
+   ------------------------------------------------------------------ */
+
+const OSM_LINE_THEMES = new Set(["railways", "roads", "waterways"]);
+const OSM_POINT_THEMES = new Set([
+  "natural", "places", "pofw", "pois", "traffic", "transport",
+]);
+
+function osmEditsForOsmFile(osmName: string): string | null {
+  if (!osmName.startsWith("gis_osm")) return null;
+  if (osmName.includes("_a_")) return "osm_edits_polygons";
+  // Theme is the segment between "gis_osm_" and "_free"
+  const m = osmName.match(/^gis_osm_([a-z0-9]+)_free/);
+  const theme = m?.[1] ?? "";
+  if (OSM_LINE_THEMES.has(theme)) return "osm_edits_lines";
+  if (OSM_POINT_THEMES.has(theme)) return "osm_edits_points";
+  return null;
+}
 
 /* ------------------------------------------------------------------
    Types
@@ -57,26 +86,6 @@ interface LayersData {
 const DEFAULT_LAYERS: LayersData = {
   layers: [createLayer(0)],
   activeId: "",
-};
-
-/* ------------------------------------------------------------------
-   Dummy data
-   ------------------------------------------------------------------ */
-
-const DUMMY_SOURCE_FILES = [
-  "roads.shp",
-  "railways.shp",
-  "waterways.shp",
-  "buildings.shp",
-  "landuse.shp",
-  "transport_a.shp",
-];
-
-const DUMMY_SOURCE_VALUES: Record<string, string[]> = {
-  fclass: [
-    "primary", "secondary", "tertiary", "residential",
-    "motorway", "trunk", "track", "path", "river", "stream",
-  ],
 };
 
 /* ------------------------------------------------------------------
@@ -194,16 +203,51 @@ function ColorPicker({
    Main component
    ------------------------------------------------------------------ */
 
-export function ProjectLayers() {
+export interface ActiveLayerInfo {
+  color: string;
+  sourceFiles: string[];
+  sourceValues: string[];
+}
+
+export function ProjectLayers({
+  onActiveLayerChange,
+}: {
+  onActiveLayerChange?: (
+    projectId: number | null,
+    info: ActiveLayerInfo | null,
+  ) => void;
+} = {}) {
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
 
   const { data, update, status } = useSectionData<LayersData>(projectId, "layers", DEFAULT_LAYERS);
 
+  const { data: projectFiles } = useProjectFiles(projectId);
+  const availableOsmLayers = React.useMemo(
+    () => (projectFiles?.gis_layers ?? []).map((f) => f.replace(/\.gpkg$/, "")),
+    [projectFiles?.gis_layers],
+  );
+
   const layers = data.layers;
   const activeId = data.activeId || layers[0]?.id || "";
 
   const activeLayer = layers.find((l) => l.id === activeId) ?? layers[0];
+
+  // Publish active-layer info to parent (for viewport rendering).
+  const sourceFilesKey = activeLayer?.sourceFiles.join("|") ?? "";
+  const sourceValuesKey = activeLayer?.sourceValues.join("|") ?? "";
+  React.useEffect(() => {
+    if (!activeLayer) {
+      onActiveLayerChange?.(projectId, null);
+      return;
+    }
+    onActiveLayerChange?.(projectId, {
+      color: activeLayer.color,
+      sourceFiles: activeLayer.sourceFiles,
+      sourceValues: activeLayer.sourceValues,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, activeLayer?.color, sourceFilesKey, sourceValuesKey, onActiveLayerChange]);
 
   const updateLayer = React.useCallback(
     (id: string, patch: Partial<LayerConfig>) => {
@@ -226,7 +270,60 @@ export function ProjectLayers() {
     [data, update, activeId]
   );
 
-  const sourceValues = DUMMY_SOURCE_VALUES[activeLayer.sourceField] ?? [];
+  // User-facing source files: hide the osm_edits companions (they travel in
+  // the persisted payload but are implementation detail).
+  const visibleSourceFiles = React.useMemo(
+    () => activeLayer.sourceFiles.filter((f) => !f.startsWith("osm_edits_")),
+    [activeLayer.sourceFiles]
+  );
+
+  // Resolve each visible source file (bare stem) to a (category, filename)
+  // pair so we can fetch distinct values per file. osm_edits companions are
+  // excluded — they don't contribute to the Source Value list.
+  const sourceFileRefs = React.useMemo(() => {
+    return visibleSourceFiles.map((stem) => {
+      const category: FileCategory = stem.startsWith("osm_edits_")
+        ? "osm_edits"
+        : "gis_layers";
+      return { category, filename: `${stem}.gpkg` };
+    });
+  }, [visibleSourceFiles]);
+
+  const distinctQueries = useQueries({
+    queries: sourceFileRefs.map((ref) => ({
+      queryKey: ["distinctValues", projectId, ref.category, ref.filename, activeLayer.sourceField],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        fetchFileDistinctValues(projectId!, ref.category, ref.filename, activeLayer.sourceField, signal),
+      enabled: projectId !== null && projectId > 0 && Boolean(activeLayer.sourceField),
+      staleTime: 5 * 60_000,
+    })),
+  });
+
+  const sourceValues = React.useMemo(() => {
+    const set = new Set<string>();
+    for (const q of distinctQueries) {
+      for (const v of q.data ?? []) set.add(v);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [distinctQueries]);
+
+  const sourceValuesLoading = distinctQueries.some((q) => q.isLoading);
+
+  // Prune selected sourceValues to those still present in the available pool.
+  // Runs after a source file is removed (or added and queries settle).
+  const selectedValuesKey = activeLayer?.sourceValues.join("|") ?? "";
+  const availableValuesKey = sourceValues.join("|");
+  React.useEffect(() => {
+    if (!activeLayer) return;
+    if (sourceValuesLoading) return;
+    if (activeLayer.sourceValues.length === 0) return;
+    const avail = new Set(sourceValues);
+    const filtered = activeLayer.sourceValues.filter((v) => avail.has(v));
+    if (filtered.length !== activeLayer.sourceValues.length) {
+      updateLayer(activeLayer.id, { sourceValues: filtered });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceValuesLoading, availableValuesKey, selectedValuesKey, activeLayer?.id]);
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
@@ -309,18 +406,29 @@ export function ProjectLayers() {
 
       <Field label="Source Files" layout="horizontal">
         <TagSelect
-          selected={activeLayer.sourceFiles}
-          available={DUMMY_SOURCE_FILES}
-          onAdd={(v) =>
-            updateLayer(activeLayer.id, {
-              sourceFiles: [...activeLayer.sourceFiles, v],
-            })
-          }
-          onRemove={(i) =>
-            updateLayer(activeLayer.id, {
-              sourceFiles: activeLayer.sourceFiles.filter((_, idx) => idx !== i),
-            })
-          }
+          selected={visibleSourceFiles}
+          available={availableOsmLayers.filter((f) => !visibleSourceFiles.includes(f))}
+          onAdd={(v) => {
+            const next = [...activeLayer.sourceFiles, v];
+            const osmEdits = osmEditsForOsmFile(v);
+            if (osmEdits && !next.includes(osmEdits)) next.push(osmEdits);
+            updateLayer(activeLayer.id, { sourceFiles: next });
+          }}
+          onRemove={(i) => {
+            const removed = visibleSourceFiles[i];
+            const next = activeLayer.sourceFiles.filter((f) => f !== removed);
+            // Drop any osm_edits companion no longer referenced by a remaining gis_osm file
+            const stillNeeded = new Set(
+              next
+                .filter((f) => !f.startsWith("osm_edits_"))
+                .map((f) => osmEditsForOsmFile(f))
+                .filter((e): e is string => Boolean(e))
+            );
+            const pruned = next.filter(
+              (f) => !f.startsWith("osm_edits_") || stillNeeded.has(f)
+            );
+            updateLayer(activeLayer.id, { sourceFiles: pruned });
+          }}
           label="Source File"
         />
       </Field>
@@ -338,7 +446,7 @@ export function ProjectLayers() {
       <Field label="Source Value" layout="horizontal">
         <TagSelect
           selected={activeLayer.sourceValues}
-          available={sourceValues}
+          available={sourceValues.filter((v) => !activeLayer.sourceValues.includes(v))}
           onAdd={(v) =>
             updateLayer(activeLayer.id, {
               sourceValues: [...activeLayer.sourceValues, v],
@@ -349,7 +457,7 @@ export function ProjectLayers() {
               sourceValues: activeLayer.sourceValues.filter((_, idx) => idx !== i),
             })
           }
-          label="Source Value"
+          label={sourceValuesLoading ? "Loading..." : "Source Value"}
         />
       </Field>
     </div>

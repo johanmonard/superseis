@@ -99,9 +99,9 @@ type LoadedEntry = { data: GeoJSONFeatureCollection; meta: GpkgMeta };
 // here (and deleted from the source). Each kind is a separate GPKG so
 // downstream tooling can consume lines/polygons/points independently.
 const EDIT_FILES = {
-  point: "user_edits_points.gpkg",
-  line: "user_edits_lines.gpkg",
-  polygon: "user_edits_polygons.gpkg",
+  point: "osm_edits_points.gpkg",
+  line: "osm_edits_lines.gpkg",
+  polygon: "osm_edits_polygons.gpkg",
 } as const;
 type EditKind = keyof typeof EDIT_FILES;
 const EDIT_KINDS: ReadonlyArray<EditKind> = ["point", "line", "polygon"];
@@ -188,7 +188,7 @@ export default function GisGlobePage() {
   const deletedPksByFileRef = React.useRef<
     Map<string, Set<number | string>>
   >(new Map());
-  // The three "user_edits_*" DBs live in a ref (they are mutated in place
+  // The three "osm_edits_*" DBs live in a ref (they are mutated in place
   // as features are added/moved) and only their GeoJSON projection is kept
   // in React state via `editLayerData`.
   const editDbsRef = React.useRef<Map<EditKind, Database>>(new Map());
@@ -211,7 +211,7 @@ export default function GisGlobePage() {
     refreshFileList();
   }, [refreshFileList]);
 
-  // Load or bootstrap the three "user_edits_*" GPKGs. Runs once on mount,
+  // Load or bootstrap the three "osm_edits_*" GPKGs. Runs once on mount,
   // and again from handleDiscard to roll back in-session edits.
   const loadOrCreateEditDbs = React.useCallback(async () => {
     const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
@@ -453,7 +453,7 @@ export default function GisGlobePage() {
 
   // Combined GeoJSON passed to the viewport. Each feature is tagged with
   // `__layer` so the viewport can color it by its source file. The three
-  // user_edits_*.gpkg files are always included so previously-saved edits
+  // osm_edits_*.gpkg files are always included so previously-saved edits
   // stay visible without the user having to tick them in the source list.
   const combinedData =
     React.useMemo<GeoJSONFeatureCollection | null>(() => {
@@ -524,7 +524,7 @@ export default function GisGlobePage() {
     uniqueFclasses,
   ]);
 
-  // Insert a feature into the appropriate user_edits_*.gpkg (in memory)
+  // Insert a feature into the appropriate osm_edits_*.gpkg (in memory)
   // and mirror it into editLayerData so the map redraws immediately. The
   // caller is expected to strip any source-specific pk from the feature
   // properties so the edit DB auto-assigns a fresh fid.
@@ -596,7 +596,7 @@ export default function GisGlobePage() {
             : undefined;
 
         if (editKind) {
-          // Feature lives in a user_edits_*.gpkg — update geometry in place.
+          // Feature lives in an osm_edits_*.gpkg — update geometry in place.
           if (!editUpdates.has(editKind)) {
             const db = editDbsRef.current.get(editKind);
             const entry = editLayerData.get(editKind);
@@ -800,7 +800,7 @@ export default function GisGlobePage() {
         return out;
       };
 
-      // Case 1: feature lives in a user_edits_*.gpkg already — update its
+      // Case 1: feature lives in an osm_edits_*.gpkg already — update its
       // row in place so we don't duplicate it. sql.js UPDATE by fid.
       const editKindForFile = EDIT_KINDS.find(
         (k) => EDIT_FILES[k] === sourceFile
@@ -906,7 +906,7 @@ export default function GisGlobePage() {
     (feature: GeoJSON.Feature) => {
       const sourceLayer = (feature.properties?.__layer as string) ?? null;
 
-      // If the feature belongs to a user_edits file, delete it from the
+      // If the feature belongs to an osm_edits file, delete it from the
       // in-memory edit DB and editLayerData directly.
       if (sourceLayer && isEditFile(sourceLayer)) {
         const kind = editKindForGeometry(feature.geometry);
@@ -1132,7 +1132,7 @@ export default function GisGlobePage() {
     try {
       // 1. For every source file that has pending deletions, apply them
       //    and PUT the file back. Sources no longer receive inserts or
-      //    updates — those live in the user_edits_* files.
+      //    updates — those live in the osm_edits_* files.
       const sourceFiles = [...deletedPksByFileRef.current.keys()];
       for (const file of sourceFiles) {
         const pks = deletedPksByFileRef.current.get(file);

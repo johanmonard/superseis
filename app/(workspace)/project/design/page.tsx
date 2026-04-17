@@ -51,7 +51,7 @@ export default function DesignPage() {
       >
         <TabsList>
           <TabsTrigger value="attributes">Attributes</TabsTrigger>
-          <TabsTrigger value="region">Region assignment</TabsTrigger>
+          <TabsTrigger value="region">Options</TabsTrigger>
         </TabsList>
         <TabsContent value="attributes" className="min-h-0 flex-1 overflow-y-auto">
           <ProjectDesign onActiveChange={handleActiveChange} />

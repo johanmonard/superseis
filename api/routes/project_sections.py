@@ -165,23 +165,21 @@ def _write_section(section: str, data: dict[str, Any], dojo_svc: ProjectService,
                 continue
             if group.get("id") == active_group_id:
                 active_group_name = name
-            extents = {}
-            for ext in group.get("extents", []):
-                ext_id = ext.get("id", ext.get("name", ""))
-                extents[ext_id] = SurveyExtent(
-                    name=ext.get("name", ""),
-                    margins=Margins(
-                        top=int(float(ext.get("marginTop") or 0)),
-                        bottom=int(float(ext.get("marginBottom") or 0)),
-                        left=int(float(ext.get("marginLeft") or 0)),
-                        right=int(float(ext.get("marginRight") or 0)),
-                    ),
-                    rl_angle=float(ext.get("rlAngle") or 0),
-                )
+            sim = group.get("simulation") or {}
+            simulation_extent = SurveyExtent(
+                name="Simulation",
+                margins=Margins(
+                    top=int(float(sim.get("marginTop") or 0)),
+                    bottom=int(float(sim.get("marginBottom") or 0)),
+                    left=int(float(sim.get("marginLeft") or 0)),
+                    right=int(float(sim.get("marginRight") or 0)),
+                ),
+                rl_angle=float(sim.get("rlAngle") or 0),
+            )
             cfg.survey[name] = SurveyOption(
                 acq_polygon=group.get("acquisitionPolygon", ""),
                 pois=group.get("pois", []),
-                extents=extents,
+                extents={"simulation": simulation_extent},
             )
         if active_group_name:
             cfg.active_options.survey = active_group_name

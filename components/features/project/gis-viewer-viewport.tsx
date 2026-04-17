@@ -372,11 +372,26 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
       .filter((f) => f.style.visible)
       .map((f) => {
         const key = `${f.category}/${f.filename}`;
-        const data = geojsonCache.current.get(key);
-        if (!data) return null;
+        const cached = geojsonCache.current.get(key);
+        if (!cached) return null;
+        let data: GeoJSON.FeatureCollection = cached;
+        if (f.fclassFilter) {
+          const allowed = new Set(f.fclassFilter);
+          data = {
+            ...cached,
+            features: cached.features.filter((feat) => {
+              const v = feat.properties?.fclass;
+              return v != null && allowed.has(String(v));
+            }),
+          };
+        }
         const alpha = Math.round(f.style.opacity * 255);
         const rgba = hexToRgba(f.style.color, alpha);
-        const fillRgba = hexToRgba(f.style.color, Math.round(alpha * 0.3));
+        const fillAlpha =
+          f.style.fillOpacity != null
+            ? Math.round(f.style.fillOpacity * 255)
+            : Math.round(alpha * 0.3);
+        const fillRgba = hexToRgba(f.style.color, fillAlpha);
         return new GeoJsonLayer({
           id: key,
           data,

@@ -5,7 +5,7 @@ import { appIcons } from "@/components/ui/icon";
 
 import { Button } from "@/components/ui/button";
 
-const { check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
+const { alertTriangle: AlertTriangle, check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
 import { CoordinateInput } from "@/components/ui/coordinate-input";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -83,10 +83,23 @@ export function ProjectDesignOptions() {
 
   // Read design groups for the Design dropdown
   const { data: designSection } = useProjectSection(projectId, "design");
-  const designNames = React.useMemo(() => {
-    const groups = (designSection?.data as { groups?: { name: string }[] } | undefined)?.groups;
-    return (groups ?? []).map((g) => g.name);
+  const designGroups = React.useMemo(() => {
+    const groups = (designSection?.data as {
+      groups?: { name: string; rlAzimuth?: string }[];
+    } | undefined)?.groups;
+    return groups ?? [];
   }, [designSection]);
+  const designNames = React.useMemo(
+    () => designGroups.map((g) => g.name),
+    [designGroups],
+  );
+  const designAzimuths = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const g of designGroups) {
+      map[g.name] = g.rlAzimuth ?? "0";
+    }
+    return map;
+  }, [designGroups]);
 
   // Read partitioning groups for the Partitioning dropdown and region (polygon) lists
   const { data: partitioningSection } = useProjectSection(projectId, "partitioning");
@@ -180,6 +193,16 @@ export function ProjectDesignOptions() {
   const regions = activeOption.partitioning
     ? partitioningRegions[activeOption.partitioning] ?? []
     : [];
+
+  const mismatchedAzimuths = React.useMemo(() => {
+    const unique = new Set<string>();
+    for (const row of activeOption.rows) {
+      if (!row.design) continue;
+      const az = designAzimuths[row.design];
+      if (az !== undefined) unique.add(Number(az).toString());
+    }
+    return unique.size > 1 ? Array.from(unique) : null;
+  }, [activeOption.rows, designAzimuths]);
 
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [editValue, setEditValue] = React.useState("");
@@ -416,6 +439,20 @@ export function ProjectDesignOptions() {
           onYChange={(v) => updateOption(activeId, { gridOriginY: v })}
         />
       </Field>
+
+      {mismatchedAzimuths && (
+        <div
+          role="alert"
+          className="flex items-start gap-[var(--space-2)] rounded-[var(--radius-sm)] border border-[var(--color-status-warning)] bg-[var(--color-status-warning-bg)] px-[var(--space-3)] py-[var(--space-2)] text-xs text-[var(--color-status-warning-text)]"
+        >
+          <AlertTriangle size={14} className="mt-[1px] shrink-0" />
+          <span>
+            Selected designs have different RL Azimuths (
+            {mismatchedAzimuths.map((a) => `${a}°`).join(", ")}). Consider aligning
+            them before computing the grid.
+          </span>
+        </div>
+      )}
     </div>
   );
 }

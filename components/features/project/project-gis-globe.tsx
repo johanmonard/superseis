@@ -90,15 +90,15 @@ function fclassColorFor(value: string): string {
 }
 
 // --------------------------------------------------------------------------
-// User-edit files
+// OSM-edit files
 // --------------------------------------------------------------------------
 
 type LoadedEntry = { data: GeoJSONFeatureCollection; meta: GpkgMeta };
 
 const EDIT_FILES = {
-  point: "user_edits_points.gpkg",
-  line: "user_edits_lines.gpkg",
-  polygon: "user_edits_polygons.gpkg",
+  point: "osm_edits_points.gpkg",
+  line: "osm_edits_lines.gpkg",
+  polygon: "osm_edits_polygons.gpkg",
 } as const;
 type EditKind = keyof typeof EDIT_FILES;
 const EDIT_KINDS: ReadonlyArray<EditKind> = ["point", "line", "polygon"];
@@ -109,11 +109,11 @@ const EDIT_GEOMETRY_TYPE: Record<EditKind, GpkgInitGeomType> = {
   polygon: "POLYGON",
 };
 
-// The 3 user_edits file keys in the regular selectedFiles/dbsRef system.
+// The 3 osm_edits file keys in the regular selectedFiles/dbsRef system.
 const EDIT_FILE_KEYS: Record<EditKind, string> = {
-  point: `user_edits/${EDIT_FILES.point}`,
-  line: `user_edits/${EDIT_FILES.line}`,
-  polygon: `user_edits/${EDIT_FILES.polygon}`,
+  point: `osm_edits/${EDIT_FILES.point}`,
+  line: `osm_edits/${EDIT_FILES.line}`,
+  polygon: `osm_edits/${EDIT_FILES.polygon}`,
 };
 const ALL_EDIT_FILE_KEYS = new Set(Object.values(EDIT_FILE_KEYS));
 
@@ -128,13 +128,22 @@ function editKindForGeometry(
   return null;
 }
 
-/** Polygons, POI, and user_edits are edited inline (source DB mutated
- *  directly). OSM Layers use the separate user_edits files. */
-const INLINE_EDIT_CATEGORIES = new Set<string>(["polygons", "poi", "user_edits"]);
+/** Polygons, POI, and osm_edits are edited inline (source DB mutated
+ *  directly). Only Geofabrik OSM layers (gis_osm_* files in the "gis_layers"
+ *  category) route edits into the separate osm_edits files — user-uploaded
+ *  layers are edited inline like everything else. */
+const INLINE_EDIT_CATEGORIES = new Set<string>(["polygons", "poi", "osm_edits"]);
 
 function isInlineEditKey(fileKey: string): boolean {
-  const cat = fileKey.split("/")[0];
-  return INLINE_EDIT_CATEGORIES.has(cat);
+  const slash = fileKey.indexOf("/");
+  if (slash < 0) return false;
+  const cat = fileKey.slice(0, slash);
+  if (INLINE_EDIT_CATEGORIES.has(cat)) return true;
+  if (cat === "gis_layers") {
+    const filename = fileKey.slice(slash + 1);
+    return !filename.startsWith("gis_osm");
+  }
+  return false;
 }
 
 // --------------------------------------------------------------------------
@@ -142,7 +151,7 @@ function isInlineEditKey(fileKey: string): boolean {
 // --------------------------------------------------------------------------
 
 type SidebarSection = {
-  key: "polygons" | "poi" | "layers";
+  key: "polygons" | "poi" | "gis_layers";
   label: string;
   category: FileCategory;
 };
@@ -150,7 +159,7 @@ type SidebarSection = {
 const SIDEBAR_SECTIONS: SidebarSection[] = [
   { key: "polygons", label: "Polygons", category: "polygons" },
   { key: "poi", label: "Points Of Interest", category: "poi" },
-  { key: "layers", label: "OSM Layers", category: "layers" },
+  { key: "gis_layers", label: "Terrain models", category: "gis_layers" },
 ];
 
 const CATEGORY_GEOM_TYPE: Partial<Record<FileCategory, GpkgInitGeomType>> = {
@@ -801,7 +810,7 @@ export function ProjectGisGlobe() {
   );
 
   // ------------------------------------------------------------------
-  // Bootstrap the 3 user_edits files into dbsRef/layerData on mount.
+  // Bootstrap the 3 osm_edits files into dbsRef/layerData on mount.
   // Fetches from disk; creates empty GPKGs if they don't exist yet.
   // ------------------------------------------------------------------
 
@@ -821,7 +830,7 @@ export function ProjectGisGlobe() {
           const fileName = EDIT_FILES[kind];
           let db: Database;
           try {
-            const buf = await fetchProjectFileRaw(projectId, "user_edits", fileName);
+            const buf = await fetchProjectFileRaw(projectId, "osm_edits", fileName);
             db = new SQL.Database(new Uint8Array(buf));
           } catch {
             db = new SQL.Database();
@@ -931,7 +940,7 @@ export function ProjectGisGlobe() {
         reallyToAdd.map(async (key) => {
           const parsed = parseFileKey(key);
           if (!parsed) throw new Error(`Bad key: ${key}`);
-          // For user_edits files, create empty GPKG on 404
+          // For osm_edits files, create empty GPKG on 404
           const kind = EDIT_KINDS.find((k) => EDIT_FILE_KEYS[k] === key);
           let db: Database;
           try {
@@ -1058,11 +1067,39 @@ export function ProjectGisGlobe() {
     open: boolean;
     category: FileCategory;
     name: string;
+    geomType: GpkgInitGeomType;
+    pickGeom: boolean;
     saving: boolean;
-  }>({ open: false, category: "polygons", name: "", saving: false });
+  }>({
+    open: false,
+    category: "polygons",
+    name: "",
+    geomType: "POLYGON",
+    pickGeom: false,
+    saving: false,
+  });
 
   const openCreateDialog = React.useCallback((category: FileCategory) => {
-    setCreateDialog({ open: true, category, name: "", saving: false });
+    const geomType = CATEGORY_GEOM_TYPE[category] ?? "POLYGON";
+    setCreateDialog({
+      open: true,
+      category,
+      name: "",
+      geomType,
+      pickGeom: false,
+      saving: false,
+    });
+  }, []);
+
+  const openUserLayerDialog = React.useCallback(() => {
+    setCreateDialog({
+      open: true,
+      category: "gis_layers",
+      name: "",
+      geomType: "POLYGON",
+      pickGeom: true,
+      saving: false,
+    });
   }, []);
 
   const closeCreateDialog = React.useCallback(() => {
@@ -1071,17 +1108,19 @@ export function ProjectGisGlobe() {
 
   const handleCreateFile = React.useCallback(async () => {
     if (!projectId || !createDialog.name.trim()) return;
-    const { category, name } = createDialog;
-    const geomType = CATEGORY_GEOM_TYPE[category];
-    if (!geomType) return;
+    const { category, name, geomType, pickGeom } = createDialog;
 
     setCreateDialog((prev) => ({ ...prev, saving: true }));
 
     try {
       const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
       const db = new SQL.Database();
-      const tableName = name.trim().replace(/\s+/g, "_").toLowerCase();
+      const slug = name.trim().replace(/\s+/g, "_").toLowerCase();
+      const tableName = pickGeom ? `user_${slug}` : slug;
       initializeGpkgSchema(db, { tableName, geometryType: geomType });
+      if (pickGeom) {
+        ensureGpkgColumns(db, tableName, new Map([["fclass", "TEXT"]]));
+      }
       const bytes = exportDatabase(db);
       const filename = `${tableName}.gpkg`;
 
@@ -1103,7 +1142,14 @@ export function ProjectGisGlobe() {
         prev.includes(fileKey) ? prev : [...prev, fileKey]
       );
       setEditingFileKey(fileKey);
-      setCreateDialog({ open: false, category: "polygons", name: "", saving: false });
+      setCreateDialog({
+        open: false,
+        category: "polygons",
+        name: "",
+        geomType: "POLYGON",
+        pickGeom: false,
+        saving: false,
+      });
     } catch (e) {
       setError(`Failed to create file: ${String(e)}`);
       setCreateDialog((prev) => ({ ...prev, saving: false }));
@@ -1184,8 +1230,8 @@ export function ProjectGisGlobe() {
     const GROUP_LABELS: Record<string, string> = {
       polygons: "Polygons",
       poi: "Points Of Interest",
-      layers: "OSM Layers",
-      user_edits: "OSM Layers",
+      gis_layers: "Terrain models",
+      osm_edits: "Terrain models",
     };
 
     // Strip "category/" prefix and ".gpkg"/".tif" extension for display
@@ -1195,9 +1241,9 @@ export function ProjectGisGlobe() {
       return filename.replace(/\.(gpkg|tif)$/i, "");
     };
 
-    // Sort: polygons first, poi, layers, user_edits last (within OSM group)
+    // Sort: polygons first, poi, layers, osm_edits last (within OSM group)
     const ORDER: Record<string, number> = {
-      polygons: 0, poi: 1, layers: 2, user_edits: 3,
+      polygons: 0, poi: 1, gis_layers: 2, osm_edits: 3,
     };
 
     return [...selectedFiles]
@@ -1307,16 +1353,16 @@ export function ProjectGisGlobe() {
   }, [osmOverrideData, osmDatasetExtent]);
 
   // ------------------------------------------------------------------
-  // Insert into a user_edits file (via dbsRef/layerData)
+  // Insert into an osm_edits file (via dbsRef/layerData)
   // ------------------------------------------------------------------
 
-  const insertIntoUserEditsFile = React.useCallback(
+  const insertIntoOsmEditsFile = React.useCallback(
     (kind: EditKind, feature: GeoJSON.Feature): number | null => {
       const key = EDIT_FILE_KEYS[kind];
       const db = dbsRef.current.get(key);
       const entry = layerData.get(key);
       if (!db || !entry) {
-        console.error(`[GIS] insertIntoUserEditsFile: DB or entry missing for "${key}" (kind=${kind}, db=${!!db}, entry=${!!entry})`);
+        console.error(`[GIS] insertIntoOsmEditsFile: DB or entry missing for "${key}" (kind=${kind}, db=${!!db}, entry=${!!entry})`);
         return null;
       }
       const pks = insertGpkgFeatures(
@@ -1385,7 +1431,7 @@ export function ProjectGisGlobe() {
         }
       }
 
-      // --- Inline-edit features (polygons/poi/user_edits): update source DB directly ---
+      // --- Inline-edit features (polygons/poi/osm_edits): update source DB directly ---
       for (const [file, edits] of inlineByFile) {
         const db = dbsRef.current.get(file);
         const srcEntry = layerData.get(file);
@@ -1448,7 +1494,7 @@ export function ProjectGisGlobe() {
         }
       }
 
-      // --- OSM Layers features: move to user_edits file ---
+      // --- OSM Layers features: move to osm_edits file ---
       if (osmFeatures.length > 0) {
         const file = activeFile;
         const meta = metaRef.current;
@@ -1488,7 +1534,7 @@ export function ProjectGisGlobe() {
         }
 
         for (const [kind, list] of insertsByKind) {
-          for (const f of list) insertIntoUserEditsFile(kind, f);
+          for (const f of list) insertIntoOsmEditsFile(kind, f);
         }
 
         if (movedPks.length > 0) {
@@ -1521,7 +1567,7 @@ export function ProjectGisGlobe() {
 
       setDirty(true);
     },
-    [activeFile, layerData, insertIntoUserEditsFile]
+    [activeFile, layerData, insertIntoOsmEditsFile]
   );
 
   const handleAdded = React.useCallback(
@@ -1536,7 +1582,7 @@ export function ProjectGisGlobe() {
       const inline = file && isInlineEditKey(file);
 
       if (inline) {
-        // Polygons/POI/user_edits: insert directly into source DB
+        // Polygons/POI/osm_edits: insert directly into source DB
         const db = dbsRef.current.get(file);
         const entry = layerData.get(file);
         if (!db || !entry) {
@@ -1571,14 +1617,14 @@ export function ProjectGisGlobe() {
           dirtySourceFilesRef.current.add(file);
         }
       } else {
-        // OSM Layers: insert into user_edits file
+        // OSM Layers: insert into osm_edits file
         const kind = editKindForGeometry(feature.geometry);
         if (!kind) {
           setAdding(false);
           setFreehand(false);
           return;
         }
-        insertIntoUserEditsFile(kind, {
+        insertIntoOsmEditsFile(kind, {
           type: "Feature",
           geometry: feature.geometry,
           properties: cleanProps,
@@ -1589,7 +1635,7 @@ export function ProjectGisGlobe() {
       setAdding(false);
       setFreehand(false);
     },
-    [activeFile, layerData, insertIntoUserEditsFile]
+    [activeFile, layerData, insertIntoOsmEditsFile]
   );
 
   const handleReclassify = React.useCallback(
@@ -1611,7 +1657,7 @@ export function ProjectGisGlobe() {
       };
 
       if (isInlineEditKey(sourceFile)) {
-        // Polygons/POI/user_edits: update fclass in source DB directly
+        // Polygons/POI/osm_edits: update fclass in source DB directly
         const db = dbsRef.current.get(sourceFile);
         const srcEntry = layerData.get(sourceFile);
         if (!db || !srcEntry) return;
@@ -1645,7 +1691,7 @@ export function ProjectGisGlobe() {
           return next;
         });
       } else {
-        // OSM Layers: transfer to user_edits file
+        // OSM Layers: transfer to osm_edits file
         const srcEntry = layerData.get(sourceFile);
         if (!srcEntry) return;
         const srcMeta = srcEntry.meta;
@@ -1665,7 +1711,7 @@ export function ProjectGisGlobe() {
           geometry: srcFeature.geometry as GeoJSON.Geometry,
           properties: buildProps(srcFeature.properties, srcMeta.pkCol),
         };
-        insertIntoUserEditsFile(kind, merged);
+        insertIntoOsmEditsFile(kind, merged);
 
         setLayerData((prev) => {
           const entry = prev.get(sourceFile);
@@ -1690,7 +1736,7 @@ export function ProjectGisGlobe() {
       }
       setDirty(true);
     },
-    [layerData, insertIntoUserEditsFile]
+    [layerData, insertIntoOsmEditsFile]
   );
 
   const handleDeleted = React.useCallback(
@@ -1698,7 +1744,7 @@ export function ProjectGisGlobe() {
       const sourceLayer = (feature.properties?.__layer as string) ?? null;
 
       if (sourceLayer && isInlineEditKey(sourceLayer)) {
-        // Polygons/POI/user_edits: delete from source DB directly
+        // Polygons/POI/osm_edits: delete from source DB directly
         const db = dbsRef.current.get(sourceLayer);
         const entry = layerData.get(sourceLayer);
         if (!db || !entry) return;
@@ -1901,7 +1947,7 @@ export function ProjectGisGlobe() {
       deletedPksByFileRef.current.clear();
     }
 
-    // 2. Inline-edited source files (polygons/poi/user_edits) — reload from disk
+    // 2. Inline-edited source files (polygons/poi/osm_edits) — reload from disk
     const inlineDirty = [...dirtySourceFilesRef.current];
     if (inlineDirty.length > 0) {
       try {
@@ -1911,7 +1957,7 @@ export function ProjectGisGlobe() {
           if (!parsed) continue;
           // Close old DB
           dbsRef.current.get(key)?.close();
-          // Re-fetch from disk (or bootstrap empty for user_edits)
+          // Re-fetch from disk (or bootstrap empty for osm_edits)
           const kind = EDIT_KINDS.find((k) => EDIT_FILE_KEYS[k] === key);
           let db: Database;
           try {
@@ -1960,7 +2006,7 @@ export function ProjectGisGlobe() {
     setError(null);
 
     try {
-      // 1. Inline-edited source files (polygons/poi/user_edits) — already
+      // 1. Inline-edited source files (polygons/poi/osm_edits) — already
       //    mutated, just export and PUT
       console.log(`[GIS] handleSave: ${dirtySourceFilesRef.current.size} dirty source files:`, [...dirtySourceFilesRef.current]);
       for (const key of dirtySourceFilesRef.current) {
@@ -2000,7 +2046,7 @@ export function ProjectGisGlobe() {
       dirtySourceFilesRef.current.clear();
       deletedPksByFileRef.current.clear();
       setDirty(false);
-      // Refresh sidebar file list so newly created files (e.g. user_edits) appear
+      // Refresh sidebar file list so newly created files (e.g. osm_edits) appear
       queryClient.invalidateQueries({ queryKey: projectFileKeys.project(projectId) });
     } catch (e) {
       setError(String(e));
@@ -2035,7 +2081,7 @@ export function ProjectGisGlobe() {
 
   const featureCount = combinedData?.features.length ?? 0;
   const demFiles = fileList?.dem ?? [];
-  const userEditFiles = fileList?.user_edits ?? [];
+  const osmEditFiles = fileList?.osm_edits ?? [];
 
   return (
     <ProjectSettingsPage
@@ -2116,7 +2162,7 @@ export function ProjectGisGlobe() {
     >
       <div className="space-y-[var(--space-4)]">
         {/* Polygons, POI sections */}
-        {SIDEBAR_SECTIONS.filter(({ key }) => key !== "layers").map(({ key, label, category }) => {
+        {SIDEBAR_SECTIONS.filter(({ key }) => key !== "gis_layers").map(({ key, label, category }) => {
           const files = fileList?.[key] ?? [];
           return (
             <div key={key} className="flex flex-col gap-[var(--space-2)]">
@@ -2180,30 +2226,40 @@ export function ProjectGisGlobe() {
           );
         })}
 
-        {/* OSM Layers section + user edit files after separator */}
+        {/* Terrain models section + osm edit files after separator */}
         <div className="flex flex-col gap-[var(--space-2)]">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-              OSM Layers
+              Terrain models
             </span>
-            <button
-              type="button"
-              title="Download OSM layers"
-              onClick={() => setOsmPanelOpen((v) => !v)}
-              className={`rounded p-0.5 ${osmPanelOpen ? "text-[var(--color-accent)]" : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"}`}
-            >
-              <Plus size={14} />
-            </button>
+            <div className="flex items-center gap-[var(--space-1)]">
+              <button
+                type="button"
+                title="Create a new user layer file"
+                onClick={openUserLayerDialog}
+                className="flex items-center gap-[var(--space-1)] rounded px-[var(--space-1)] py-0.5 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+              >
+                user <Plus size={12} />
+              </button>
+              <button
+                type="button"
+                title="Download OSM layers"
+                onClick={() => setOsmPanelOpen((v) => !v)}
+                className={`flex items-center gap-[var(--space-1)] rounded px-[var(--space-1)] py-0.5 text-xs ${osmPanelOpen ? "text-[var(--color-accent)]" : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"}`}
+              >
+                osm <Plus size={12} />
+              </button>
+            </div>
           </div>
           <div className="flex max-h-[280px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] p-[var(--space-2)]">
-            {(fileList?.layers ?? []).length === 0 && userEditFiles.length === 0 ? (
+            {(fileList?.gis_layers ?? []).length === 0 && osmEditFiles.length === 0 ? (
               <p className="text-xs text-[var(--color-text-muted)]">
                 No files
               </p>
             ) : (
               <>
-                {(fileList?.layers ?? []).map((f) => {
-                  const fileKey = `layers/${f}`;
+                {(fileList?.gis_layers ?? []).map((f) => {
+                  const fileKey = `gis_layers/${f}`;
                   const checked = selectedFiles.includes(fileKey);
                   const isEditTarget = editingFileKey === fileKey;
                   return (
@@ -2238,12 +2294,12 @@ export function ProjectGisGlobe() {
                   );
                 })}
 
-                {/* Separator + user edit files */}
-                {userEditFiles.length > 0 && (fileList?.layers ?? []).length > 0 && (
+                {/* Separator + osm edit files */}
+                {osmEditFiles.length > 0 && (fileList?.gis_layers ?? []).length > 0 && (
                   <hr className="my-1 border-[var(--color-border-subtle)]" />
                 )}
-                {userEditFiles.map((f) => {
-                  const fileKey = `user_edits/${f}`;
+                {osmEditFiles.map((f) => {
+                  const fileKey = `osm_edits/${f}`;
                   const checked = selectedFiles.includes(fileKey);
                   const isEditTarget = editingFileKey === fileKey;
                   return (
@@ -2355,21 +2411,43 @@ export function ProjectGisGlobe() {
       <Dialog open={createDialog.open} onOpenChange={(open) => !open && closeCreateDialog()}>
         <DialogHeader>
           <DialogTitle>
-            New {createDialog.category === "poi" ? "POI" : "Polygon"} file
+            {createDialog.pickGeom
+              ? "New user layer file"
+              : `New ${createDialog.category === "poi" ? "POI" : "Polygon"} file`}
           </DialogTitle>
         </DialogHeader>
         <DialogBody>
-          <Input
-            autoFocus
-            placeholder="File name"
-            value={createDialog.name}
-            onChange={(e) =>
-              setCreateDialog((prev) => ({ ...prev, name: e.target.value }))
-            }
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && createDialog.name.trim()) handleCreateFile();
-            }}
-          />
+          <div className="flex flex-col gap-[var(--space-3)]">
+            <Input
+              autoFocus
+              placeholder="File name"
+              value={createDialog.name}
+              onChange={(e) =>
+                setCreateDialog((prev) => ({ ...prev, name: e.target.value }))
+              }
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && createDialog.name.trim()) handleCreateFile();
+              }}
+            />
+            {createDialog.pickGeom && (
+              <Field label="Feature type" htmlFor="user-layer-geom" layout="horizontal">
+                <Select
+                  id="user-layer-geom"
+                  value={createDialog.geomType}
+                  onChange={(e) =>
+                    setCreateDialog((prev) => ({
+                      ...prev,
+                      geomType: e.target.value as GpkgInitGeomType,
+                    }))
+                  }
+                >
+                  <option value="POINT">Point</option>
+                  <option value="LINESTRING">Line</option>
+                  <option value="POLYGON">Polygon</option>
+                </Select>
+              </Field>
+            )}
+          </div>
         </DialogBody>
         <DialogFooter>
           <Button variant="ghost" size="sm" onClick={closeCreateDialog}>

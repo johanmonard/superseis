@@ -17,21 +17,25 @@ const ACCEPTED_EXTENSIONS = ".gpkg,.kml,.zip";
 const FILE_CATEGORIES: { key: FileCategory; label: string }[] = [
   { key: "polygons", label: "Polygons" },
   { key: "poi", label: "POI" },
-  { key: "layers", label: "Layers" },
+  { key: "gis_layers", label: "Layers" },
 ];
 
 export interface GisLayerStyle {
   color: string;
   width: number;
-  opacity: number; // 0–1
+  opacity: number; // 0–1 (stroke)
   filled: boolean;
   visible: boolean;
+  /** Optional fill alpha 0–1. Default: opacity * 0.3 (translucent). */
+  fillOpacity?: number;
 }
 
 export type VisibleFile = {
   category: FileCategory;
   filename: string;
   style: GisLayerStyle;
+  /** If set, only features whose `fclass` matches one of these values render. */
+  fclassFilter?: readonly string[];
 };
 
 const PALETTE = [
@@ -64,7 +68,7 @@ export function ProjectGisViewer() {
   const fileInputRefs = React.useRef<Partial<Record<FileCategory, HTMLInputElement | null>>>({
     polygons: null,
     poi: null,
-    layers: null,
+    gis_layers: null,
   });
 
   const getStyleForFile = React.useCallback((category: FileCategory, filename: string): GisLayerStyle => {
