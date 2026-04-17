@@ -15,7 +15,13 @@ import { fetchFileDistinctValues } from "@/services/api/project-files";
 import type { FileCategory } from "@/services/api/project-files";
 import { useProjectFiles } from "@/services/query/project-files";
 
-const { plus: Plus, trash: Trash2, x: X } = appIcons;
+const {
+  plus: Plus,
+  trash: Trash2,
+  x: X,
+  pencil: Pencil,
+  check: Check,
+} = appIcons;
 
 /* ------------------------------------------------------------------
    Geofabrik OSM filename → osm_edits target
@@ -49,7 +55,8 @@ function osmEditsForOsmFile(osmName: string): string | null {
 interface LayerConfig {
   id: string;
   name: string;
-  code: string;
+  /** Unique integer, assigned once at creation and never changed. */
+  code: number;
   buffer: string;
   color: string;
   from: string;
@@ -58,15 +65,18 @@ interface LayerConfig {
   sourceValues: string[];
 }
 
-function createLayer(index: number): LayerConfig {
-  const n = index + 1;
-  const code = `layer_${String(n).padStart(2, "0")}`;
+const PALETTE = [
+  "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728", "#9467BD",
+  "#8C564B", "#E377C2", "#7F7F7F", "#BCBD22", "#17BECF",
+];
+
+function createLayer(code: number): LayerConfig {
   return {
     id: crypto.randomUUID(),
-    name: `Layer ${n}`,
+    name: `Layer ${code}`,
     code,
     buffer: "0",
-    color: PALETTE[n % PALETTE.length],
+    color: PALETTE[code % PALETTE.length],
     from: "gis",
     sourceFiles: [],
     sourceField: "fclass",
@@ -74,19 +84,65 @@ function createLayer(index: number): LayerConfig {
   };
 }
 
-const PALETTE = [
-  "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728", "#9467BD",
-  "#8C564B", "#E377C2", "#7F7F7F", "#BCBD22", "#17BECF",
-];
-
 interface LayersData {
   layers: LayerConfig[];
   activeId: string;
+  /** Monotonic counter; consumed every time a new layer is created. */
+  nextCode: number;
 }
 const DEFAULT_LAYERS: LayersData = {
-  layers: [createLayer(0)],
+  layers: [createLayer(1)],
   activeId: "",
+  nextCode: 2,
 };
+
+/**
+ * Migrate persisted layer state to the current schema.  Legacy data may have
+ * ``code: "layer_NN"`` strings and/or a missing ``nextCode``; promote both.
+ * Codes are kept stable where possible; duplicates or non-numeric values are
+ * reassigned fresh, ever-increasing integers.
+ */
+function migrateLayersData(data: LayersData): LayersData {
+  const used = new Set<number>();
+  const out: LayerConfig[] = [];
+  let maxCode = 0;
+
+  for (const l of data.layers) {
+    const raw = l.code as unknown;
+    let n: number | null = null;
+    if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+      n = Math.floor(raw);
+    } else if (typeof raw === "string") {
+      const m = raw.match(/(\d+)/);
+      if (m) n = parseInt(m[1], 10);
+    }
+    if (n == null || used.has(n)) n = null;
+    if (n != null) {
+      used.add(n);
+      maxCode = Math.max(maxCode, n);
+    }
+    out.push({ ...l, code: n ?? -1 }); // temp -1, filled below
+  }
+
+  // Fill in any unresolved codes with fresh sequential integers.
+  let cursor = maxCode + 1;
+  for (const l of out) {
+    if (l.code === -1) {
+      while (used.has(cursor)) cursor++;
+      l.code = cursor;
+      used.add(cursor);
+      maxCode = Math.max(maxCode, cursor);
+      cursor++;
+    }
+  }
+
+  const nextCode =
+    typeof data.nextCode === "number" && data.nextCode > maxCode
+      ? data.nextCode
+      : maxCode + 1;
+
+  return { ...data, layers: out, nextCode };
+}
 
 /* ------------------------------------------------------------------
    Tag select (add/remove from list)
@@ -200,6 +256,173 @@ function ColorPicker({
 }
 
 /* ------------------------------------------------------------------
+   Layer header — compact selector with inline rename and reorder
+   ------------------------------------------------------------------ */
+
+function LayerHeader({
+  layers,
+  activeId,
+  activeIndex,
+  onSelect,
+  onRename,
+  onMove,
+  onAdd,
+  onDelete,
+}: {
+  layers: LayerConfig[];
+  activeId: string;
+  activeIndex: number;
+  onSelect: (id: string) => void;
+  onRename: (name: string) => void;
+  onMove: (delta: -1 | 1) => void;
+  onAdd: () => void;
+  onDelete: () => void;
+}) {
+  const [renaming, setRenaming] = React.useState(false);
+  const [draft, setDraft] = React.useState("");
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  const active = layers.find((l) => l.id === activeId);
+
+  const beginRename = React.useCallback(() => {
+    if (!active) return;
+    setDraft(active.name);
+    setRenaming(true);
+  }, [active]);
+
+  React.useEffect(() => {
+    if (renaming) inputRef.current?.select();
+  }, [renaming]);
+
+  // Leaving the active layer (via select or delete) cancels any pending rename.
+  React.useEffect(() => {
+    setRenaming(false);
+  }, [activeId]);
+
+  const commitRename = React.useCallback(() => {
+    if (!active) return;
+    if (draft.trim() && draft.trim() !== active.name) onRename(draft);
+    setRenaming(false);
+  }, [active, draft, onRename]);
+
+  const cancelRename = React.useCallback(() => {
+    setRenaming(false);
+  }, []);
+
+  const canMoveUp = activeIndex > 0;
+  const canMoveDown = activeIndex >= 0 && activeIndex < layers.length - 1;
+  const canDelete = layers.length > 1;
+
+  return (
+    <div className="flex items-center gap-[var(--space-1)]">
+      {/* Selector / inline rename */}
+      <div className="min-w-0 flex-1">
+        {renaming ? (
+          <Input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitRename();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                cancelRename();
+              }
+            }}
+            aria-label="Rename layer"
+            className="text-xs"
+          />
+        ) : (
+          <Select
+            aria-label="Active layer"
+            value={activeId}
+            onChange={(e) => onSelect(e.target.value)}
+            className="text-xs"
+          >
+            {layers.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name}
+              </option>
+            ))}
+          </Select>
+        )}
+      </div>
+
+      {/* Actions */}
+      <IconButton
+        title={renaming ? "Save name" : "Rename layer"}
+        onClick={renaming ? commitRename : beginRename}
+      >
+        {renaming ? <Check size={12} /> : <Pencil size={12} />}
+      </IconButton>
+      <IconButton
+        title="Move up"
+        onClick={() => onMove(-1)}
+        disabled={!canMoveUp || renaming}
+      >
+        <span aria-hidden className="text-[11px] leading-none">▲</span>
+      </IconButton>
+      <IconButton
+        title="Move down"
+        onClick={() => onMove(1)}
+        disabled={!canMoveDown || renaming}
+      >
+        <span aria-hidden className="text-[11px] leading-none">▼</span>
+      </IconButton>
+      <IconButton title="Add layer" onClick={onAdd} disabled={renaming}>
+        <Plus size={12} />
+      </IconButton>
+      <IconButton
+        title="Delete layer"
+        onClick={onDelete}
+        disabled={!canDelete || renaming}
+        variant="danger"
+      >
+        <Trash2 size={12} />
+      </IconButton>
+    </div>
+  );
+}
+
+function IconButton({
+  children,
+  onClick,
+  disabled,
+  title,
+  variant = "default",
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  title: string;
+  variant?: "default" | "danger";
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={title}
+      className={cn(
+        "flex h-[var(--control-height-sm)] w-[var(--control-height-sm)] shrink-0 items-center justify-center rounded-[var(--radius-sm)]",
+        "text-[var(--color-text-muted)] transition-colors",
+        "hover:bg-[var(--color-bg-elevated)]",
+        variant === "danger"
+          ? "hover:text-[var(--color-status-danger)]"
+          : "hover:text-[var(--color-text-primary)]",
+        "disabled:pointer-events-none disabled:opacity-40",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* ------------------------------------------------------------------
    Main component
    ------------------------------------------------------------------ */
 
@@ -220,7 +443,21 @@ export function ProjectLayers({
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
 
-  const { data, update, status } = useSectionData<LayersData>(projectId, "layers", DEFAULT_LAYERS);
+  const { data: rawData, update: rawUpdate, status } = useSectionData<LayersData>(
+    projectId, "layers", DEFAULT_LAYERS,
+  );
+
+  // Migrate persisted data once per load so downstream code can rely on the
+  // current schema (integer ``code``, present ``nextCode``).
+  const data = React.useMemo(() => migrateLayersData(rawData), [rawData]);
+  const update = rawUpdate;
+
+  // If the loaded state needed migration, persist the fixed-up copy so we
+  // don't re-migrate on every render.
+  React.useEffect(() => {
+    if (data !== rawData) update(data);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const { data: projectFiles } = useProjectFiles(projectId);
   const availableOsmLayers = React.useMemo(
@@ -232,6 +469,7 @@ export function ProjectLayers({
   const activeId = data.activeId || layers[0]?.id || "";
 
   const activeLayer = layers.find((l) => l.id === activeId) ?? layers[0];
+  const activeIndex = layers.findIndex((l) => l.id === activeId);
 
   // Publish active-layer info to parent (for viewport rendering).
   const sourceFilesKey = activeLayer?.sourceFiles.join("|") ?? "";
@@ -257,8 +495,13 @@ export function ProjectLayers({
   );
 
   const addLayer = React.useCallback(() => {
-    const l = createLayer(data.layers.length);
-    update({ ...data, layers: [...data.layers, l], activeId: l.id });
+    const l = createLayer(data.nextCode);
+    update({
+      ...data,
+      layers: [...data.layers, l],
+      activeId: l.id,
+      nextCode: data.nextCode + 1,
+    });
   }, [data, update]);
 
   const deleteLayer = React.useCallback(
@@ -268,6 +511,32 @@ export function ProjectLayers({
       update({ ...data, layers: next, activeId: newActiveId });
     },
     [data, update, activeId]
+  );
+
+  const moveLayer = React.useCallback(
+    (id: string, delta: -1 | 1) => {
+      const idx = data.layers.findIndex((l) => l.id === id);
+      if (idx < 0) return;
+      const target = idx + delta;
+      if (target < 0 || target >= data.layers.length) return;
+      const next = data.layers.slice();
+      const [moved] = next.splice(idx, 1);
+      next.splice(target, 0, moved);
+      update({ ...data, layers: next });
+    },
+    [data, update],
+  );
+
+  const renameLayer = React.useCallback(
+    (id: string, name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      update({
+        ...data,
+        layers: data.layers.map((l) => (l.id === id ? { ...l, name: trimmed } : l)),
+      });
+    },
+    [data, update],
   );
 
   // User-facing source files: hide the osm_edits companions (they travel in
@@ -327,52 +596,24 @@ export function ProjectLayers({
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      {/* Layer selector */}
-      <div className="flex flex-col gap-[var(--space-2)]">
-        <div className="flex flex-wrap items-center gap-[var(--space-1)]">
-          {layers.map((l) => (
-            <button
-              key={l.id}
-              type="button"
-              onClick={() => update({ ...data, activeId: l.id })}
-              className={cn(
-                "rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-1)] text-xs font-medium transition-colors",
-                l.id === activeId
-                  ? "bg-[var(--color-accent)] text-[var(--color-accent-foreground)]"
-                  : "bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-              )}
-            >
-              {l.name}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={addLayer}
-            className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
-            aria-label="Add layer"
-          >
-            <Plus size={12} />
-          </button>
-        </div>
-        {layers.length > 1 && (
-          <div className="flex items-center gap-[var(--space-1)]">
-            <button
-              type="button"
-              onClick={() => deleteLayer(activeId)}
-              className="flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] px-[var(--space-2)] py-[var(--space-1)] text-xs text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-status-danger)]"
-            >
-              <Trash2 size={10} /> Delete
-            </button>
-          </div>
-        )}
-      </div>
+      {/* Layer header: select + rename + reorder + add + delete */}
+      <LayerHeader
+        layers={layers}
+        activeId={activeId}
+        activeIndex={activeIndex}
+        onSelect={(id) => update({ ...data, activeId: id })}
+        onRename={(name) => renameLayer(activeLayer.id, name)}
+        onMove={(delta) => moveLayer(activeLayer.id, delta)}
+        onAdd={addLayer}
+        onDelete={() => deleteLayer(activeLayer.id)}
+      />
 
       <div className="h-px bg-[var(--color-border-subtle)]" />
 
       <Field label="Code" htmlFor="lay-code" layout="horizontal">
         <Input
           id="lay-code"
-          value={activeLayer.code}
+          value={String(activeLayer.code)}
           readOnly
           className="bg-[var(--color-bg-elevated)]"
         />

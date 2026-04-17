@@ -133,7 +133,7 @@ export function ProjectSettingsPage({
         <>
           <div className="min-w-0 flex-shrink-0 overflow-y-auto border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]"
             // eslint-disable-next-line template/no-jsx-style-prop -- runtime sizing
-            style={{ width: "clamp(240px, 22%, 360px)" }}
+            style={{ width: "clamp(300px, 28%, 460px)" }}
           >
             {middlePanel}
           </div>

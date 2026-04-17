@@ -17,6 +17,7 @@ import {
 import type { FileCategory } from "@/services/api/project-files";
 import { getRuntimeConfig } from "@/services/config/runtimeConfig";
 import { ProjectSettingsPage } from "./project-settings-page";
+import { LayerStatsPanel } from "./layer-stats-panel";
 import { Dialog, DialogHeader, DialogTitle, DialogBody, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -748,6 +749,10 @@ export function ProjectGisGlobe() {
     React.useState<RampName>("hypsometric");
   const [osmPanelOpen, setOsmPanelOpen] = React.useState(false);
   const [osmVp, setOsmVp] = React.useState<OsmViewportData | null>(null);
+  const [terrainAnalysisOpen, setTerrainAnalysisOpen] = React.useState(false);
+  const [terrainAnalysisToken, setTerrainAnalysisToken] = React.useState(0);
+  const [terrainSourceField, setTerrainSourceField] = React.useState("fclass");
+  const [terrainPolygon, setTerrainPolygon] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -2159,6 +2164,14 @@ export function ProjectGisGlobe() {
             }
           }}
         />
+      ) : terrainAnalysisOpen ? (
+        <LayerStatsPanel
+          projectId={projectId}
+          polygonFile={terrainPolygon || null}
+          sourceField={terrainSourceField}
+          runToken={terrainAnalysisToken}
+          onClose={() => setTerrainAnalysisOpen(false)}
+        />
       ) : undefined}
     >
       <div className="space-y-[var(--space-4)]">
@@ -2370,6 +2383,53 @@ export function ProjectGisGlobe() {
                 );
               })
             )}
+          </div>
+        </div>
+
+        {/* Separator */}
+        <div className="h-px bg-[var(--color-border-subtle)]" />
+
+        {/* Terrain Analysis section */}
+        <div className="flex flex-col gap-[var(--space-2)]">
+          <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+            Terrain Analysis
+          </span>
+          <Field label="Polygon" layout="horizontal">
+            <Select
+              value={terrainPolygon}
+              onChange={(e) => setTerrainPolygon(e.target.value)}
+            >
+              <option value="">None</option>
+              {(fileList?.polygons ?? []).map((f) => {
+                const stem = f.replace(/\.gpkg$/i, "");
+                return (
+                  <option key={stem} value={stem}>{stem}</option>
+                );
+              })}
+            </Select>
+          </Field>
+          <Field label="Source field" layout="horizontal">
+            <Input
+              value={terrainSourceField}
+              onChange={(e) => setTerrainSourceField(e.target.value)}
+              className="font-mono text-xs"
+            />
+          </Field>
+          {/* Align the button with Field's input column (6rem label + space-3 gap) */}
+          <div className="flex items-start gap-[var(--space-3)]">
+            {/* eslint-disable-next-line template/no-jsx-style-prop -- mirrors Field's labelWidth */}
+            <div className="shrink-0" style={{ width: "6rem" }} aria-hidden />
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={!projectId || !terrainPolygon}
+              onClick={() => {
+                setTerrainAnalysisOpen(true);
+                setTerrainAnalysisToken(Date.now());
+              }}
+            >
+              Process
+            </Button>
           </div>
         </div>
 

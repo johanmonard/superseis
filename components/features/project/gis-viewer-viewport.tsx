@@ -349,6 +349,24 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
     overlayRef.current = overlay;
   }, [styleReady]);
 
+  // Keep the map in sync with its container size.  Without this, the first
+  // fitBounds on page load can target stale (or zero) dimensions — e.g. when
+  // the viewport mounts before the parent flex layout has settled, or when
+  // the left panel is collapsed/resized.
+  React.useEffect(() => {
+    const container = mapContainerRef.current;
+    const map = mapRef.current;
+    if (!container || !map) return;
+    const ro = new ResizeObserver(() => {
+      map.resize();
+    });
+    ro.observe(container);
+    // Kick a resize on mount to catch any layout shift that happened between
+    // map construction and the observer registration.
+    map.resize();
+    return () => ro.disconnect();
+  }, []);
+
   // Update tile source
   React.useEffect(() => {
     const map = mapRef.current;
@@ -464,6 +482,10 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
     }
 
     if (bounds.getNorthEast() && bounds.getSouthWest()) {
+      // Ensure the map uses current container dimensions before fitting,
+      // otherwise a stale size (e.g. 0×0 from an unsettled layout) yields
+      // a view that doesn't frame the data on page load.
+      map.resize();
       map.fitBounds(bounds, { padding: 60, maxZoom: 14 });
       fittedKeysRef.current = currentKeys;
     }
