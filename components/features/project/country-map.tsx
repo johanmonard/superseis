@@ -43,9 +43,72 @@ const ZOOM_FACTOR = 1.15;
 
 interface CountryMapProps {
   country: string;
+  /** Optional CRS area-of-use bounds [west, south, east, north] in degrees. */
+  crsBounds?: [number, number, number, number] | null;
 }
 
-export function CountryMap({ country }: CountryMapProps) {
+/** Densify a lat/lon edge so it follows the globe's curvature cleanly. */
+function densifyEdge(
+  a: [number, number],
+  b: [number, number],
+  steps = 40,
+): [number, number][] {
+  const pts: [number, number][] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    pts.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+  }
+  return pts;
+}
+
+function boundsRing(
+  w: number,
+  s: number,
+  e: number,
+  n: number,
+): [number, number][] {
+  // d3-geo / GeoJSON RFC 7946: exterior ring walks so the interior stays on
+  // the LEFT. On the sphere, that means clockwise when viewed on a standard
+  // north-up map (SW → NW → NE → SE → SW). Going CCW would make the ring
+  // enclose the *complement* — i.e. everything except the strip — which in
+  // orthographic projection shows up as a filled hemisphere with the strip
+  // punched out.
+  return [
+    ...densifyEdge([w, s], [w, n]),
+    ...densifyEdge([w, n], [e, n]).slice(1),
+    ...densifyEdge([e, n], [e, s]).slice(1),
+    ...densifyEdge([e, s], [w, s]).slice(1),
+  ];
+}
+
+function crsBoundsGeoJson(
+  bounds: [number, number, number, number],
+): GeoJSON.FeatureCollection {
+  const [w, s, e, n] = bounds;
+  const rings: [number, number][][] = [];
+  // Antimeridian split — w > e means the box wraps around 180°.
+  if (w > e) {
+    rings.push(boundsRing(w, s, 180, n));
+    rings.push(boundsRing(-180, s, e, n));
+  } else {
+    rings.push(boundsRing(w, s, e, n));
+  }
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: { __crsBounds: true },
+        geometry: {
+          type: "MultiPolygon",
+          coordinates: rings.map((r) => [r]),
+        },
+      },
+    ],
+  };
+}
+
+export function CountryMap({ country, crsBounds }: CountryMapProps) {
   const targetName = getGeoName(country);
   const [rotation, setRotation] = React.useState<[number, number, number]>([0, 0, 0]);
   const [initialized, setInitialized] = React.useState(false);
@@ -258,6 +321,29 @@ export function CountryMap({ country }: CountryMapProps) {
             });
           }}
         </Geographies>
+
+        {/* CRS area-of-use boundary overlay */}
+        {crsBounds && (
+          <Geographies geography={crsBoundsGeoJson(crsBounds)}>
+            {({ geographies }) =>
+              geographies.map((geo) => (
+                <Geography
+                  key={geo.rsmKey}
+                  geography={geo}
+                  fill="color-mix(in srgb, var(--color-accent) 12%, transparent)"
+                  stroke="var(--color-accent)"
+                  strokeWidth={1.5}
+                  strokeDasharray="4 3"
+                  style={{
+                    default: { outline: "none", pointerEvents: "none" },
+                    hover: { outline: "none", pointerEvents: "none" },
+                    pressed: { outline: "none", pointerEvents: "none" },
+                  }}
+                />
+              ))
+            }
+          </Geographies>
+        )}
       </ComposableMap>
     </div>
   );

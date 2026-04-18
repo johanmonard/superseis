@@ -5,16 +5,31 @@ import { appIcons } from "@/components/ui/icon";
 
 import { Button } from "@/components/ui/button";
 
-const { chevronLeft: ChevronLeft, chevronRight: ChevronRight, search: Search, upload: Upload, x: X } = appIcons;
+const {
+  chevronLeft: ChevronLeft,
+  chevronRight: ChevronRight,
+  search: Search,
+  upload: Upload,
+  x: X,
+  info: Info,
+  alertTriangle: AlertTriangle,
+  loader: Loader,
+} = appIcons;
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { CountryMap } from "@/components/features/project/country-map";
 import { ViewportPlaceholder } from "@/components/features/project/viewport-placeholder";
+import {
+  CrsInfoPanel,
+  type CrsPanelState,
+} from "@/components/features/project/crs-info-panel";
 import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
+import { fetchCrsInfo, type CrsInfoResponse } from "@/services/api/crs";
+import { useQuery } from "@tanstack/react-query";
 
 /* ------------------------------------------------------------------
    Country list (ISO 3166-1 subset — extend as needed)
@@ -232,6 +247,11 @@ interface DefinitionData {
   notes: string;
 }
 
+function parseIntOrNull(s: string): number | null {
+  const n = parseInt(s, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 const DEFAULT_DEFINITION: DefinitionData = {
   client: "",
   contractor: "",
@@ -271,6 +291,83 @@ export function ProjectDefinition() {
 
   // Local-only (not persisted)
   const [files, setFiles] = React.useState<File[]>([]);
+
+  // --- CRS lookup (on blur / Enter in the EPSG field) ------------------
+  // EPSG code that has been *committed* (i.e. the user finished editing the
+  // field). This is what drives the actual network request. As long as the
+  // user is still typing, we don't fire.
+  const [committedEpsg, setCommittedEpsg] = React.useState<number | null>(
+    () => (data.epsg ? parseIntOrNull(data.epsg) : null),
+  );
+  const [showCrsPanel, setShowCrsPanel] = React.useState(false);
+
+  // Keep committedEpsg in sync when section data reloads (fresh project,
+  // reload from disk, etc.) — only when the user isn't mid-edit.
+  const lastHydratedEpsgRef = React.useRef<string>("");
+  React.useEffect(() => {
+    if (data.epsg === lastHydratedEpsgRef.current) return;
+    lastHydratedEpsgRef.current = data.epsg;
+    const n = parseIntOrNull(data.epsg);
+    setCommittedEpsg(n);
+  }, [data.epsg]);
+
+  const crsQuery = useQuery<CrsInfoResponse, Error>({
+    queryKey: ["crs-info", committedEpsg],
+    queryFn: ({ signal }) => fetchCrsInfo(committedEpsg as number, signal),
+    enabled: committedEpsg != null && committedEpsg > 0,
+    staleTime: Infinity,
+    retry: false,
+  });
+
+  // Auto-fill crsName from a successful lookup. User is not expected to
+  // edit crsName manually, so we always overwrite.
+  React.useEffect(() => {
+    if (crsQuery.data && crsQuery.data.name !== data.crsName) {
+      update({ ...data, crsName: crsQuery.data.name });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [crsQuery.data]);
+
+  // Clear crsName whenever the lookup fails so the field doesn't keep a
+  // stale name from a previous valid code.
+  React.useEffect(() => {
+    if (crsQuery.isError && data.crsName !== "") {
+      update({ ...data, crsName: "" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [crsQuery.isError]);
+
+  const commitEpsg = React.useCallback(() => {
+    const n = parseIntOrNull(data.epsg);
+    setCommittedEpsg(n);
+  }, [data.epsg]);
+
+  const crsAreaBounds: [number, number, number, number] | null = React.useMemo(() => {
+    const info = crsQuery.data;
+    if (
+      !info ||
+      info.area_west == null ||
+      info.area_south == null ||
+      info.area_east == null ||
+      info.area_north == null
+    ) {
+      return null;
+    }
+    return [info.area_west, info.area_south, info.area_east, info.area_north];
+  }, [crsQuery.data]);
+
+  const crsPanelState: CrsPanelState | null = React.useMemo(() => {
+    if (committedEpsg == null) return null;
+    if (crsQuery.isLoading) return { status: "loading", epsg: committedEpsg };
+    if (crsQuery.isError)
+      return {
+        status: "error",
+        epsg: committedEpsg,
+        message: crsQuery.error?.message ?? "Lookup failed",
+      };
+    if (crsQuery.data) return { status: "ready", info: crsQuery.data };
+    return null;
+  }, [committedEpsg, crsQuery.data, crsQuery.isError, crsQuery.isLoading, crsQuery.error]);
 
   const handlePointerDown = React.useCallback((e: React.PointerEvent) => {
     isDragging.current = true;
@@ -388,22 +485,77 @@ export function ProjectDefinition() {
               />
             </Field>
 
-            <Field label="EPSG Number" htmlFor="def-epsg" layout="horizontal">
-              <Input
-                id="def-epsg"
-                type="number"
-                value={data.epsg}
-                onChange={(e) => setField("epsg", e.target.value)}
-                placeholder="e.g. 4326"
-              />
+            <Field
+              label="EPSG Number"
+              htmlFor="def-epsg"
+              layout="horizontal"
+              hint={
+                crsQuery.isError && committedEpsg
+                  ? `EPSG:${committedEpsg} not found`
+                  : undefined
+              }
+            >
+              <div className="flex items-center gap-[var(--space-1)]">
+                <Input
+                  id="def-epsg"
+                  type="number"
+                  value={data.epsg}
+                  onChange={(e) => setField("epsg", e.target.value)}
+                  onBlur={commitEpsg}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitEpsg();
+                    }
+                  }}
+                  placeholder="e.g. 4326"
+                  className={cn(
+                    crsQuery.isError && committedEpsg != null
+                      ? "border-[var(--color-status-danger)] focus-visible:ring-[var(--color-status-danger)]"
+                      : undefined,
+                  )}
+                />
+                {crsQuery.isLoading && committedEpsg != null ? (
+                  <Loader
+                    size={14}
+                    className="shrink-0 animate-spin text-[var(--color-text-muted)]"
+                  />
+                ) : crsQuery.isError && committedEpsg != null ? (
+                  <AlertTriangle
+                    size={14}
+                    className="shrink-0 text-[var(--color-status-danger)]"
+                  />
+                ) : null}
+                <button
+                  type="button"
+                  aria-label="Show CRS details"
+                  onClick={() => setShowCrsPanel((v) => !v)}
+                  disabled={committedEpsg == null}
+                  className={cn(
+                    "flex h-[var(--control-height-sm)] w-[var(--control-height-sm)] shrink-0 items-center justify-center rounded-[var(--radius-sm)]",
+                    "text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]",
+                    "disabled:pointer-events-none disabled:opacity-40",
+                    showCrsPanel && "bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]",
+                  )}
+                >
+                  <Info size={14} />
+                </button>
+              </div>
             </Field>
 
             <Field label="CRS Name" htmlFor="def-crs" layout="horizontal">
               <Input
                 id="def-crs"
                 value={data.crsName}
-                onChange={(e) => setField("crsName", e.target.value)}
-                placeholder="e.g. WGS 84"
+                readOnly
+                placeholder={
+                  committedEpsg == null
+                    ? "Enter an EPSG number"
+                    : crsQuery.isLoading
+                      ? "Looking up…"
+                      : "Unknown EPSG"
+                }
+                className="bg-[var(--color-bg-elevated)]"
               />
             </Field>
 
@@ -482,12 +634,101 @@ export function ProjectDefinition() {
         </div>
       )}
 
+      {/* CRS info middle panel */}
+      {showCrsPanel && crsPanelState && (
+        <>
+          <div
+            className="min-w-0 flex-shrink-0 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]"
+            // eslint-disable-next-line template/no-jsx-style-prop -- runtime sizing
+            style={{ width: "clamp(300px, 28%, 460px)" }}
+          >
+            <CrsInfoPanel
+              state={crsPanelState}
+              onClose={() => setShowCrsPanel(false)}
+            />
+          </div>
+          <div className="w-2 shrink-0" />
+        </>
+      )}
+
       {/* Viewport panel */}
-      <div className="min-w-0 flex-1 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
-        <div className="flex h-full flex-col items-center justify-center p-[var(--space-4)]">
-          {data.country ? <CountryMap country={data.country} /> : <ViewportPlaceholder variant="globe" message="Select a country" />}
+      <div className="relative min-w-0 flex-1 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
+        <div className="flex h-full flex-col items-center justify-center">
+          {data.country ? (
+            <CountryMap country={data.country} crsBounds={crsAreaBounds} />
+          ) : (
+            <ViewportPlaceholder variant="globe" message="Select a country" />
+          )}
         </div>
+        {data.country && (
+          <ViewportLegend
+            country={data.country}
+            region={data.region}
+            crs={crsQuery.data ?? null}
+          />
+        )}
       </div>
+    </div>
+  );
+}
+
+function ViewportLegend({
+  country,
+  region,
+  crs,
+}: {
+  country: string;
+  region: string;
+  crs: CrsInfoResponse | null;
+}) {
+  return (
+    <div className="pointer-events-none absolute left-[var(--space-3)] top-[var(--space-3)] z-10 flex max-w-[18rem] flex-col gap-[2px] rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[color-mix(in_srgb,var(--color-bg-surface)_92%,transparent)] p-[var(--space-2)] text-xs shadow-[0_2px_6px_var(--color-shadow-alpha)] backdrop-blur">
+      <div className="pb-[var(--space-1)] text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+        Legend
+      </div>
+
+      {/* Country row — solid accent swatch matches the selected-country fill */}
+      <div className="flex items-center gap-[var(--space-2)] px-[2px] py-[2px]">
+        <span
+          aria-hidden
+          className="inline-block h-[14px] w-[14px] shrink-0 rounded-[3px] border border-[var(--color-border-subtle)] bg-[var(--color-accent)]"
+        />
+        <span className="truncate text-[var(--color-text-primary)]">
+          {country}
+          {region ? ` · ${region}` : ""}
+        </span>
+      </div>
+
+      {/* CRS area row — dashed swatch mirrors the polygon stroke on the globe */}
+      {crs && (
+        <div className="flex items-start gap-[var(--space-2)] px-[2px] py-[2px]">
+          <svg
+            aria-hidden
+            width="14"
+            height="14"
+            viewBox="0 0 14 14"
+            className="mt-[2px] shrink-0"
+          >
+            <rect
+              x="1"
+              y="1"
+              width="12"
+              height="12"
+              rx="2"
+              fill="color-mix(in srgb, var(--color-accent) 12%, transparent)"
+              stroke="var(--color-accent)"
+              strokeWidth="1.25"
+              strokeDasharray="3 2"
+            />
+          </svg>
+          <div className="min-w-0 flex-1 text-[var(--color-text-primary)]">
+            <div className="truncate">EPSG:{crs.epsg}</div>
+            <div className="truncate text-[var(--color-text-secondary)]">
+              {crs.name}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

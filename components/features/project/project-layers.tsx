@@ -256,169 +256,125 @@ function ColorPicker({
 }
 
 /* ------------------------------------------------------------------
-   Layer header — compact selector with inline rename and reorder
+   Layer selector — pill buttons with inline rename + add/rename/delete,
+   matching the Survey page's GroupSelector pattern. No reorder.
    ------------------------------------------------------------------ */
 
-function LayerHeader({
+function LayerSelector({
   layers,
   activeId,
-  activeIndex,
   onSelect,
-  onRename,
-  onMove,
   onAdd,
+  onRename,
   onDelete,
 }: {
-  layers: LayerConfig[];
+  layers: { id: string; name: string }[];
   activeId: string;
-  activeIndex: number;
   onSelect: (id: string) => void;
-  onRename: (name: string) => void;
-  onMove: (delta: -1 | 1) => void;
   onAdd: () => void;
-  onDelete: () => void;
+  onRename: (id: string, name: string) => void;
+  onDelete: (id: string) => void;
 }) {
-  const [renaming, setRenaming] = React.useState(false);
-  const [draft, setDraft] = React.useState("");
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [editValue, setEditValue] = React.useState("");
   const inputRef = React.useRef<HTMLInputElement>(null);
 
-  const active = layers.find((l) => l.id === activeId);
-
-  const beginRename = React.useCallback(() => {
-    if (!active) return;
-    setDraft(active.name);
-    setRenaming(true);
-  }, [active]);
-
   React.useEffect(() => {
-    if (renaming) inputRef.current?.select();
-  }, [renaming]);
+    if (editingId) setTimeout(() => inputRef.current?.focus(), 0);
+  }, [editingId]);
 
-  // Leaving the active layer (via select or delete) cancels any pending rename.
-  React.useEffect(() => {
-    setRenaming(false);
-  }, [activeId]);
-
-  const commitRename = React.useCallback(() => {
-    if (!active) return;
-    if (draft.trim() && draft.trim() !== active.name) onRename(draft);
-    setRenaming(false);
-  }, [active, draft, onRename]);
-
-  const cancelRename = React.useCallback(() => {
-    setRenaming(false);
-  }, []);
-
-  const canMoveUp = activeIndex > 0;
-  const canMoveDown = activeIndex >= 0 && activeIndex < layers.length - 1;
-  const canDelete = layers.length > 1;
+  const commitEdit = () => {
+    if (editingId && editValue.trim()) onRename(editingId, editValue.trim());
+    setEditingId(null);
+  };
 
   return (
-    <div className="flex items-center gap-[var(--space-1)]">
-      {/* Selector / inline rename */}
-      <div className="min-w-0 flex-1">
-        {renaming ? (
-          <Input
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={commitRename}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                commitRename();
-              } else if (e.key === "Escape") {
-                e.preventDefault();
-                cancelRename();
-              }
-            }}
-            aria-label="Rename layer"
-            className="text-xs"
-          />
-        ) : (
-          <Select
-            aria-label="Active layer"
-            value={activeId}
-            onChange={(e) => onSelect(e.target.value)}
-            className="text-xs"
+    <div className="flex flex-col gap-[var(--space-2)]">
+      <div className="flex flex-wrap items-center gap-[var(--space-1)]">
+        {layers.map((l) => {
+          if (l.id === editingId) {
+            return (
+              <div
+                key={l.id}
+                className="flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] border border-[var(--color-accent)] bg-[var(--color-bg-surface)] px-[var(--space-1)]"
+              >
+                <input
+                  ref={inputRef}
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitEdit();
+                    if (e.key === "Escape") setEditingId(null);
+                  }}
+                  className="h-6 w-28 bg-transparent px-[var(--space-1)] text-xs text-[var(--color-text-primary)] outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={commitEdit}
+                  className="flex h-5 w-5 items-center justify-center text-[var(--color-status-success)]"
+                >
+                  <Check size={10} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingId(null)}
+                  className="flex h-5 w-5 items-center justify-center text-[var(--color-text-muted)]"
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            );
+          }
+          return (
+            <button
+              key={l.id}
+              type="button"
+              onClick={() => onSelect(l.id)}
+              className={cn(
+                "rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-1)] text-xs font-medium transition-colors",
+                l.id === activeId
+                  ? "bg-[var(--color-accent)] text-[var(--color-accent-foreground)]"
+                  : "bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
+              )}
+            >
+              {l.name}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          onClick={onAdd}
+          className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+          aria-label="Add layer"
+        >
+          <Plus size={12} />
+        </button>
+      </div>
+      <div className="flex items-center gap-[var(--space-1)]">
+        <button
+          type="button"
+          onClick={() => {
+            const active = layers.find((l) => l.id === activeId);
+            if (active) {
+              setEditingId(active.id);
+              setEditValue(active.name);
+            }
+          }}
+          className="flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] px-[var(--space-2)] py-[var(--space-1)] text-xs text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+        >
+          <Pencil size={10} /> Rename
+        </button>
+        {layers.length > 1 && (
+          <button
+            type="button"
+            onClick={() => onDelete(activeId)}
+            className="flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] px-[var(--space-2)] py-[var(--space-1)] text-xs text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-status-danger)]"
           >
-            {layers.map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.name}
-              </option>
-            ))}
-          </Select>
+            <Trash2 size={10} /> Delete
+          </button>
         )}
       </div>
-
-      {/* Actions */}
-      <IconButton
-        title={renaming ? "Save name" : "Rename layer"}
-        onClick={renaming ? commitRename : beginRename}
-      >
-        {renaming ? <Check size={12} /> : <Pencil size={12} />}
-      </IconButton>
-      <IconButton
-        title="Move up"
-        onClick={() => onMove(-1)}
-        disabled={!canMoveUp || renaming}
-      >
-        <span aria-hidden className="text-[11px] leading-none">▲</span>
-      </IconButton>
-      <IconButton
-        title="Move down"
-        onClick={() => onMove(1)}
-        disabled={!canMoveDown || renaming}
-      >
-        <span aria-hidden className="text-[11px] leading-none">▼</span>
-      </IconButton>
-      <IconButton title="Add layer" onClick={onAdd} disabled={renaming}>
-        <Plus size={12} />
-      </IconButton>
-      <IconButton
-        title="Delete layer"
-        onClick={onDelete}
-        disabled={!canDelete || renaming}
-        variant="danger"
-      >
-        <Trash2 size={12} />
-      </IconButton>
     </div>
-  );
-}
-
-function IconButton({
-  children,
-  onClick,
-  disabled,
-  title,
-  variant = "default",
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-  title: string;
-  variant?: "default" | "danger";
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      aria-label={title}
-      className={cn(
-        "flex h-[var(--control-height-sm)] w-[var(--control-height-sm)] shrink-0 items-center justify-center rounded-[var(--radius-sm)]",
-        "text-[var(--color-text-muted)] transition-colors",
-        "hover:bg-[var(--color-bg-elevated)]",
-        variant === "danger"
-          ? "hover:text-[var(--color-status-danger)]"
-          : "hover:text-[var(--color-text-primary)]",
-        "disabled:pointer-events-none disabled:opacity-40",
-      )}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -447,17 +403,13 @@ export function ProjectLayers({
     projectId, "layers", DEFAULT_LAYERS,
   );
 
-  // Migrate persisted data once per load so downstream code can rely on the
-  // current schema (integer ``code``, present ``nextCode``).
+  // Migrate persisted data on every render so downstream code can rely on
+  // the current schema (integer ``code``, present ``nextCode``). The
+  // migration is pure — no side effect writeback on mount, which used to
+  // race the server fetch and overwrite real data with migrated defaults.
+  // Any user edit saves the migrated shape naturally via ``update``.
   const data = React.useMemo(() => migrateLayersData(rawData), [rawData]);
   const update = rawUpdate;
-
-  // If the loaded state needed migration, persist the fixed-up copy so we
-  // don't re-migrate on every render.
-  React.useEffect(() => {
-    if (data !== rawData) update(data);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const { data: projectFiles } = useProjectFiles(projectId);
   const availableOsmLayers = React.useMemo(
@@ -469,7 +421,6 @@ export function ProjectLayers({
   const activeId = data.activeId || layers[0]?.id || "";
 
   const activeLayer = layers.find((l) => l.id === activeId) ?? layers[0];
-  const activeIndex = layers.findIndex((l) => l.id === activeId);
 
   // Publish active-layer info to parent (for viewport rendering).
   const sourceFilesKey = activeLayer?.sourceFiles.join("|") ?? "";
@@ -511,20 +462,6 @@ export function ProjectLayers({
       update({ ...data, layers: next, activeId: newActiveId });
     },
     [data, update, activeId]
-  );
-
-  const moveLayer = React.useCallback(
-    (id: string, delta: -1 | 1) => {
-      const idx = data.layers.findIndex((l) => l.id === id);
-      if (idx < 0) return;
-      const target = idx + delta;
-      if (target < 0 || target >= data.layers.length) return;
-      const next = data.layers.slice();
-      const [moved] = next.splice(idx, 1);
-      next.splice(target, 0, moved);
-      update({ ...data, layers: next });
-    },
-    [data, update],
   );
 
   const renameLayer = React.useCallback(
@@ -596,16 +533,14 @@ export function ProjectLayers({
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      {/* Layer header: select + rename + reorder + add + delete */}
-      <LayerHeader
+      {/* Layer selector: pills + add / rename / delete (no reorder) */}
+      <LayerSelector
         layers={layers}
         activeId={activeId}
-        activeIndex={activeIndex}
         onSelect={(id) => update({ ...data, activeId: id })}
-        onRename={(name) => renameLayer(activeLayer.id, name)}
-        onMove={(delta) => moveLayer(activeLayer.id, delta)}
         onAdd={addLayer}
-        onDelete={() => deleteLayer(activeLayer.id)}
+        onRename={renameLayer}
+        onDelete={deleteLayer}
       />
 
       <div className="h-px bg-[var(--color-border-subtle)]" />

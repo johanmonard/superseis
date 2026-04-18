@@ -116,6 +116,12 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
     title: "Workflow",
     subtitle: "Two-panel workflow layout with parameters and viewport.",
   },
+  {
+    href: "/demo/osm-info",
+    title: "OSM info",
+    subtitle:
+      "Per-fclass context cards sourced from taginfo — definitions, icons, wiki links, and usage stats.",
+  },
   // [new-module:page-identity]
   {
     href: "/admin",

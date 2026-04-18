@@ -29,7 +29,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { downloadOsmStream, clipOsmStream } from "@/services/api/project-osm";
+import {
+  downloadOsmStream,
+  clipOsmStream,
+  prefetchClippedFclassInfo,
+} from "@/services/api/project-osm";
 import {
   gpkgToGeoJSON,
   insertGpkgFeatures,
@@ -488,7 +492,14 @@ function OsmDownloadPanel({
       );
       setClipStatus(final.ok ? "done" : "error");
       setClipMessage(final.message);
-      if (final.ok) onLayersClipped?.();
+      if (final.ok) {
+        onLayersClipped?.();
+        // Populate the backend OSM fclass info cache for the newly clipped
+        // files so legend hovers render instantly — fire-and-forget.
+        void prefetchClippedFclassInfo(projectId, final.files).catch(() => {
+          /* non-critical; hover will still fetch on demand */
+        });
+      }
     } catch (err) {
       setClipStatus("error");
       setClipMessage(err instanceof Error ? err.message : "Clip failed");
@@ -1896,13 +1907,19 @@ export function ProjectGisGlobe() {
       name: string;
       maxZoom: number;
     }) => {
+      if (!projectId) return;
       setDemStatus({ kind: "fetching" });
       try {
-        const res = await fetch("/api/gis/dem", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(params),
-        });
+        const { apiBaseUrl } = getRuntimeConfig();
+        const res = await fetch(
+          `${apiBaseUrl}/project/${projectId}/files/dem/download`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify(params),
+          },
+        );
         if (!res.ok) {
           const msg = await res.text();
           throw new Error(msg || `HTTP ${res.status}`);
@@ -1920,11 +1937,14 @@ export function ProjectGisGlobe() {
         });
         setImportingDem(false);
         setSelectedDem(json.file);
+        queryClient.invalidateQueries({
+          queryKey: projectFileKeys.project(projectId),
+        });
       } catch (e) {
         setDemStatus({ kind: "error", message: String(e) });
       }
     },
-    []
+    [projectId, queryClient]
   );
 
   // ------------------------------------------------------------------

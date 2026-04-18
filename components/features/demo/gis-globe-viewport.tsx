@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import maplibregl, {
   type Map as MLMap,
   type StyleSpecification,
@@ -10,6 +11,16 @@ import maplibregl, {
 import "maplibre-gl/dist/maplibre-gl.css";
 import { fromArrayBuffer } from "geotiff";
 import type { GeoJSONFeatureCollection } from "@/lib/gpkg";
+import {
+  FclassInfoCard,
+  type FclassCardState,
+} from "@/components/features/gis/fclass-info-card";
+import {
+  getCachedFclassInfo,
+  loadFclassInfo,
+  prefetchFclassInfos,
+  themeFromLayerId,
+} from "@/lib/osm/fclass-info";
 
 type TileGroup = "Satellite" | "Color" | "LightNoColor" | "Dark";
 
@@ -474,6 +485,12 @@ const RAMP_ORDER: ReadonlyArray<RampName> = [
   "turbo",
   "grayscale",
 ];
+
+function formatElev(v: number): string {
+  // 1-decimal for magnitudes under 100 m so small surveys read as e.g.
+  // "3.4" rather than "3"; integer otherwise to keep the legend compact.
+  return Math.abs(v) < 100 ? v.toFixed(1) : Math.round(v).toString();
+}
 
 function rampToCssGradient(name: RampName): string {
   const stops = RAMPS[name];
@@ -3091,6 +3108,25 @@ const GLOBE_CSS = `
   .glb-legend__row--hidden .glb-legend__swatch {
     opacity: 0.3;
   }
+  .glb-legend__row--dem {
+    align-items: flex-start;
+  }
+  .glb-legend__swatch--dem {
+    margin-top: 2px;
+  }
+  .glb-legend__dem-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.25;
+  }
+  .glb-legend__dem-range {
+    color: #64748b;
+    font-size: 11px;
+  }
+  [data-theme="dark"] .glb-legend__dem-range {
+    color: #94a3b8;
+  }
   .glb-legend__row--hidden .glb-legend__name {
     opacity: 0.55;
     text-decoration: line-through;
@@ -3444,6 +3480,24 @@ export function GisGlobeViewport({
   const [styleReady, setStyleReady] = React.useState(false);
   const [zoomDisplay, setZoomDisplay] = React.useState(DEFAULT_ZOOM);
   const [pitchDisplay, setPitchDisplay] = React.useState(0);
+  // Origin of the project backend — any map-internal request (raster-dem
+  // tiles, image sources) to this origin needs the session cookie, which
+  // MapLibre doesn't send by default. Derived from ``demManifestUrl`` or
+  // ``demTileUrlTemplate`` at mount; updated via ref so the map's
+  // ``transformRequest`` (set once at construction) stays in sync.
+  const backendOriginRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    const src = demManifestUrl || demTileUrlTemplate || demFileUrl || "";
+    if (src.startsWith("http://") || src.startsWith("https://")) {
+      try {
+        backendOriginRef.current = new URL(src).origin;
+      } catch {
+        backendOriginRef.current = null;
+      }
+    } else {
+      backendOriginRef.current = null;
+    }
+  }, [demManifestUrl, demTileUrlTemplate, demFileUrl]);
   // When non-null, new features committed by add/freehand are stamped with
   // `properties.fclass = activeFclass`. Only one can be active at a time;
   // the pencil button next to each fclass in the legend toggles it.
@@ -3451,6 +3505,72 @@ export function GisGlobeViewport({
     () => new Set()
   );
   const [activeFclass, setActiveFclass] = React.useState<string | null>(null);
+  // Hover popover for fclass legend rows — shows the OSM wiki definition
+  // card (same visual as app/(workspace)/demo/osm-info). Data is fetched
+  // lazily via the module-level cache in lib/osm/fclass-info.ts.
+  const [hoverCard, setHoverCard] = React.useState<{
+    layerId: string;
+    fclass: string;
+    top: number;
+    left: number;
+    state: FclassCardState;
+  } | null>(null);
+  const hoverHideTimerRef = React.useRef<number | null>(null);
+  const clearHoverHide = React.useCallback(() => {
+    if (hoverHideTimerRef.current != null) {
+      window.clearTimeout(hoverHideTimerRef.current);
+      hoverHideTimerRef.current = null;
+    }
+  }, []);
+  const handleFclassHover = React.useCallback(
+    (layerId: string, fclass: string, rect: DOMRect) => {
+      clearHoverHide();
+      const theme = themeFromLayerId(layerId);
+      const cached = theme ? getCachedFclassInfo(theme, fclass) : undefined;
+      const cardWidth = 280;
+      const estHeight = 320;
+      const gap = 12;
+      const placeRight = rect.right + gap + cardWidth <= window.innerWidth - 8;
+      const left = placeRight
+        ? rect.right + gap
+        : Math.max(8, rect.left - gap - cardWidth);
+      const top = Math.max(
+        8,
+        Math.min(window.innerHeight - estHeight - 8, rect.top),
+      );
+      const state: FclassCardState =
+        cached !== undefined
+          ? { status: "ready", info: cached }
+          : { status: "loading" };
+      setHoverCard({ layerId, fclass, top, left, state });
+      if (cached !== undefined || !theme) return;
+      loadFclassInfo(theme, fclass)
+        .then((info) => {
+          setHoverCard((prev) =>
+            prev && prev.layerId === layerId && prev.fclass === fclass
+              ? { ...prev, state: { status: "ready", info } }
+              : prev,
+          );
+        })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : "Failed to load";
+          setHoverCard((prev) =>
+            prev && prev.layerId === layerId && prev.fclass === fclass
+              ? { ...prev, state: { status: "error", message } }
+              : prev,
+          );
+        });
+    },
+    [clearHoverHide],
+  );
+  const handleFclassLeave = React.useCallback(() => {
+    clearHoverHide();
+    hoverHideTimerRef.current = window.setTimeout(
+      () => setHoverCard(null),
+      140,
+    );
+  }, [clearHoverHide]);
+  React.useEffect(() => () => clearHoverHide(), [clearHoverHide]);
   const activeFclassRef = React.useRef(activeFclass);
   React.useEffect(() => {
     activeFclassRef.current = activeFclass;
@@ -3718,6 +3838,19 @@ export function GisGlobeViewport({
   const onConfirmDemDownloadRef = React.useRef(onConfirmDemDownload);
   const demNameSuggestionRef = React.useRef(demNameSuggestion);
   const demOpacityRef = React.useRef(demOpacity);
+  // Min/max elevation actually present in the loaded DEM (drives the
+  // legend entry). Null when no DEM is loaded.
+  const [demRange, setDemRange] = React.useState<{
+    min: number;
+    max: number;
+  } | null>(null);
+  // Legend checkbox — independent of ``demFile`` so the user can flip the
+  // overlay off without losing their selection.
+  const [demVisible, setDemVisible] = React.useState(true);
+  React.useEffect(() => {
+    // Whenever a new DEM is selected, default back to visible.
+    setDemVisible(true);
+  }, [demFile]);
   const onSetTerrainExaggerationRef = React.useRef(onSetTerrainExaggeration);
   const onSetDemOpacityRef = React.useRef(onSetDemOpacity);
   const onSetDemColorRampRef = React.useRef(onSetDemColorRamp);
@@ -3822,6 +3955,17 @@ export function GisGlobeViewport({
       center: DEFAULT_CENTER,
       zoom: DEFAULT_ZOOM,
       attributionControl: false,
+      // MapLibre fetches raster-dem tiles, image sources, etc. through its
+      // own pipeline, which doesn't carry cookies. Our backend-hosted DEM
+      // tiles sit behind a session cookie, so anything pointed at the
+      // project API origin needs credentials explicitly.
+      transformRequest: (url) => {
+        const origin = backendOriginRef.current;
+        if (origin && url.startsWith(origin)) {
+          return { url, credentials: "include" };
+        }
+        return { url };
+      },
       // Required so the auto-polygon tool can read back the rendered
       // satellite tiles via canvas.drawImage after a frame has been drawn.
       // Option exists in maplibre-gl but isn't exposed in the current typings.
@@ -3897,17 +4041,22 @@ export function GisGlobeViewport({
     }
 
     map.addSource(BASE_SOURCE_ID, rasterSourceFor(tile));
-    // Insert base below any existing feature layers
-    const beforeId = map.getLayer(FEATURES_FILL_LAYER)
-      ? FEATURES_FILL_LAYER
-      : undefined;
+    // Insert base below any existing overlay: DEM first (always lowest
+    // overlay), then vector features, otherwise top of stack. Without the
+    // DEM-overlay check, switching tiles while a DEM is displayed dropped
+    // the new base on top of the stack and hid the DEM.
+    const baseBeforeId = map.getLayer(DEM_OVERLAY_LAYER)
+      ? DEM_OVERLAY_LAYER
+      : map.getLayer(FEATURES_FILL_LAYER)
+        ? FEATURES_FILL_LAYER
+        : undefined;
     map.addLayer(
       {
         id: BASE_LAYER_ID,
         type: "raster",
         source: BASE_SOURCE_ID,
       },
-      beforeId
+      baseBeforeId
     );
 
     if (showLabels) {
@@ -3916,13 +4065,18 @@ export function GisGlobeViewport({
         tiles: [LABELS_URL],
         tileSize: 256,
       });
+      // Labels stay below feature layers but above the DEM overlay so text
+      // (roads, place names) remains legible over raster relief.
+      const labelsBeforeId = map.getLayer(FEATURES_FILL_LAYER)
+        ? FEATURES_FILL_LAYER
+        : undefined;
       map.addLayer(
         {
           id: LABELS_LAYER_ID,
           type: "raster",
           source: LABELS_SOURCE_ID,
         },
-        beforeId
+        labelsBeforeId
       );
     }
   }, [tileIndex, styleReady]);
@@ -7412,7 +7566,10 @@ export function GisGlobeViewport({
         map.removeSource(DEM_OVERLAY_SOURCE_ID);
     };
     cleanup();
-    if (!demFile) return;
+    if (!demFile) {
+      setDemRange(null);
+      return;
+    }
 
     let cancelled = false;
     (async () => {
@@ -7435,14 +7592,69 @@ export function GisGlobeViewport({
       if (cancelled) return;
       const elev = rasters[0] as ArrayLike<number>;
 
+      // Scan only real elevations — the backend writes NaN (plus a NODATA
+      // tag) for mosaic cells with no upstream tile, so those never bias
+      // the color stretch. Legitimate sea-level 0s still count.
       let mn = Infinity;
       let mx = -Infinity;
       for (let i = 0; i < elev.length; i++) {
         const v = elev[i];
+        if (!Number.isFinite(v)) continue;
         if (v < mn) mn = v;
         if (v > mx) mx = v;
       }
-      const range = mx - mn || 1;
+      if (!Number.isFinite(mn) || !Number.isFinite(mx)) {
+        // Whole raster is nodata — nothing to draw.
+        setDemRange((prev) => (prev === null ? prev : null));
+        return;
+      }
+      // Preserve identity when the range hasn't changed so the clamp-sync
+      // effect doesn't fire and trigger a rebake loop.
+      setDemRange((prev) =>
+        prev && prev.min === mn && prev.max === mx
+          ? prev
+          : { min: mn, max: mx },
+      );
+
+      // Most DEMs have skewed elevation distributions (e.g. 95 % of pixels
+      // clustered in a narrow coastal band), so a naive linear stretch
+      // min→max leaves large parts of the ramp invisible. Instead we
+      // compute a 256-bin histogram → CDF, derive the 2nd and 98th
+      // percentile from it (no re-sort), and linear-stretch between those.
+      // Outliers outside [p2, p98] pin to the ramp ends.
+      const NBINS = 256;
+      const span = mx - mn || 1;
+      const hist = new Uint32Array(NBINS);
+      let finiteCount = 0;
+      for (let i = 0; i < elev.length; i++) {
+        const v = elev[i];
+        if (!Number.isFinite(v)) continue;
+        let b = Math.floor(((v - mn) / span) * NBINS);
+        if (b < 0) b = 0;
+        else if (b >= NBINS) b = NBINS - 1;
+        hist[b]++;
+        finiteCount++;
+      }
+      let acc = 0;
+      const invTotal = 1 / (finiteCount || 1);
+      let p2Bin = 0;
+      let p98Bin = NBINS - 1;
+      let p2Found = false;
+      for (let b = 0; b < NBINS; b++) {
+        acc += hist[b];
+        const c = acc * invTotal;
+        if (!p2Found && c >= 0.02) {
+          p2Bin = b;
+          p2Found = true;
+        }
+        if (c >= 0.98) {
+          p98Bin = b;
+          break;
+        }
+      }
+      const pctLo = mn + (p2Bin / NBINS) * span;
+      const pctHi = mn + ((p98Bin + 1) / NBINS) * span;
+      const pctRange = Math.max(1e-6, pctHi - pctLo);
 
       // Hypsometric ramp + Lambertian-ish hillshade combined into one RGBA
       // canvas. Hillshade adds the visual relief that flat coloring lacks.
@@ -7467,7 +7679,18 @@ export function GisGlobeViewport({
       for (let row = 0; row < h; row++) {
         for (let col = 0; col < w; col++) {
           const v = elev[row * w + col];
-          const t = (v - mn) / range;
+          if (!Number.isFinite(v)) {
+            // Missing data — leave transparent instead of painting 0.
+            const idx = (row * w + col) * 4;
+            px[idx] = 0;
+            px[idx + 1] = 0;
+            px[idx + 2] = 0;
+            px[idx + 3] = 0;
+            continue;
+          }
+          // 2-98 percentile linear stretch; outliers pin to ramp ends.
+          const cv = v <= pctLo ? pctLo : v >= pctHi ? pctHi : v;
+          const t = (cv - pctLo) / pctRange;
           const [rr, gg, bb] = ramp(t, demColorRamp);
 
           // Horn's slope/aspect, scaled so the relief shows even for
@@ -7554,13 +7777,18 @@ export function GisGlobeViewport({
 
   // Light effect: opacity-only updates avoid the expensive re-render of
   // the canvas / image source — just push the new value to the layer.
+  // Hidden via the legend checkbox collapses to full transparency.
   React.useEffect(() => {
     demOpacityRef.current = demOpacity;
     const map = mapRef.current;
     if (!map || !styleReady) return;
     if (!map.getLayer(DEM_OVERLAY_LAYER)) return;
-    map.setPaintProperty(DEM_OVERLAY_LAYER, "raster-opacity", demOpacity);
-  }, [demOpacity, styleReady]);
+    map.setPaintProperty(
+      DEM_OVERLAY_LAYER,
+      "raster-opacity",
+      demVisible ? demOpacity : 0,
+    );
+  }, [demOpacity, demVisible, styleReady]);
 
   // Compute the padded bbox once per pendingDem change. Memoised so the
   // preview rectangle, modal display, and the eventual download payload all
@@ -7835,9 +8063,9 @@ export function GisGlobeViewport({
     >
       <div ref={containerRef} className="h-full w-full" />
 
-      {layers && layers.length > 0 && (() => {
+      {((layers && layers.length > 0) || (demFile && demRange)) && (() => {
         // Group layers: preserve order, emit group header when group changes.
-        const hasGroups = layers.some((l) => l.group);
+        const hasGroups = layers?.some((l) => l.group) ?? false;
         let lastGroup: string | undefined;
 
         const renderLayer = (l: LayerStyle) => {
@@ -7942,7 +8170,17 @@ export function GisGlobeViewport({
                             <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
                           </svg>
                         </button>
-                        <label className="glb-legend__fclass-label">
+                        <label
+                          className="glb-legend__fclass-label"
+                          onMouseEnter={(e) =>
+                            handleFclassHover(
+                              l.id,
+                              fc.value,
+                              e.currentTarget.getBoundingClientRect(),
+                            )
+                          }
+                          onMouseLeave={handleFclassLeave}
+                        >
                           <input
                             type="checkbox"
                             className="glb-legend__checkbox"
@@ -7975,10 +8213,48 @@ export function GisGlobeViewport({
           );
         };
 
+        const demName =
+          demFile ? demFile.replace(/\.tif$/i, "") : "";
         return (
           <div className="glb-legend">
             <div className="glb-legend__title">Layers</div>
-            {layers.map((l) => {
+            {demFile && demRange && (
+              <>
+                <div className="glb-legend__group">DEM</div>
+                <div
+                  className={
+                    "glb-legend__row glb-legend__row--dem" +
+                    (demVisible ? "" : " glb-legend__row--hidden")
+                  }
+                  title={`${demName} — [${formatElev(demRange.min)}; ${formatElev(demRange.max)}] elevation (m)`}
+                >
+                  <input
+                    type="checkbox"
+                    className="glb-legend__checkbox"
+                    checked={demVisible}
+                    onChange={() => setDemVisible((v) => !v)}
+                    aria-label={
+                      demVisible ? "Hide DEM overlay" : "Show DEM overlay"
+                    }
+                  />
+                  <span
+                    className="glb-legend__swatch glb-legend__swatch--dem"
+                    // eslint-disable-next-line template/no-jsx-style-prop -- gradient per selected ramp
+                    style={{
+                      backgroundImage: rampToCssGradient(demColorRamp),
+                      backgroundColor: "transparent",
+                    }}
+                  />
+                  <div className="glb-legend__dem-text">
+                    <span className="glb-legend__name">{demName}</span>
+                    <span className="glb-legend__dem-range">
+                      [{formatElev(demRange.min)}; {formatElev(demRange.max)}] elevation (m)
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
+            {(layers ?? []).map((l) => {
               const items: React.ReactNode[] = [];
               if (hasGroups && l.group !== lastGroup) {
                 lastGroup = l.group;
@@ -7996,6 +8272,31 @@ export function GisGlobeViewport({
           </div>
         );
       })()}
+
+      {hoverCard &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            // eslint-disable-next-line template/no-jsx-style-prop -- runtime position from anchor rect
+            style={{
+              position: "fixed",
+              top: hoverCard.top,
+              left: hoverCard.left,
+              width: 280,
+              zIndex: 50,
+              boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+            }}
+            onMouseEnter={clearHoverHide}
+            onMouseLeave={handleFclassLeave}
+          >
+            <FclassInfoCard
+              fclass={hoverCard.fclass}
+              theme={themeFromLayerId(hoverCard.layerId) ?? undefined}
+              state={hoverCard.state}
+            />
+          </div>,
+          document.body,
+        )}
 
       <DraggableToolbar
         wrapperRef={wrapperRef}

@@ -17,7 +17,7 @@ from api.db.engine import get_db
 from api.db.models import Project
 from api.tenant import get_company_id
 
-from dojo.v3.services.project_service import ProjectService
+from dojo.v3.services.project_service import ProjectNotFoundError, ProjectService
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +80,47 @@ async def create_project(
     )
 
     return row
+
+
+class ReloadResponse(BaseModel):
+    project_id: int
+    project_name: str
+
+
+@router.post("/{project_id}/reload", response_model=ReloadResponse)
+async def reload_project(
+    project_id: int,
+    db: AsyncSession = Depends(get_db),
+    principal: AuthPrincipal = Depends(get_current_user),
+    dojo_svc: ProjectService = Depends(get_dojo_project_service),
+):
+    """Re-read ``config.json`` from disk into the in-memory cache.
+
+    Used when a file has been edited out of band (e.g. by an LLM) and the
+    API needs to serve the new values without a process restart.
+    """
+    result = await db.execute(
+        select(Project).where(
+            Project.id == project_id,
+            Project.company_id == principal.company_id,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    try:
+        cfg = dojo_svc.reload_from_disk(project_id)
+    except ProjectNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="config.json not found on disk for this project",
+        )
+
+    return ReloadResponse(
+        project_id=project_id,
+        project_name=cfg.metadata.project_name,
+    )
 
 
 @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)

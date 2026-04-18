@@ -353,6 +353,71 @@ async def get_raw_file(
     )
 
 
+class DemDownloadRequest(BaseModel):
+    bbox: list[float]
+    name: str
+    maxZoom: int = 14
+
+
+class DemDownloadResponse(BaseModel):
+    ok: bool
+    file: str
+    zoom: int
+    width: int
+    height: int
+    tiles: int
+    fetched: int
+    missing: int
+    pyramid: dict
+
+
+@router.post("/dem/download", response_model=DemDownloadResponse)
+async def download_project_dem(
+    project_id: int,
+    body: DemDownloadRequest,
+    principal: AuthPrincipal = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    dojo_svc: ProjectService = Depends(get_dojo_project_service),
+) -> DemDownloadResponse:
+    """Download a DEM from AWS Terrain Tiles into this project's
+    ``inputs/gis/dem/`` folder and write the matching terrain-rgb tile
+    pyramid alongside it.
+    """
+    await _get_project_for_user(project_id, principal, db)
+
+    if len(body.bbox) != 4 or not all(
+        isinstance(v, (int, float)) and v == v for v in body.bbox  # rejects NaN
+    ):
+        raise HTTPException(status_code=400, detail="Invalid bbox")
+
+    from api.dem_downloader import download_dem
+
+    dem_dir = _gis_dir(dojo_svc, project_id, "dem")
+    try:
+        result = await download_dem(
+            dem_dir=dem_dir,
+            filename=body.name,
+            bbox=tuple(body.bbox),  # type: ignore[arg-type]
+            max_zoom=body.maxZoom,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    return DemDownloadResponse(
+        ok=True,
+        file=result.file,
+        zoom=result.zoom,
+        width=result.width,
+        height=result.height,
+        tiles=result.tiles,
+        fetched=result.fetched,
+        missing=result.missing,
+        pyramid=result.pyramid,
+    )
+
+
 @router.put("/{category}/{filename}")
 async def put_raw_file(
     project_id: int,

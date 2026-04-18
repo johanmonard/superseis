@@ -29,6 +29,77 @@ interface OptionRow {
   rpShiftY: string;
 }
 
+/* ------------------------------------------------------------------
+   Resolution candidates
+   ------------------------------------------------------------------
+
+   Each design contributes candidates = min(rpi, spi, rli, sli) / (2 + 2·n)
+   for n ∈ [0, 6]. The dropdown shows only values common to every design
+   selected in the option's rows. Display is rounded to 2 decimals in "m",
+   but the payload stores the full 6-decimal string so the pipeline gets
+   the unrounded number.
+*/
+
+const N_RANGE = [0, 1, 2, 3, 4, 5, 6] as const;
+const STORE_DECIMALS = 6;
+const DISPLAY_DECIMALS = 2;
+const RECOMMENDED_MIN = 2;
+const RECOMMENDED_MAX = 5;
+
+type DesignAttrs = {
+  rpi: string;
+  spi: string;
+  rli: string;
+  sli: string;
+};
+
+function minStep(d: DesignAttrs): number | null {
+  const vals = [d.rpi, d.spi, d.rli, d.sli].map((s) => Number(s));
+  if (vals.some((v) => !Number.isFinite(v) || v <= 0)) return null;
+  return Math.min(...vals);
+}
+
+type ResolutionCandidate = {
+  /** Stored in the payload (6-decimal string). */
+  value: string;
+  /** Shown in the UI (2-decimal string + unit). */
+  display: string;
+  recommended: boolean;
+};
+
+function computeResolutionOptions(
+  designs: DesignAttrs[],
+): ResolutionCandidate[] {
+  if (designs.length === 0) return [];
+  // Build each design's candidate set (bucketed by 6-decimal string key so
+  // we can take a strict intersection without float drift).
+  const perDesign: Map<string, number>[] = [];
+  for (const d of designs) {
+    const m = minStep(d);
+    if (m == null) return []; // any bad design → no common options
+    const map = new Map<string, number>();
+    for (const n of N_RANGE) {
+      const v = m / (2 + 2 * n);
+      map.set(v.toFixed(STORE_DECIMALS), v);
+    }
+    perDesign.push(map);
+  }
+  const [first, ...rest] = perDesign;
+  const common: ResolutionCandidate[] = [];
+  for (const [key, value] of first) {
+    if (rest.every((m) => m.has(key))) {
+      common.push({
+        value: key,
+        display: `${value.toFixed(DISPLAY_DECIMALS)} m`,
+        recommended:
+          value >= RECOMMENDED_MIN && value <= RECOMMENDED_MAX,
+      });
+    }
+  }
+  common.sort((a, b) => Number(a.value) - Number(b.value));
+  return common;
+}
+
 interface DesignOption {
   id: string;
   name: string;
@@ -85,7 +156,14 @@ export function ProjectDesignOptions() {
   const { data: designSection } = useProjectSection(projectId, "design");
   const designGroups = React.useMemo(() => {
     const groups = (designSection?.data as {
-      groups?: { name: string; rlAzimuth?: string }[];
+      groups?: {
+        name: string;
+        rlAzimuth?: string;
+        rpi?: string;
+        spi?: string;
+        rli?: string;
+        sli?: string;
+      }[];
     } | undefined)?.groups;
     return groups ?? [];
   }, [designSection]);
@@ -193,6 +271,28 @@ export function ProjectDesignOptions() {
   const regions = activeOption.partitioning
     ? partitioningRegions[activeOption.partitioning] ?? []
     : [];
+
+  // Distinct designs referenced by this option's rows, with their numeric
+  // attrs attached so the Resolution dropdown can compute common candidates.
+  const selectedDesignsForOption = React.useMemo<DesignAttrs[]>(() => {
+    const names = new Set<string>();
+    for (const row of activeOption.rows) {
+      if (row.design) names.add(row.design);
+    }
+    const byName = new Map(designGroups.map((g) => [g.name, g]));
+    const result: DesignAttrs[] = [];
+    for (const name of names) {
+      const g = byName.get(name);
+      if (!g) continue;
+      result.push({
+        rpi: g.rpi ?? "",
+        spi: g.spi ?? "",
+        rli: g.rli ?? "",
+        sli: g.sli ?? "",
+      });
+    }
+    return result;
+  }, [activeOption.rows, designGroups]);
 
   const mismatchedAzimuths = React.useMemo(() => {
     const unique = new Set<string>();
@@ -421,13 +521,10 @@ export function ProjectDesignOptions() {
       <div className="h-px bg-[var(--color-border-subtle)]" />
 
       <Field label="Resolution" htmlFor="opt-resolution" layout="horizontal">
-        <Input
-          id="opt-resolution"
-          type="number"
+        <ResolutionSelect
           value={activeOption.resolution}
-          onChange={(e) =>
-            updateOption(activeId, { resolution: e.target.value })
-          }
+          designs={selectedDesignsForOption}
+          onChange={(v) => updateOption(activeId, { resolution: v })}
         />
       </Field>
 
@@ -437,6 +534,7 @@ export function ProjectDesignOptions() {
           y={activeOption.gridOriginY}
           onXChange={(v) => updateOption(activeId, { gridOriginX: v })}
           onYChange={(v) => updateOption(activeId, { gridOriginY: v })}
+          align="left"
         />
       </Field>
 
@@ -455,4 +553,74 @@ export function ProjectDesignOptions() {
       )}
     </div>
   );
+}
+
+/* ------------------------------------------------------------------
+   Resolution dropdown
+   ------------------------------------------------------------------
+
+   Native <Select> whose option list is computed lazily on first open —
+   it stays empty until the user clicks / focuses the control, then
+   ``computeResolutionOptions`` runs against the designs bound to the
+   option's rows. Recommended values (2 – 5 m) land in the first
+   optgroup; the rest follow. The payload keeps the 6-decimal string so
+   the pipeline sees the unrounded number.
+*/
+
+function ResolutionSelect({
+  value,
+  designs,
+  onChange,
+}: {
+  value: string;
+  designs: DesignAttrs[];
+  onChange: (v: string) => void;
+}) {
+  const [populated, setPopulated] = React.useState(false);
+  const options = React.useMemo(
+    () => (populated ? computeResolutionOptions(designs) : []),
+    [populated, designs],
+  );
+
+  // Current value might not be in the computed list (e.g. designs changed
+  // since it was picked). Surface it so the select still shows it.
+  const hasCurrent =
+    !!value && options.some((o) => o.value === value);
+
+  const placeholder = !populated
+    ? "Select…"
+    : designs.length === 0
+      ? "No designs in this option"
+      : options.length === 0
+        ? "No common resolution"
+        : "Select…";
+
+  return (
+    <Select
+      id="opt-resolution"
+      value={value}
+      onMouseDown={() => {
+        if (!populated) setPopulated(true);
+      }}
+      onFocus={() => {
+        if (!populated) setPopulated(true);
+      }}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      <option value="">{placeholder}</option>
+      {value && !hasCurrent && (
+        <option value={value}>{formatCurrentResolution(value)}</option>
+      )}
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.recommended ? `★ ${o.display}` : o.display}
+        </option>
+      ))}
+    </Select>
+  );
+}
+
+function formatCurrentResolution(value: string): string {
+  const n = Number(value);
+  return Number.isFinite(n) ? `${n.toFixed(DISPLAY_DECIMALS)} m` : value;
 }

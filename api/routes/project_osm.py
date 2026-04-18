@@ -14,6 +14,7 @@ used is saved as ``osm_dataset_extent.gpkg`` in the same directory.
 
 import asyncio
 import json
+import sqlite3
 import time
 from pathlib import Path
 from typing import AsyncGenerator
@@ -28,6 +29,7 @@ from api.auth import AuthPrincipal, get_current_user
 from api.db.engine import get_db
 from api.db.models import Project
 from api.dojo import get_dojo_project_service
+from api.routes.osm_info import _load_or_fetch, _normalize_theme
 
 from dojo.v3.services.project_service import ProjectNotFoundError, ProjectService
 
@@ -307,3 +309,111 @@ async def clip_osm(
         })
 
     return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# Prefetch fclass info for clipped layers
+# ---------------------------------------------------------------------------
+
+
+class PrefetchFclassRequest(BaseModel):
+    # Optional — defaults to every .gpkg in inputs/gis/gis_layers/.
+    files: list[str] | None = None
+
+
+class PrefetchFclassResponse(BaseModel):
+    resolved: int
+    skipped: int
+    files: int
+
+
+def _read_fclass_values(gpkg_path: Path) -> list[str]:
+    """Return distinct ``fclass`` values in the first layer table of a .gpkg.
+
+    Geofabrik gpkg files store features in a table named after the layer
+    (e.g. ``gis_osm_landuse_a_free_1``) with an ``fclass`` column. We read
+    it directly via sqlite3 — no geopandas dependency needed just for this.
+    """
+    if not gpkg_path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{gpkg_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return []
+    try:
+        cur = conn.execute(
+            "SELECT table_name FROM gpkg_contents "
+            "WHERE data_type='features' LIMIT 1"
+        )
+        row = cur.fetchone()
+        if not row:
+            return []
+        table = row[0]
+        cols = {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')}
+        if "fclass" not in cols:
+            return []
+        cur = conn.execute(
+            f'SELECT DISTINCT fclass FROM "{table}" '
+            "WHERE fclass IS NOT NULL AND fclass <> ''"
+        )
+        return [str(r[0]) for r in cur.fetchall()]
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+
+
+@router.post("/prefetch-fclass-info", response_model=PrefetchFclassResponse)
+async def prefetch_fclass_info(
+    project_id: int,
+    body: PrefetchFclassRequest,
+    principal: AuthPrincipal = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    dojo_svc: ProjectService = Depends(get_dojo_project_service),
+) -> PrefetchFclassResponse:
+    """Scan clipped .gpkg files and populate the OSM fclass info cache.
+
+    Called by the frontend immediately after a successful clip, so every
+    (theme, fclass) pair the user might hover in the legend is already
+    resolved by the time they interact with the layer.
+    """
+    await _get_project_for_user(project_id, principal, db)
+
+    try:
+        dojo_svc.get_config(project_id)
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="Project not found in dojo")
+    project_dir = dojo_svc.get_project_dir(project_id)
+
+    gis_layers_dir = project_dir / "inputs" / "gis" / "gis_layers"
+    if not gis_layers_dir.exists():
+        return PrefetchFclassResponse(resolved=0, skipped=0, files=0)
+
+    if body.files:
+        targets = [gis_layers_dir / name for name in body.files
+                   if name.endswith(".gpkg")]
+    else:
+        targets = sorted(gis_layers_dir.glob("*.gpkg"))
+
+    resolved = 0
+    skipped = 0
+    for path in targets:
+        theme = _normalize_theme(path.stem)
+        if not theme:
+            skipped += 1
+            continue
+        values = await asyncio.get_event_loop().run_in_executor(
+            None, _read_fclass_values, path,
+        )
+        for fclass in values:
+            try:
+                await _load_or_fetch(db, theme, fclass)
+                resolved += 1
+            except HTTPException:
+                skipped += 1
+            except Exception:
+                skipped += 1
+
+    return PrefetchFclassResponse(
+        resolved=resolved, skipped=skipped, files=len(targets),
+    )

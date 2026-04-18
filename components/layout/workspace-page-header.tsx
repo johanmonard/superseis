@@ -2,8 +2,10 @@
 
 import * as React from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useQueries } from "@tanstack/react-query";
+import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { fetchProjectSection } from "../../services/api/project-sections";
+import { reloadProjectConfig } from "../../services/api/project";
+import { sectionKeys } from "../../services/query/project-sections";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
@@ -34,7 +36,16 @@ import { useThemePreferences } from "../../lib/use-theme-preferences";
 import type { ThemeDensity } from "../../lib/theme";
 import { getApiErrorMessage } from "../../services/api/auth";
 
-const { braces: Braces, folderOpen: FolderOpen, logOut: LogOut, rows3: Rows3, save: Save, upload: Upload, x: X } = appIcons;
+const {
+  braces: Braces,
+  folderOpen: FolderOpen,
+  logOut: LogOut,
+  refresh: RefreshCw,
+  rows3: Rows3,
+  save: Save,
+  upload: Upload,
+  x: X,
+} = appIcons;
 
 export interface WorkspacePageHeaderProps {
   session: { email: string; is_admin: boolean };
@@ -87,6 +98,22 @@ export function WorkspacePageHeader({
   const [showFilesDialog, setShowFilesDialog] = React.useState(false);
   const [showPayloadDialog, setShowPayloadDialog] = React.useState(false);
 
+  const queryClient = useQueryClient();
+  const reloadMutation = useMutation({
+    mutationFn: (projectId: number) => reloadProjectConfig(projectId),
+    onSuccess: (_res, projectId) => {
+      // Drop every cached section for this project so the next render
+      // refetches the freshly reloaded config from the backend.
+      queryClient.invalidateQueries({
+        queryKey: sectionKeys.project(projectId),
+      });
+    },
+  });
+  const reloadError = reloadMutation.error;
+  const reloadErrorMessage = reloadError
+    ? getApiErrorMessage(reloadError, "Reload failed.")
+    : null;
+
   return (
     <>
       <div className="relative flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -137,6 +164,30 @@ export function WorkspacePageHeader({
                     </button>
                   </TooltipTrigger>
                   <TooltipContent>Save project</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="Reload config from disk"
+                      onClick={() => reloadMutation.mutate(activeProject.id)}
+                      disabled={reloadMutation.isPending}
+                      className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] disabled:pointer-events-none disabled:opacity-50"
+                    >
+                      <RefreshCw
+                        size={14}
+                        strokeWidth={1.75}
+                        className={reloadMutation.isPending ? "animate-spin" : undefined}
+                      />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {reloadErrorMessage
+                      ? reloadErrorMessage
+                      : reloadMutation.isSuccess
+                        ? "Reloaded from disk"
+                        : "Reload config.json from disk"}
+                  </TooltipContent>
                 </Tooltip>
                 <Tooltip>
                   <TooltipTrigger asChild>

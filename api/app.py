@@ -69,6 +69,8 @@ app.include_router(items_router)
 
 from api.routes.admin_companies import router as admin_companies_router
 from api.routes.admin_users import router as admin_users_router
+from api.routes.crs import router as crs_router
+from api.routes.osm_info import router as osm_info_router
 from api.routes.project import router as project_router
 from api.routes.project_files import router as project_files_router
 from api.routes.project_layers import router as project_layers_router
@@ -82,6 +84,8 @@ from api.routes.project_sections import router as project_sections_router
 
 app.include_router(admin_companies_router)
 app.include_router(admin_users_router)
+app.include_router(crs_router)
+app.include_router(osm_info_router)
 app.include_router(project_router)
 app.include_router(project_files_router)
 app.include_router(project_layers_router)

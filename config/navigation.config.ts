@@ -38,6 +38,7 @@ export const navigation: NavigationItem[] = [
       { label: "Wireframes", href: "/demo/wireframes", icon: "compass" },
       { label: "GIS", href: "/demo/gis", icon: "layers" },
       { label: "GIS Globe", href: "/demo/gis-globe", icon: "map" },
+      { label: "OSM info", href: "/demo/osm-info", icon: "mapPin" },
       { label: "Animate 3D", href: "/demo/animate", icon: "activity" },
       { label: "Workflow", href: "/demo/workflow", icon: "blocks" },
     ],

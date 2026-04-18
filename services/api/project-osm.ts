@@ -97,3 +97,35 @@ export function clipOsmStream(
 ): Promise<OsmProgressEvent> {
   return streamOsmAction(projectId, 'clip', body, onProgress, signal)
 }
+
+export interface PrefetchFclassResponse {
+  resolved: number
+  skipped: number
+  files: number
+}
+
+export async function prefetchClippedFclassInfo(
+  projectId: number,
+  files?: string[],
+  signal?: AbortSignal,
+): Promise<PrefetchFclassResponse> {
+  const { apiBaseUrl } = getRuntimeConfig()
+  const response = await fetch(
+    `${apiBaseUrl}/project/${projectId}/osm/prefetch-fclass-info`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ files: files ?? null }),
+      signal,
+    },
+  )
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}))
+    throw new Error(
+      (detail as { detail?: string }).detail ||
+        `Prefetch failed (${response.status})`,
+    )
+  }
+  return (await response.json()) as PrefetchFclassResponse
+}

@@ -21,3 +21,14 @@ export function createProject(payload: ProjectCreate): Promise<ProjectItem> {
 export function deleteProject(id: number): Promise<void> {
   return requestJson<void>(`/project/${id}`, { method: "DELETE" });
 }
+
+export type ReloadProjectResponse = {
+  project_id: number;
+  project_name: string;
+};
+
+export function reloadProjectConfig(id: number): Promise<ReloadProjectResponse> {
+  return requestJson<ReloadProjectResponse>(`/project/${id}/reload`, {
+    method: "POST",
+  });
+}
