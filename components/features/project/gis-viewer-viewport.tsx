@@ -7,9 +7,7 @@ import maplibregl, {
   type RasterSourceSpecification,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { GeoJsonLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
-import { DataFilterExtension } from "@deck.gl/extensions";
 
 import { type FileCategory } from "@/services/api/project-files";
 import { useProjectFilesGeoJson } from "@/services/query/project-files";
@@ -70,18 +68,10 @@ function buildStyle(src: TileSource): StyleSpecification {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function hexToRgba(hex: string, alpha = 255): [number, number, number, number] {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return [r, g, b, alpha];
-}
-
-// Shared DataFilterExtension instance — deck.gl handles fclass filtering on the
-// GPU via getFilterCategory/filterCategories, avoiding CPU-side re-filtering and
-// GPU re-uploads when the user toggles fclass selections.
-const FCLASS_FILTER_EXT = new DataFilterExtension({ categorySize: 1 });
-const FCLASS_MATCH_ALL = "__all__";
+// MapLibre source / layer id prefixes for our managed entries — kept under
+// distinctive prefixes so we never collide with the basemap style's own ids.
+const ML_SOURCE_PREFIX = "gv-src:";
+const ML_LAYER_PREFIX = "gv-lyr:";
 
 // ---------------------------------------------------------------------------
 // CSS
@@ -386,75 +376,189 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
     map.setStyle(buildStyle(TILE_SOURCES[tileIndex]));
   }, [tileIndex]);
 
-  // Update deck.gl layers
+  // Reconcile MapLibre native sources/layers from `visibleFiles`.
+  //
+  // Why native MapLibre instead of deck.gl GeoJsonLayer:
+  //   - MapLibre cuts the GeoJSON into per-zoom viewport tiles, so it only
+  //     tessellates what's on screen instead of the entire dataset up front.
+  //   - GPU paint expressions (fill-color/line-color) avoid the per-feature
+  //     CPU accessor callbacks deck.gl would otherwise run on every change.
+  //   - Multiple VisibleFiles that reference the same .gpkg share a single
+  //     GeoJSON source, so the data is parsed/tessellated once even when the
+  //     active map stacks 20 layers on top of the same buildings file.
+  //
+  // We track ids we've added in refs and reconcile on every change. When the
+  // user switches basemap (`setStyle`), MapLibre wipes all sources/layers, so
+  // a separate effect resets the refs on `styleReady` flipping false.
+  const managedSourcesRef = React.useRef<Set<string>>(new Set());
+  const managedLayersRef = React.useRef<Set<string>>(new Set());
+
+  React.useEffect(() => {
+    if (!styleReady) {
+      managedSourcesRef.current.clear();
+      managedLayersRef.current.clear();
+    }
+  }, [styleReady]);
+
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady) return;
+
+    type LayerSpec = {
+      id: string;
+      sourceId: string;
+      kind: "fill" | "line" | "circle";
+      paint: Record<string, unknown>;
+      filter?: unknown;
+    };
+
+    const desiredSources = new Set<string>();
+    const desiredLayers: LayerSpec[] = [];
+
+    visibleFiles.forEach((f, i) => {
+      if (!f.style.visible) return;
+      const key = `${f.category}/${f.filename}`;
+      const data = geojsonByKey.get(key);
+      if (!data) return;
+
+      const sourceId = `${ML_SOURCE_PREFIX}${key}`;
+      desiredSources.add(sourceId);
+
+      // Include the source key in the layer id so swapping the underlying
+      // file (e.g. switching active layer in the Layers page) gives the new
+      // layer a fresh id — otherwise the existence check would short-circuit
+      // and leave us with a layer still pointing at the just-removed source.
+      const baseId = `${ML_LAYER_PREFIX}${i}-${key}`;
+      const firstGeomType = data.features.find((feat) => feat.geometry)?.geometry?.type;
+      const isPolygon =
+        firstGeomType === "Polygon" || firstGeomType === "MultiPolygon";
+      const isLine =
+        firstGeomType === "LineString" || firstGeomType === "MultiLineString";
+      const isPoint =
+        firstGeomType === "Point" || firstGeomType === "MultiPoint";
+
+      const filter =
+        f.fclassFilter && f.fclassFilter.length > 0
+          ? ["in", ["get", "fclass"], ["literal", [...f.fclassFilter]]]
+          : undefined;
+
+      const fillOpacity =
+        f.style.fillOpacity != null ? f.style.fillOpacity : f.style.opacity * 0.3;
+
+      if (isPolygon && f.style.filled) {
+        desiredLayers.push({
+          id: `${baseId}-fill`,
+          sourceId,
+          kind: "fill",
+          paint: {
+            "fill-color": f.style.color,
+            "fill-opacity": fillOpacity,
+          },
+          filter,
+        });
+      }
+      // Skip the polygon outline pass when the fill is fully opaque — the
+      // fill itself shows the exact extent, and a stroke costs another
+      // tessellation + draw pass. Lines and points always keep their stroke
+      // (it IS the geometry).
+      const polygonNeedsOutline =
+        isPolygon && !(f.style.filled && f.style.opacity >= 1);
+      if (isLine || polygonNeedsOutline) {
+        desiredLayers.push({
+          id: `${baseId}-line`,
+          sourceId,
+          kind: "line",
+          paint: {
+            "line-color": f.style.color,
+            "line-opacity": f.style.opacity,
+            "line-width": f.style.width,
+          },
+          filter,
+        });
+      }
+      if (isPoint) {
+        desiredLayers.push({
+          id: `${baseId}-circle`,
+          sourceId,
+          kind: "circle",
+          paint: {
+            "circle-color": f.style.color,
+            "circle-opacity": f.style.opacity,
+            "circle-radius": Math.max(2, f.style.width * 2),
+          },
+          filter,
+        });
+      }
+    });
+
+    // Add missing sources before the layers that reference them.
+    for (const sourceId of desiredSources) {
+      if (!map.getSource(sourceId)) {
+        const key = sourceId.slice(ML_SOURCE_PREFIX.length);
+        const data = geojsonByKey.get(key);
+        if (!data) continue;
+        map.addSource(sourceId, { type: "geojson", data });
+      }
+    }
+
+    // Remove obsolete layers first (sources can't be removed while in use).
+    const desiredLayerIds = new Set(desiredLayers.map((l) => l.id));
+    for (const lid of [...managedLayersRef.current]) {
+      if (!desiredLayerIds.has(lid)) {
+        if (map.getLayer(lid)) map.removeLayer(lid);
+        managedLayersRef.current.delete(lid);
+      }
+    }
+
+    // Add new layers, or update existing ones in place. Updating in place
+    // (setFilter / setPaintProperty) avoids re-tessellation when the user
+    // toggles a fclass value or recolors a layer; only a fresh source or a
+    // new VisibleFile causes a true layer add.
+    for (const spec of desiredLayers) {
+      if (map.getLayer(spec.id)) {
+        map.setFilter(spec.id, (spec.filter ?? null) as never);
+        for (const [prop, val] of Object.entries(spec.paint)) {
+          map.setPaintProperty(spec.id, prop, val as never);
+        }
+      } else {
+        const layerDef = {
+          id: spec.id,
+          type: spec.kind,
+          source: spec.sourceId,
+          paint: spec.paint,
+          ...(spec.filter ? { filter: spec.filter } : {}),
+        } as unknown as maplibregl.AddLayerObject;
+        map.addLayer(layerDef);
+        managedLayersRef.current.add(spec.id);
+      }
+    }
+
+    // Move layers to the desired stacking order. `moveLayer(id)` without a
+    // `beforeId` moves to the top, so iterating in order leaves the last
+    // entry on top — matching `visibleFiles[0]` at the bottom.
+    for (const spec of desiredLayers) {
+      map.moveLayer(spec.id);
+    }
+
+    // Remove obsolete sources now that no layer references them.
+    for (const sid of [...managedSourcesRef.current]) {
+      if (!desiredSources.has(sid)) {
+        if (map.getSource(sid)) map.removeSource(sid);
+        managedSourcesRef.current.delete(sid);
+      }
+    }
+    for (const sid of desiredSources) managedSourcesRef.current.add(sid);
+  }, [visibleFiles, loadedKeys, geojsonByKey, styleReady]);
+
+  // The deck.gl overlay is now reserved for ad-hoc layers callers pass via
+  // `extraLayers` (e.g. Survey's dashed extent rectangle). Layers from
+  // `visibleFiles` go through the native MapLibre pipeline above.
   React.useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay || !styleReady) return;
-
-    const layers = visibleFiles
-      .filter((f) => f.style.visible)
-      .map((f) => {
-        const key = `${f.category}/${f.filename}`;
-        const cached = geojsonByKey.get(key);
-        if (!cached) return null;
-        const alpha = Math.round(f.style.opacity * 255);
-        const rgba = hexToRgba(f.style.color, alpha);
-        const fillAlpha =
-          f.style.fillOpacity != null
-            ? Math.round(f.style.fillOpacity * 255)
-            : Math.round(alpha * 0.3);
-        const fillRgba = hexToRgba(f.style.color, fillAlpha);
-        const hasFilter = f.fclassFilter != null && f.fclassFilter.length > 0;
-        const filterKey = hasFilter ? (f.fclassFilter as readonly string[]).join("|") : "";
-        // Skip the polygon outline pass when the fill is fully opaque — the
-        // fill itself shows the exact extent, and rendering a separate line
-        // strip per polygon edge is ~30–50% of the polygon-layer cost. Lines
-        // and points must keep `stroked: true` because the stroke IS the
-        // geometry; we detect those by inspecting the first feature.
-        const firstGeomType = cached.features.find((feat) => feat.geometry)?.geometry?.type;
-        const isPolygon =
-          firstGeomType === "Polygon" || firstGeomType === "MultiPolygon";
-        const stroked = !(isPolygon && f.style.filled && f.style.opacity >= 1);
-        return new GeoJsonLayer({
-          id: key,
-          // Always pass the full cached FeatureCollection — filtering happens
-          // on the GPU via DataFilterExtension so geometry buffers stay hot.
-          data: cached,
-          pickable: true,
-          stroked,
-          filled: f.style.filled,
-          getLineColor: rgba,
-          getFillColor: fillRgba,
-          getLineWidth: f.style.width,
-          getPointRadius: f.style.width * 50,
-          lineWidthUnits: "pixels" as const,
-          pointRadiusUnits: "meters" as const,
-          pointRadiusMinPixels: 1,
-          pointRadiusMaxPixels: 20,
-          extensions: [FCLASS_FILTER_EXT],
-          // When no filter is set, every feature reports the sentinel category
-          // and the allowed list contains only that sentinel → all pass.
-          getFilterCategory: hasFilter
-            ? (feat: GeoJSON.Feature) => {
-                const v = (feat.properties as Record<string, unknown> | null)?.fclass;
-                return v == null ? "" : String(v);
-              }
-            : () => FCLASS_MATCH_ALL,
-          filterCategories: hasFilter
-            ? [...(f.fclassFilter as readonly string[])]
-            : [FCLASS_MATCH_ALL],
-          updateTriggers: {
-            getFilterCategory: filterKey,
-            filterCategories: filterKey,
-          },
-        });
-      })
-      .filter(Boolean);
-
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (extraLayers) layers.push(...(extraLayers as any[]));
-    overlay.setProps({ layers });
-  }, [visibleFiles, loadedKeys, geojsonByKey, styleReady, extraLayers]);
+    overlay.setProps({ layers: (extraLayers as any[]) ?? [] });
+  }, [extraLayers, styleReady]);
 
   // Fit bounds to the combined extent of all visible files. Tracks the file
   // LIST (not filter selections) so changing the source files re-fits, while
