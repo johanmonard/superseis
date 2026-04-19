@@ -386,7 +386,7 @@ function ReactFlowWorkflowInner() {
 
     renumber();
     autoLayout();
-  }, [selectedNodeId, nodes, edges, setNodes, setEdges, renumber, autoLayout]);
+  }, [selectedNodeId, nodes, setNodes, setEdges, renumber, autoLayout]);
 
   // --- Add fork after selected node ---
   const addForkAfter = useCallback(() => {
@@ -444,7 +444,7 @@ function ReactFlowWorkflowInner() {
 
     renumber();
     autoLayout();
-  }, [selectedNodeId, nodes, edges, setNodes, setEdges, renumber, autoLayout]);
+  }, [selectedNodeId, nodes, setNodes, setEdges, renumber, autoLayout]);
 
   // --- Delete selected step node ---
   const deleteSelected = useCallback(() => {

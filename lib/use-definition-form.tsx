@@ -1,9 +1,6 @@
 "use client";
 
-import { useQueryClient } from "@tanstack/react-query";
-
-import { sectionKeys, useProjectSection } from "@/services/query/project-sections";
-import type { ProjectSectionData } from "@/services/api/project-sections";
+import { useProjectSection } from "@/services/query/project-sections";
 import { useActiveProject } from "./use-active-project";
 
 export interface DefinitionFormData {

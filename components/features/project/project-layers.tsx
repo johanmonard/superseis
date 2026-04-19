@@ -399,7 +399,7 @@ export function ProjectLayers({
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
 
-  const { data: rawData, update: rawUpdate, status } = useSectionData<LayersData>(
+  const { data: rawData, update: rawUpdate } = useSectionData<LayersData>(
     projectId, "layers", DEFAULT_LAYERS,
   );
 

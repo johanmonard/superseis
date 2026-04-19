@@ -276,7 +276,7 @@ export function ProjectDefinition() {
   const [isResizing, setIsResizing] = React.useState(false);
 
   // Section data — React Query cache is the source of truth
-  const { data, update, status } = useSectionData<DefinitionData>(
+  const { data, update } = useSectionData<DefinitionData>(
     projectId,
     "definition",
     DEFAULT_DEFINITION,

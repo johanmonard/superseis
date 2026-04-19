@@ -120,7 +120,6 @@ if (shouldTrim) {
 
   for (const mod of modulesToRemove) {
     const routeDir = path.join(root, "app", "(workspace)", mod);
-    const componentDir = path.join(root, "components", "features", mod);
 
     try {
       await fs.access(routeDir);

@@ -24,7 +24,6 @@ export function AngleInput({
   onChange,
   min = 0,
   max = 360,
-  step = 0.01,
   disabled = false,
   tone = "default",
   className,

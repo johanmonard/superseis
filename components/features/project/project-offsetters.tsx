@@ -539,7 +539,7 @@ export function ProjectOffsetters() {
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
 
-  const { data, update, status } = useSectionData<OffsettersData>(projectId, "offsetters", DEFAULT_OFFSETTERS);
+  const { data, update } = useSectionData<OffsettersData>(projectId, "offsetters", DEFAULT_OFFSETTERS);
 
   const configs = data.configs;
   const activeId = data.activeId || configs[0]?.id || "";

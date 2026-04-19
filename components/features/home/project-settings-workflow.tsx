@@ -134,7 +134,7 @@ function StepNode({ id, data, selected }: NodeProps<Node<StepData>>) {
 // Title node
 // ---------------------------------------------------------------------------
 
-function TitleNode(_props: NodeProps) {
+function TitleNode() {
   return (
     <div className="flex w-52 h-[72px] items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-accent)] bg-[var(--color-accent)] px-[var(--space-4)] shadow-[0_2px_8px_var(--color-shadow-alpha)]">
       <span className="text-sm font-bold tracking-wide text-[var(--color-accent-foreground)]">

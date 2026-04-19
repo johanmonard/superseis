@@ -297,7 +297,7 @@ export function ProjectPartitioning({
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
 
-  const { data, update, status } = useSectionData<PartitioningData>(projectId, "partitioning", DEFAULT_PARTITIONING);
+  const { data, update } = useSectionData<PartitioningData>(projectId, "partitioning", DEFAULT_PARTITIONING);
   const { data: projectFiles } = useProjectFiles(projectId);
   const availablePolygons = React.useMemo(
     () => (projectFiles?.polygons ?? []).map((f) => f.replace(/\.gpkg$/, "")),

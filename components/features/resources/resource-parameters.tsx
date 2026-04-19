@@ -18,7 +18,6 @@ const DUMMY_ACTIVITIES = ["Acquisition", "Drilling", "Surveying"];
 const DUMMY_MAPS = ["Base Map A", "Base Map B", "Topographic"];
 const DUMMY_LAYERS = ["Roads", "Rivers", "Exclusion Zones", "Elevation"];
 const DUMMY_POLYGONS = ["Polygon A", "Polygon B", "Polygon C", "Polygon D"];
-const DUMMY_CAMP_KEYS = ["Camp Alpha", "Camp Bravo", "Camp Charlie"];
 
 const MOTION_MODES = ["MOVE", "TRAV", "WORK"] as const;
 type MotionMode = (typeof MOTION_MODES)[number];

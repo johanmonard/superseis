@@ -364,7 +364,7 @@ export function ProjectCrew({
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
 
-  const { data, update, status } = useSectionData<CrewData>(projectId, "crew", DEFAULT_CREW);
+  const { data, update } = useSectionData<CrewData>(projectId, "crew", DEFAULT_CREW);
 
   const options = data.options;
   const activeId = data.activeId || options[0]?.id || "";

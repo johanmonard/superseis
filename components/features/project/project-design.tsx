@@ -210,7 +210,7 @@ export function ProjectDesign({
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
 
-  const { data, update, status } = useSectionData<DesignData>(projectId, "design", DEFAULT_DESIGN);
+  const { data, update } = useSectionData<DesignData>(projectId, "design", DEFAULT_DESIGN);
   const groups = data.groups;
   const activeId = data.activeId || groups[0]?.id || "";
 

@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 const { alertTriangle: AlertTriangle, check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
 import { CoordinateInput } from "@/components/ui/coordinate-input";
 import { Field } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
@@ -198,7 +197,7 @@ export function ProjectDesignOptions() {
     return map;
   }, [partitioningGroups]);
 
-  const { data, update, status } = useSectionData<DesignOptionsData>(projectId, "design_options", DEFAULT_DESIGN_OPTIONS);
+  const { data, update } = useSectionData<DesignOptionsData>(projectId, "design_options", DEFAULT_DESIGN_OPTIONS);
   const options = data.options;
   const activeId = data.activeId || options[0]?.id || "";
 

@@ -327,16 +327,20 @@ function EditController({
     map.on("click", onMapClick);
     map.getContainer().style.cursor = "crosshair";
 
+    // Capture the current ref value so the cleanup uses the same Set we
+    // populated in this effect run, not whatever a later run may have set.
+    const editedSet = editedRef.current;
+
     // Cleanup: collect edits and remove handlers
     return () => {
       deselectActive();
 
       const features: GeoJSON.Feature[] = [];
-      editedRef.current.forEach((layer) => {
+      editedSet.forEach((layer) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         features.push((layer as any).toGeoJSON() as GeoJSON.Feature);
       });
-      editedRef.current.clear();
+      editedSet.clear();
 
       map.eachLayer((layer) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -351,7 +355,6 @@ function EditController({
         onEditedRef.current(features);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map, editing]);
 
   return null;

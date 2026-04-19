@@ -306,7 +306,7 @@ export function ProjectMaps({
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
 
-  const { data, update, status } = useSectionData<MapsData>(projectId, "maps", DEFAULT_MAPS);
+  const { data, update } = useSectionData<MapsData>(projectId, "maps", DEFAULT_MAPS);
   const { data: layersSection } = useProjectSection(projectId, "layers");
 
   const storedLayers = React.useMemo<StoredLayer[]>(() => {

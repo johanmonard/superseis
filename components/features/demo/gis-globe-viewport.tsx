@@ -18,7 +18,6 @@ import {
 import {
   getCachedFclassInfo,
   loadFclassInfo,
-  prefetchFclassInfos,
   themeFromLayerId,
 } from "@/lib/osm/fclass-info";
 
