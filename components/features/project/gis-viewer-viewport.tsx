@@ -265,9 +265,16 @@ interface GisViewerViewportProps {
   extraLayers?: unknown[];
   /** Extra content rendered at the bottom of the legend */
   legendExtra?: React.ReactNode;
+  /**
+   * Replace the default per-file legend with a caller-supplied list — the
+   * Maps page uses this to show one row per defined layer (in definition
+   * order) instead of one row per .gpkg, since multiple layers can share
+   * a source file.
+   */
+  legendItems?: ReadonlyArray<{ key: string; color: string; label: string }>;
 }
 
-export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extraLayers, legendExtra }: GisViewerViewportProps) {
+export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extraLayers, legendExtra, legendItems }: GisViewerViewportProps) {
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const mapContainerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<MLMap | null>(null);
@@ -643,7 +650,21 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
       <div ref={mapContainerRef} style={{ position: "absolute", inset: 0 }} />
 
       {/* Legend */}
-      {visibleFiles.length > 0 && (
+      {(legendItems && legendItems.length > 0) ? (
+        <div className="gis-legend">
+          <div className="gis-legend__header">
+            <span className="gis-legend__title">Layers</span>
+          </div>
+          {legendItems.map((item) => (
+            <div key={item.key} className="gis-legend__row">
+              {/* eslint-disable-next-line template/no-jsx-style-prop -- runtime color */}
+              <span className="gis-legend__color" style={{ backgroundColor: item.color }} />
+              <span className="gis-legend__label">{item.label}</span>
+            </div>
+          ))}
+          {legendExtra}
+        </div>
+      ) : visibleFiles.length > 0 && (
         <div className="gis-legend">
           <div className="gis-legend__header">
             <span className="gis-legend__title">Layers</span>

@@ -100,6 +100,20 @@ export default function MapsPage() {
   const isLoadingLayers = totalFiles > 0 && loadedFiles < totalFiles;
   const progressPct = totalFiles === 0 ? 0 : Math.round((loadedFiles / totalFiles) * 100);
 
+  // Legend rows are one per defined layer in the active map's order — not
+  // per source file like the default. Multiple layers can share a .gpkg,
+  // and the user thinks in layer names ("motorways", "open_roads"), not
+  // file stems.
+  const legendItems = React.useMemo(
+    () =>
+      info?.layers.map((l) => ({
+        key: l.name,
+        color: l.color,
+        label: l.name,
+      })) ?? [],
+    [info],
+  );
+
   return (
     <ProjectSettingsPage
       title="Maps"
@@ -126,6 +140,7 @@ export default function MapsPage() {
             <GisViewerViewport
               projectId={projectId}
               visibleFiles={visibleFiles}
+              legendItems={legendItems}
               onStyleChange={() => {
                 /* legend edits ignored — styling is driven by the Layers page */
               }}
