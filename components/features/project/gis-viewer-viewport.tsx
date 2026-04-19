@@ -353,17 +353,27 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
   // fitBounds on page load can target stale (or zero) dimensions — e.g. when
   // the viewport mounts before the parent flex layout has settled, or when
   // the left panel is collapsed/resized.
+  //
+  // `containerReady` flips true once the container has usable dimensions.
+  // The fit-to-bounds effect below depends on it so the initial fit is
+  // deferred until the layout has actually settled — otherwise a fit into
+  // a 0×0 container gets marked as "done" and never retried.
+  const [containerReady, setContainerReady] = React.useState(false);
   React.useEffect(() => {
     const container = mapContainerRef.current;
     const map = mapRef.current;
     if (!container || !map) return;
+    const checkSize = () => {
+      const { width, height } = container.getBoundingClientRect();
+      if (width > 10 && height > 10) setContainerReady(true);
+    };
     const ro = new ResizeObserver(() => {
       map.resize();
+      checkSize();
     });
     ro.observe(container);
-    // Kick a resize on mount to catch any layout shift that happened between
-    // map construction and the observer registration.
     map.resize();
+    checkSize();
     return () => ro.disconnect();
   }, []);
 
@@ -396,13 +406,22 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
         const fillRgba = hexToRgba(f.style.color, fillAlpha);
         const hasFilter = f.fclassFilter != null && f.fclassFilter.length > 0;
         const filterKey = hasFilter ? (f.fclassFilter as readonly string[]).join("|") : "";
+        // Skip the polygon outline pass when the fill is fully opaque — the
+        // fill itself shows the exact extent, and rendering a separate line
+        // strip per polygon edge is ~30–50% of the polygon-layer cost. Lines
+        // and points must keep `stroked: true` because the stroke IS the
+        // geometry; we detect those by inspecting the first feature.
+        const firstGeomType = cached.features.find((feat) => feat.geometry)?.geometry?.type;
+        const isPolygon =
+          firstGeomType === "Polygon" || firstGeomType === "MultiPolygon";
+        const stroked = !(isPolygon && f.style.filled && f.style.opacity >= 1);
         return new GeoJsonLayer({
           id: key,
           // Always pass the full cached FeatureCollection — filtering happens
           // on the GPU via DataFilterExtension so geometry buffers stay hot.
           data: cached,
           pickable: true,
-          stroked: true,
+          stroked,
           filled: f.style.filled,
           getLineColor: rgba,
           getFillColor: fillRgba,
@@ -454,6 +473,7 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
   }
   React.useEffect(() => {
     if (visibleFiles.length === 0) return;
+    if (!containerReady) return;
     const map = mapRef.current;
     if (!map) return;
 
@@ -489,7 +509,7 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
       map.fitBounds(bounds, { padding: 60, maxZoom: 14 });
       fittedKeysRef.current = currentKeys;
     }
-  }, [visibleFiles, loadedKeys, geojsonByKey, styleReady]);
+  }, [visibleFiles, loadedKeys, geojsonByKey, styleReady, containerReady]);
 
   // Toolbar handlers
   const handleZoomIn = () => mapRef.current?.zoomIn();

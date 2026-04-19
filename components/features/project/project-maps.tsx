@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
+import { useProjectSection } from "@/services/query/project-sections";
 
 const { check: Check, gripVertical: GripVertical, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
 
@@ -36,16 +37,6 @@ const DEFAULT_MAPS: MapsData = {
   maps: [createMap(0)],
   activeId: "",
 };
-
-const DUMMY_AVAILABLE_LAYERS = [
-  "roads",
-  "railways",
-  "waterways",
-  "water_a",
-  "buildings",
-  "landuse",
-  "transport_a",
-];
 
 /* ------------------------------------------------------------------
    Drag-sortable layer list
@@ -93,20 +84,68 @@ function LayerAddButton({
   );
 }
 
+function LayerImportButton({
+  maps,
+  onCopy,
+}: {
+  maps: MapConfig[];
+  onCopy: (sourceId: string) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  if (maps.length === 0) return null;
+
+  return (
+    <div ref={ref} className="relative">
+      <Button variant="ghost" size="sm" onClick={() => setOpen(!open)}>
+        <Plus size={12} className="mr-[var(--space-1)]" /> Import
+      </Button>
+      {open && (
+        <div className="absolute left-0 top-full z-20 mt-1 min-w-[10rem] overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] p-[var(--space-1)] shadow-[0_4px_12px_var(--color-shadow-alpha)]">
+          {maps.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => { onCopy(m.id); setOpen(false); }}
+              className="flex w-full items-center rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-2)] text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+            >
+              {m.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SortableLayerList({
   layers,
   available,
+  copyableMaps,
   onReorder,
   onAdd,
   onRemove,
   onImportAll,
+  onCopyFromMap,
 }: {
   layers: string[];
   available: string[];
+  copyableMaps: MapConfig[];
   onReorder: (layers: string[]) => void;
   onAdd: (name: string) => void;
   onRemove: (index: number) => void;
   onImportAll: () => void;
+  onCopyFromMap: (sourceId: string) => void;
 }) {
   const unselected = available.filter((l) => !layers.includes(l));
   const [dragIdx, setDragIdx] = React.useState<number | null>(null);
@@ -220,6 +259,9 @@ function SortableLayerList({
             <Plus size={12} className="mr-[var(--space-1)]" /> All Layers
           </Button>
         )}
+        {copyableMaps.length > 0 && (
+          <LayerImportButton maps={copyableMaps} onCopy={onCopyFromMap} />
+        )}
       </div>
 
       {layers.length === 0 && unselected.length === 0 && (
@@ -235,16 +277,97 @@ function SortableLayerList({
    Main component
    ------------------------------------------------------------------ */
 
-export function ProjectMaps() {
+export interface ActiveMapLayer {
+  name: string;
+  color: string;
+  sourceFiles: string[];
+  sourceValues: string[];
+}
+
+export interface ActiveMapInfo {
+  layers: ActiveMapLayer[];
+}
+
+interface StoredLayer {
+  name?: string;
+  color?: string;
+  sourceFiles?: string[];
+  sourceValues?: string[];
+}
+
+export function ProjectMaps({
+  onActiveMapChange,
+}: {
+  onActiveMapChange?: (
+    projectId: number | null,
+    info: ActiveMapInfo | null,
+  ) => void;
+} = {}) {
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
 
   const { data, update, status } = useSectionData<MapsData>(projectId, "maps", DEFAULT_MAPS);
+  const { data: layersSection } = useProjectSection(projectId, "layers");
+
+  const storedLayers = React.useMemo<StoredLayer[]>(() => {
+    const raw = (layersSection?.data as { layers?: StoredLayer[] } | undefined)?.layers;
+    return Array.isArray(raw) ? raw : [];
+  }, [layersSection]);
+
+  const layerByName = React.useMemo(() => {
+    const m = new Map<string, StoredLayer>();
+    for (const l of storedLayers) {
+      if (typeof l?.name === "string" && l.name.trim()) m.set(l.name.trim(), l);
+    }
+    return m;
+  }, [storedLayers]);
+
+  const availableLayers = React.useMemo<string[]>(
+    () => Array.from(layerByName.keys()),
+    [layerByName],
+  );
 
   const maps = data.maps;
   const activeId = data.activeId || maps[0]?.id || "";
 
   const activeMap = maps.find((m) => m.id === activeId) ?? maps[0];
+
+  // Publish the resolved, ordered layer list to the parent for viewport
+  // rendering. Layer names that no longer resolve (e.g. renamed/deleted in
+  // the Layers page) are dropped silently.
+  const resolvedLayers = React.useMemo<ActiveMapLayer[]>(() => {
+    const out: ActiveMapLayer[] = [];
+    for (const name of activeMap?.layers ?? []) {
+      const stored = layerByName.get(name);
+      if (!stored) continue;
+      out.push({
+        name,
+        color: typeof stored.color === "string" ? stored.color : "#888888",
+        sourceFiles: Array.isArray(stored.sourceFiles) ? stored.sourceFiles : [],
+        sourceValues: Array.isArray(stored.sourceValues) ? stored.sourceValues : [],
+      });
+    }
+    return out;
+  }, [activeMap, layerByName]);
+
+  const resolvedKey = React.useMemo(
+    () =>
+      resolvedLayers
+        .map(
+          (l) =>
+            `${l.name}|${l.color}|${l.sourceFiles.join(",")}|${l.sourceValues.join(",")}`,
+        )
+        .join("||"),
+    [resolvedLayers],
+  );
+
+  React.useEffect(() => {
+    onActiveMapChange?.(
+      projectId,
+      resolvedLayers.length > 0 ? { layers: resolvedLayers } : null,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, resolvedKey, onActiveMapChange]);
 
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [editValue, setEditValue] = React.useState("");
@@ -366,15 +489,22 @@ export function ProjectMaps() {
       {/* Layers */}
       <SortableLayerList
         layers={activeMap.layers}
-        available={DUMMY_AVAILABLE_LAYERS}
+        available={availableLayers}
+        copyableMaps={maps.filter((m) => m.id !== activeId && m.layers.length > 0)}
         onReorder={(layers) => updateMap(activeId, { layers })}
         onAdd={(name) => updateMap(activeId, { layers: [...activeMap.layers, name] })}
         onRemove={(i) =>
           updateMap(activeId, { layers: activeMap.layers.filter((_, idx) => idx !== i) })
         }
         onImportAll={() => {
-          const unselected = DUMMY_AVAILABLE_LAYERS.filter((l) => !activeMap.layers.includes(l));
+          const unselected = availableLayers.filter((l) => !activeMap.layers.includes(l));
           updateMap(activeId, { layers: [...activeMap.layers, ...unselected] });
+        }}
+        onCopyFromMap={(sourceId) => {
+          const source = maps.find((m) => m.id === sourceId);
+          if (!source) return;
+          const toAdd = source.layers.filter((l) => !activeMap.layers.includes(l));
+          updateMap(activeId, { layers: [...activeMap.layers, ...toAdd] });
         }}
       />
     </div>

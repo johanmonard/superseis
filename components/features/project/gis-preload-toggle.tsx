@@ -196,7 +196,14 @@ function useLoadedByteTotal(
       if (event.type === "updated" || event.type === "added" || event.type === "removed") {
         const key = event.query.queryKey as unknown[];
         const root = key[0];
-        if (root === "fileGeoJson" || root === "fileRaw") setTick((t) => t + 1);
+        // Defer the state update: react-query fires this subscription
+        // synchronously during other components' renders (e.g. when a
+        // consumer calls `useQueries` and new cache entries are added),
+        // and calling setState on another component during render trips
+        // React's cross-component update warning.
+        if (root === "fileGeoJson" || root === "fileRaw") {
+          queueMicrotask(() => setTick((t) => t + 1));
+        }
       }
     });
     return () => unsub();
