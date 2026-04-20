@@ -15,9 +15,14 @@ from api.auth import AuthPrincipal, get_current_user
 from api.db.engine import get_db
 from api.db.models import Project
 from api.dojo import get_dojo_project_service
+from api.routes.project_sections import (
+    _heal_typed_layers,
+    _heal_typed_mappers,
+    _rebuild_typed_grid_design_def,
+)
 
 from dojo.v3.adapters.v3_runner import V3Runner
-from dojo.v3.domain.pipeline import STEP_ORDER, Step, StepStatus
+from dojo.v3.domain.pipeline import STEP_ORDER, Step, StepStatus, steps_in_closure
 from dojo.v3.services.pipeline_service import PipelineService
 from dojo.v3.services.project_service import ProjectNotFoundError, ProjectService
 
@@ -145,6 +150,19 @@ async def run_step(
     await _get_project_for_user(project_id, principal, db)
     pipeline_svc = _get_pipeline_service(dojo_svc)
 
+    # Reconcile typed cfg.layers from layers_ui before running any step.
+    # Legacy projects saved before the bridge existed would otherwise trip
+    # the layers step into a no-op, and upstream steps benefit from an
+    # up-to-date typed config too.
+    try:
+        cfg = dojo_svc.get_config(project_id)
+        _heal_typed_layers(cfg, cfg.layers_ui or {}, dojo_svc, project_id)
+        _heal_typed_mappers(cfg, cfg.maps_ui or {}, dojo_svc, project_id)
+        if _rebuild_typed_grid_design_def(cfg):
+            cfg.save(str(dojo_svc.get_project_dir(project_id) / "config.json"))
+    except ProjectNotFoundError:
+        pass
+
     progress_key = f"{project_id}:{step_name}"
 
     # If already running, return current status
@@ -193,6 +211,172 @@ async def run_step(
     return StepRunResponse(
         step=step_name, status="running", error=None, messages=["Step started"],
     )
+
+
+@router.post("/run-closure/{step_name}")
+async def run_step_closure(
+    project_id: int,
+    step_name: str,
+    principal: AuthPrincipal = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    dojo_svc: ProjectService = Depends(get_dojo_project_service),
+) -> dict[str, Any]:
+    """Run a step plus every dirty upstream step in topological order.
+
+    Callers poll ``/pipeline/progress-closure/{step_name}`` for incremental
+    updates. The endpoint returns 202-equivalent immediately — the actual
+    work happens in a background thread so the request doesn't block.
+    """
+    if step_name not in VALID_STEPS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid step '{step_name}'. Valid: {sorted(VALID_STEPS)}",
+        )
+    await _get_project_for_user(project_id, principal, db)
+    pipeline_svc = _get_pipeline_service(dojo_svc)
+
+    # Reconcile typed config blobs from the UI sections so the first run on
+    # a legacy project produces real artifacts.
+    try:
+        cfg = dojo_svc.get_config(project_id)
+        _heal_typed_layers(cfg, cfg.layers_ui or {}, dojo_svc, project_id)
+        _heal_typed_mappers(cfg, cfg.maps_ui or {}, dojo_svc, project_id)
+        if _rebuild_typed_grid_design_def(cfg):
+            cfg.save(str(dojo_svc.get_project_dir(project_id) / "config.json"))
+    except ProjectNotFoundError:
+        pass
+
+    target_step = Step(step_name)
+    progress_key = f"{project_id}:closure:{step_name}"
+
+    # If a closure run is already in progress for this target, just return
+    # its current state — idempotent for the UI polling loop.
+    existing = _step_progress.get(progress_key)
+    if existing and not existing["done"]:
+        return _serialize_closure(existing)
+
+    # Resolve dirty upstream + the target itself, preserving topological
+    # order from STEP_ORDER.
+    try:
+        plan = pipeline_svc.plan(project_id)
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="Dojo project not found")
+    closure_set = set(steps_in_closure([target_step]))
+    plan_by_step = {sp.step: sp for sp in plan.steps}
+    steps_to_run: list[Step] = []
+    for step in STEP_ORDER:
+        if step not in closure_set:
+            continue
+        sp = plan_by_step.get(step)
+        # Always run the target (even if clean) so the viewport reflects
+        # the current config; otherwise only run dirty steps.
+        if step == target_step or (sp is not None and sp.needs_run):
+            steps_to_run.append(step)
+
+    state: dict[str, Any] = {
+        "target": step_name,
+        "steps": [
+            {
+                "step": s.value,
+                "status": "pending",
+                "fraction": 0.0,
+                "message": "",
+                "messages": [],
+                "error": None,
+            }
+            for s in steps_to_run
+        ],
+        "current_index": 0,
+        "done": False,
+        "error": None,
+    }
+    _step_progress[progress_key] = state
+
+    if not steps_to_run:
+        state["done"] = True
+        return _serialize_closure(state)
+
+    def run_in_thread():
+        for idx, step in enumerate(steps_to_run):
+            state["current_index"] = idx
+            entry = state["steps"][idx]
+            entry["status"] = "running"
+
+            def cb(frac: float, msg: str, _entry=entry) -> None:
+                _entry["fraction"] = frac
+                _entry["message"] = msg
+                _entry["messages"].append(f"[{frac:.0%}] {msg}")
+
+            try:
+                manifest = pipeline_svc.run_step(project_id, step, cb)
+                if manifest.status == StepStatus.FAILED:
+                    entry["status"] = "failed"
+                    entry["error"] = manifest.error or "Step failed"
+                    state["error"] = f"{step.value}: {entry['error']}"
+                    # Skip remaining steps on failure
+                    for j in range(idx + 1, len(state["steps"])):
+                        state["steps"][j]["status"] = "skipped"
+                    break
+                entry["status"] = "completed"
+                entry["fraction"] = 1.0
+            except ProjectNotFoundError:
+                entry["status"] = "failed"
+                entry["error"] = "Dojo project not found"
+                state["error"] = entry["error"]
+                break
+            except Exception as exc:  # pragma: no cover — surface unexpected errors
+                entry["status"] = "failed"
+                entry["error"] = str(exc)
+                state["error"] = f"{step.value}: {entry['error']}"
+                break
+        state["done"] = True
+
+    threading.Thread(target=run_in_thread, daemon=True).start()
+    return _serialize_closure(state)
+
+
+@router.get("/progress-closure/{step_name}")
+async def get_closure_progress(
+    project_id: int,
+    step_name: str,
+    principal: AuthPrincipal = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Poll progress of a closure run."""
+    progress_key = f"{project_id}:closure:{step_name}"
+    p = _step_progress.get(progress_key)
+    if p is None:
+        return {
+            "target": step_name,
+            "steps": [],
+            "current_index": 0,
+            "done": False,
+            "error": None,
+            "running": False,
+        }
+    return _serialize_closure(p)
+
+
+def _serialize_closure(state: dict[str, Any]) -> dict[str, Any]:
+    """Copy the shared state into a response-safe dict."""
+    return {
+        "target": state["target"],
+        "steps": [
+            {
+                "step": s["step"],
+                "status": s["status"],
+                "fraction": s["fraction"],
+                "message": s["message"],
+                "messages": list(s["messages"]),
+                "error": s["error"],
+            }
+            for s in state["steps"]
+        ],
+        "current_index": state["current_index"],
+        "done": state["done"],
+        "error": state["error"],
+        "running": not state["done"],
+    }
 
 
 @router.get("/progress/{step_name}")
@@ -256,6 +440,29 @@ async def reset_pipeline(
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="Dojo project not found")
     return {"status": "reset"}
+
+
+@router.post("/reset/{step_name}")
+async def reset_pipeline_step(
+    project_id: int,
+    step_name: str,
+    principal: AuthPrincipal = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    dojo_svc: ProjectService = Depends(get_dojo_project_service),
+) -> dict[str, str]:
+    """Reset a single step's manifest so that step (and its dependents) is dirty."""
+    if step_name not in VALID_STEPS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid step '{step_name}'. Valid: {sorted(VALID_STEPS)}",
+        )
+    await _get_project_for_user(project_id, principal, db)
+    pipeline_svc = _get_pipeline_service(dojo_svc)
+    try:
+        pipeline_svc.reset_step_manifest(project_id, Step(step_name))
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="Dojo project not found")
+    return {"status": "reset", "step": step_name}
 
 
 @router.get("/step-config/{step_name}", response_model=PipelineConfigResponse)

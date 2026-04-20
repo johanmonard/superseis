@@ -175,7 +175,7 @@ export default function SurveyPage() {
         filename,
         style: saved
           ? { color: saved.color, width: saved.width, opacity: saved.opacity ?? 0.8, filled: false, visible: true }
-          : { color: PALETTE[idx % PALETTE.length], width: 6, opacity: 0.8, filled: false, visible: true },
+          : { color: PALETTE[idx % PALETTE.length], width: 2, opacity: 0.8, filled: false, visible: true },
       });
       idx++;
     }

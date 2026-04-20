@@ -41,6 +41,7 @@ export const navigation: NavigationItem[] = [
       { label: "OSM info", href: "/demo/osm-info", icon: "mapPin" },
       { label: "Animate 3D", href: "/demo/animate", icon: "activity" },
       { label: "Workflow", href: "/demo/workflow", icon: "blocks" },
+      { label: "Raster", href: "/demo/raster", icon: "grid" },
     ],
   },
   {

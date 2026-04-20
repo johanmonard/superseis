@@ -52,6 +52,13 @@ function osmEditsForOsmFile(osmName: string): string | null {
    Types
    ------------------------------------------------------------------ */
 
+export type LayerSourceCategory = "polygons" | "gis_layers";
+
+const SOURCE_LABELS: Record<LayerSourceCategory, string> = {
+  polygons: "Polygons",
+  gis_layers: "Terrain models",
+};
+
 interface LayerConfig {
   id: string;
   name: string;
@@ -59,7 +66,7 @@ interface LayerConfig {
   code: number;
   buffer: string;
   color: string;
-  from: string;
+  from: LayerSourceCategory;
   sourceFiles: string[];
   sourceField: string;
   sourceValues: string[];
@@ -77,7 +84,7 @@ function createLayer(code: number): LayerConfig {
     code,
     buffer: "0",
     color: PALETTE[code % PALETTE.length],
-    from: "gis",
+    from: "gis_layers",
     sourceFiles: [],
     sourceField: "fclass",
     sourceValues: [],
@@ -121,7 +128,10 @@ function migrateLayersData(data: LayersData): LayersData {
       used.add(n);
       maxCode = Math.max(maxCode, n);
     }
-    out.push({ ...l, code: n ?? -1 }); // temp -1, filled below
+    // Legacy `from: "gis"` (and anything unrecognised) collapses to
+    // gis_layers — that was the only source before polygons were added.
+    const from: LayerSourceCategory = l.from === "polygons" ? "polygons" : "gis_layers";
+    out.push({ ...l, code: n ?? -1, from }); // temp -1, filled below
   }
 
   // Fill in any unresolved codes with fresh sequential integers.
@@ -384,6 +394,7 @@ function LayerSelector({
 
 export interface ActiveLayerInfo {
   color: string;
+  sourceCategory: LayerSourceCategory;
   sourceFiles: string[];
   sourceValues: string[];
 }
@@ -412,10 +423,6 @@ export function ProjectLayers({
   const update = rawUpdate;
 
   const { data: projectFiles } = useProjectFiles(projectId);
-  const availableOsmLayers = React.useMemo(
-    () => (projectFiles?.gis_layers ?? []).map((f) => f.replace(/\.gpkg$/, "")),
-    [projectFiles?.gis_layers],
-  );
 
   const layers = data.layers;
   const activeId = data.activeId || layers[0]?.id || "";
@@ -432,11 +439,12 @@ export function ProjectLayers({
     }
     onActiveLayerChange?.(projectId, {
       color: activeLayer.color,
+      sourceCategory: activeLayer.from,
       sourceFiles: activeLayer.sourceFiles,
       sourceValues: activeLayer.sourceValues,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, activeLayer?.color, sourceFilesKey, sourceValuesKey, onActiveLayerChange]);
+  }, [projectId, activeLayer?.color, activeLayer?.from, sourceFilesKey, sourceValuesKey, onActiveLayerChange]);
 
   const updateLayer = React.useCallback(
     (id: string, patch: Partial<LayerConfig>) => {
@@ -476,8 +484,15 @@ export function ProjectLayers({
     [data, update],
   );
 
+  // Files available for the current source category.
+  const availableSourceFiles = React.useMemo(
+    () => (projectFiles?.[activeLayer.from] ?? []).map((f) => f.replace(/\.gpkg$/, "")),
+    [projectFiles, activeLayer.from],
+  );
+
   // User-facing source files: hide the osm_edits companions (they travel in
-  // the persisted payload but are implementation detail).
+  // the persisted payload but are implementation detail). Only applicable to
+  // the gis_layers source.
   const visibleSourceFiles = React.useMemo(
     () => activeLayer.sourceFiles.filter((f) => !f.startsWith("osm_edits_")),
     [activeLayer.sourceFiles]
@@ -488,12 +503,15 @@ export function ProjectLayers({
   // excluded — they don't contribute to the Source Value list.
   const sourceFileRefs = React.useMemo(() => {
     return visibleSourceFiles.map((stem) => {
-      const category: FileCategory = stem.startsWith("osm_edits_")
-        ? "osm_edits"
-        : "gis_layers";
+      const category: FileCategory =
+        activeLayer.from === "polygons"
+          ? "polygons"
+          : stem.startsWith("osm_edits_")
+            ? "osm_edits"
+            : "gis_layers";
       return { category, filename: `${stem}.gpkg` };
     });
-  }, [visibleSourceFiles]);
+  }, [visibleSourceFiles, activeLayer.from]);
 
   const distinctQueries = useQueries({
     queries: sourceFileRefs.map((ref) => ({
@@ -572,38 +590,60 @@ export function ProjectLayers({
       </Field>
 
       <Field label="Source" htmlFor="lay-source" layout="horizontal">
-        <Input
+        <Select
           id="lay-source"
           value={activeLayer.from}
-          readOnly
-          className="bg-[var(--color-bg-elevated)]"
-        />
+          onChange={(e) => {
+            const next = e.target.value as LayerSourceCategory;
+            if (next === activeLayer.from) return;
+            // Source categories have incompatible file sets and value
+            // domains; clear both so stale selections don't leak over.
+            updateLayer(activeLayer.id, {
+              from: next,
+              sourceFiles: [],
+              sourceValues: [],
+            });
+          }}
+        >
+          {(Object.keys(SOURCE_LABELS) as LayerSourceCategory[]).map((k) => (
+            <option key={k} value={k}>
+              {SOURCE_LABELS[k]}
+            </option>
+          ))}
+        </Select>
       </Field>
 
       <Field label="Source Files" layout="horizontal">
         <TagSelect
           selected={visibleSourceFiles}
-          available={availableOsmLayers.filter((f) => !visibleSourceFiles.includes(f))}
+          available={availableSourceFiles.filter((f) => !visibleSourceFiles.includes(f))}
           onAdd={(v) => {
             const next = [...activeLayer.sourceFiles, v];
-            const osmEdits = osmEditsForOsmFile(v);
-            if (osmEdits && !next.includes(osmEdits)) next.push(osmEdits);
+            if (activeLayer.from === "gis_layers") {
+              const osmEdits = osmEditsForOsmFile(v);
+              if (osmEdits && !next.includes(osmEdits)) next.push(osmEdits);
+            }
             updateLayer(activeLayer.id, { sourceFiles: next });
           }}
           onRemove={(i) => {
             const removed = visibleSourceFiles[i];
             const next = activeLayer.sourceFiles.filter((f) => f !== removed);
-            // Drop any osm_edits companion no longer referenced by a remaining gis_osm file
-            const stillNeeded = new Set(
-              next
-                .filter((f) => !f.startsWith("osm_edits_"))
-                .map((f) => osmEditsForOsmFile(f))
-                .filter((e): e is string => Boolean(e))
-            );
-            const pruned = next.filter(
-              (f) => !f.startsWith("osm_edits_") || stillNeeded.has(f)
-            );
-            updateLayer(activeLayer.id, { sourceFiles: pruned });
+            if (activeLayer.from === "gis_layers") {
+              // Drop any osm_edits companion no longer referenced by a
+              // remaining gis_osm file.
+              const stillNeeded = new Set(
+                next
+                  .filter((f) => !f.startsWith("osm_edits_"))
+                  .map((f) => osmEditsForOsmFile(f))
+                  .filter((e): e is string => Boolean(e))
+              );
+              const pruned = next.filter(
+                (f) => !f.startsWith("osm_edits_") || stillNeeded.has(f)
+              );
+              updateLayer(activeLayer.id, { sourceFiles: pruned });
+            } else {
+              updateLayer(activeLayer.id, { sourceFiles: next });
+            }
           }}
           label="Source File"
         />

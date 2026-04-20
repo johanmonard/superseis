@@ -288,6 +288,95 @@ const DEM_PREVIEW_SOURCE_ID = "dem-preview-source";
 const DEM_PREVIEW_FILL_LAYER = "dem-preview-fill";
 const DEM_PREVIEW_LINE_LAYER = "dem-preview-line";
 
+// Measure tool — a polyline (segments) and circles (vertices) painted while
+// the measure mode is active. Managed entirely inside the mode effect so the
+// layers disappear when the tool is turned off.
+const MEASURE_SOURCE_ID = "measure-source";
+const MEASURE_FILL_LAYER = "measure-fill";
+const MEASURE_LINE_LAYER = "measure-line";
+const MEASURE_POINTS_LAYER = "measure-points";
+
+// Pretty-print a meter value. Sub-kilometer distances read as whole meters,
+// anything larger switches to km with one decimal.
+function formatMeters(meters: number): string {
+  if (!Number.isFinite(meters) || meters <= 0) return "0 m";
+  if (meters < 1000) return `${Math.round(meters)} m`;
+  return `${(meters / 1000).toFixed(meters < 10000 ? 2 : 1)} km`;
+}
+
+// Pretty-print a square-meter value. Sub-hectare values read as whole m²,
+// below 1 km² switches to hectares with one decimal, and larger areas switch
+// to km² with two (or one) decimals.
+function formatSquareMeters(m2: number): string {
+  if (!Number.isFinite(m2) || m2 <= 0) return "0 m\u00B2";
+  if (m2 < 10_000) return `${Math.round(m2)} m\u00B2`;
+  if (m2 < 1_000_000) return `${(m2 / 10_000).toFixed(1)} ha`;
+  const km2 = m2 / 1_000_000;
+  return `${km2.toFixed(km2 < 100 ? 2 : 1)} km\u00B2`;
+}
+
+// Spherical polygon area in square meters (WGS84 sphere, R = 6378137 m).
+// `ring` must be a closed ring: the first and last vertex identical. Signed
+// area's sign depends on winding — take the absolute value for a simple ring.
+function sphericalPolygonArea(ring: ReadonlyArray<[number, number]>): number {
+  if (ring.length < 4) return 0;
+  const R = 6378137;
+  const toRad = Math.PI / 180;
+  let sum = 0;
+  for (let i = 0; i < ring.length - 1; i += 1) {
+    const [lon1, lat1] = ring[i];
+    const [lon2, lat2] = ring[i + 1];
+    sum +=
+      (lon2 - lon1) *
+      toRad *
+      (2 + Math.sin(lat1 * toRad) + Math.sin(lat2 * toRad));
+  }
+  return Math.abs((sum * R * R) / 2);
+}
+
+// Proper-crossing test for two segments in planar lon/lat. Returns true only
+// for true interior crossings — shared endpoints, collinear overlap and
+// touches-but-does-not-cross all return false. That matches the "simple
+// polygon" meaning: two non-adjacent edges must not cross.
+function segmentsProperlyCross(
+  a: [number, number],
+  b: [number, number],
+  c: [number, number],
+  d: [number, number],
+): boolean {
+  const cross = (
+    p: [number, number],
+    q: [number, number],
+    r: [number, number],
+  ) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+  const d1 = cross(c, d, a);
+  const d2 = cross(c, d, b);
+  const d3 = cross(a, b, c);
+  const d4 = cross(a, b, d);
+  return (
+    ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+    ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
+  );
+}
+
+// Closed ring is simple iff no two non-adjacent edges cross. The first and
+// last edges are adjacent in a closed ring, so that pair is skipped too.
+function isSimpleClosedRing(
+  ring: ReadonlyArray<[number, number]>,
+): boolean {
+  const n = ring.length - 1; // edge count
+  if (n < 3) return true;
+  for (let i = 0; i < n; i += 1) {
+    for (let j = i + 2; j < n; j += 1) {
+      if (i === 0 && j === n - 1) continue;
+      if (segmentsProperlyCross(ring[i], ring[i + 1], ring[j], ring[j + 1])) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 const DEFAULT_CENTER: [number, number] = [0, 20];
 const DEFAULT_ZOOM = 1;
 
@@ -2919,6 +3008,54 @@ const GLOBE_CSS = `
   }
   [data-theme="dark"] .glb-cursor-readout__label { color: #94a3b8; }
 
+  .glb-measure-readout {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 4;
+    pointer-events: none;
+    padding: 6px 12px;
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+    backdrop-filter: blur(6px);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    line-height: 1.45;
+    color: #1e293b;
+    user-select: none;
+    white-space: nowrap;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  [data-theme="dark"] .glb-measure-readout {
+    background-color: rgba(15, 23, 42, 0.85);
+    border-color: rgba(255, 255, 255, 0.12);
+    color: #e2e8f0;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  }
+  .glb-measure-readout__row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .glb-measure-readout__label {
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 10px;
+    min-width: 56px;
+  }
+  [data-theme="dark"] .glb-measure-readout__label { color: #94a3b8; }
+  .glb-measure-readout__value {
+    font-weight: 600;
+    font-size: 12px;
+  }
+
   .glb-info-popup {
     position: absolute;
     z-index: 5;
@@ -3314,6 +3451,9 @@ const RECLASSIFY_ICON =
 // Info / Identify: lowercase i in a circle
 const INFO_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="11" x2="12" y2="17"/><circle cx="12" cy="7.5" r="0.5" fill="currentColor"/></svg>';
+// Measure: diagonal ruler with tick marks
+const MEASURE_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l14-14 4 4-14 14z"/><path d="M6 14l2 2"/><path d="M9 11l2 2"/><path d="M12 8l2 2"/><path d="M15 5l2 2"/></svg>';
 // Discard: X mark — cancel/reject changes
 const DISCARD_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>';
@@ -3600,6 +3740,15 @@ export function GisGlobeViewport({
     layer: string;
     properties: Record<string, unknown>;
   } | null>(null);
+  // Measure tool state — click to drop vertices, dblclick to finish, Esc to clear.
+  // Distance is the cumulative great-circle length of all committed segments,
+  // in meters. When a preview segment is pending it is appended to the display.
+  // Area is set when the user closes the polyline into a simple polygon by
+  // clicking on the first vertex; otherwise it stays null.
+  const [measureMode, setMeasureMode] = React.useState(false);
+  const [measureDistance, setMeasureDistance] = React.useState(0);
+  const [measurePending, setMeasurePending] = React.useState(0);
+  const [measureArea, setMeasureArea] = React.useState<number | null>(null);
   const toolbarRef = React.useRef<HTMLDivElement>(null);
   const terrainBtnRef = React.useRef<HTMLButtonElement>(null);
   const demBtnRef = React.useRef<HTMLButtonElement>(null);
@@ -7548,6 +7697,239 @@ export function GisGlobeViewport({
   }, [infoMode, styleReady]);
 
   // ------------------------------------------------------------------
+  // Measure mode — click to add a vertex, dblclick to finish as a line,
+  // click on the first vertex (within 10 px) to close the shape as a
+  // polygon, Esc to clear. Distance is the cumulative great-circle length
+  // of the committed segments in meters; while drawing, a preview segment
+  // from the last vertex to the cursor is appended. When the polygon is
+  // closed and simple (no segment crossings) the surface area is also
+  // reported, computed on the WGS84 sphere.
+  // ------------------------------------------------------------------
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady || !measureMode) {
+      setMeasureDistance(0);
+      setMeasurePending(0);
+      setMeasureArea(null);
+      return;
+    }
+
+    const CLOSE_PIXEL_TOLERANCE = 10;
+    const emptyFc: GeoJSON.FeatureCollection = {
+      type: "FeatureCollection",
+      features: [],
+    };
+
+    map.addSource(MEASURE_SOURCE_ID, { type: "geojson", data: emptyFc });
+    map.addLayer({
+      id: MEASURE_FILL_LAYER,
+      type: "fill",
+      source: MEASURE_SOURCE_ID,
+      filter: ["==", ["geometry-type"], "Polygon"],
+      paint: {
+        "fill-color": "#3b82f6",
+        "fill-opacity": 0.15,
+      },
+    });
+    map.addLayer({
+      id: MEASURE_LINE_LAYER,
+      type: "line",
+      source: MEASURE_SOURCE_ID,
+      filter: [
+        "any",
+        ["==", ["geometry-type"], "LineString"],
+        ["==", ["geometry-type"], "Polygon"],
+      ],
+      paint: {
+        "line-color": "#3b82f6",
+        "line-width": 2,
+        "line-dasharray": [2, 2],
+      },
+    });
+    map.addLayer({
+      id: MEASURE_POINTS_LAYER,
+      type: "circle",
+      source: MEASURE_SOURCE_ID,
+      filter: ["==", ["geometry-type"], "Point"],
+      paint: {
+        "circle-radius": 4,
+        "circle-color": "#ffffff",
+        "circle-stroke-color": "#3b82f6",
+        "circle-stroke-width": 2,
+      },
+    });
+
+    // Committed vertices (mutated by click) and the live cursor position
+    // used for the preview tail segment. When `closed` is true, the last
+    // entry in `coords` equals the first — the ring is complete.
+    const coords: [number, number][] = [];
+    let cursor: [number, number] | null = null;
+    let finished = false;
+    let closed = false;
+
+    const segmentDistance = (a: [number, number], b: [number, number]) => {
+      const la = new maplibregl.LngLat(a[0], a[1]);
+      const lb = new maplibregl.LngLat(b[0], b[1]);
+      return la.distanceTo(lb);
+    };
+
+    const committedDistance = (): number => {
+      let total = 0;
+      for (let i = 1; i < coords.length; i += 1) {
+        total += segmentDistance(coords[i - 1], coords[i]);
+      }
+      return total;
+    };
+
+    const pendingDistance = (): number => {
+      if (finished || !cursor || coords.length === 0) return 0;
+      return segmentDistance(coords[coords.length - 1], cursor);
+    };
+
+    const refreshSource = () => {
+      const src = map.getSource(MEASURE_SOURCE_ID) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      if (!src) return;
+      const features: GeoJSON.Feature[] = [];
+      if (closed && coords.length >= 4) {
+        features.push({
+          type: "Feature",
+          properties: {},
+          geometry: { type: "Polygon", coordinates: [coords] },
+        });
+      } else {
+        const lineCoords: [number, number][] = [...coords];
+        if (!finished && cursor && coords.length > 0) lineCoords.push(cursor);
+        if (lineCoords.length >= 2) {
+          features.push({
+            type: "Feature",
+            properties: {},
+            geometry: { type: "LineString", coordinates: lineCoords },
+          });
+        }
+      }
+      // Keep the raw vertex set visible (first/last coincide when closed —
+      // that's fine, the circles overlap).
+      for (const c of coords) {
+        features.push({
+          type: "Feature",
+          properties: {},
+          geometry: { type: "Point", coordinates: c },
+        });
+      }
+      src.setData({ type: "FeatureCollection", features });
+    };
+
+    const reset = () => {
+      coords.length = 0;
+      cursor = null;
+      finished = false;
+      closed = false;
+      refreshSource();
+      setMeasureDistance(0);
+      setMeasurePending(0);
+      setMeasureArea(null);
+    };
+
+    const isClickOnFirstVertex = (e: maplibregl.MapMouseEvent): boolean => {
+      if (coords.length < 2) return false;
+      const firstPx = map.project(coords[0]);
+      const dx = firstPx.x - e.point.x;
+      const dy = firstPx.y - e.point.y;
+      return Math.hypot(dx, dy) <= CLOSE_PIXEL_TOLERANCE;
+    };
+
+    const onClick = (e: maplibregl.MapMouseEvent) => {
+      // A click after a finished measurement starts a fresh one.
+      if (finished) {
+        coords.length = 0;
+        finished = false;
+        closed = false;
+      }
+
+      // Clicking on (or near) the first vertex closes the ring into a
+      // polygon, if there are at least two other committed vertices so the
+      // resulting polygon has non-zero area.
+      if (coords.length >= 3 && isClickOnFirstVertex(e)) {
+        coords.push([coords[0][0], coords[0][1]]);
+        finished = true;
+        closed = true;
+        refreshSource();
+        setMeasureDistance(committedDistance());
+        setMeasurePending(0);
+        setMeasureArea(
+          isSimpleClosedRing(coords) ? sphericalPolygonArea(coords) : null,
+        );
+        return;
+      }
+
+      coords.push([e.lngLat.lng, e.lngLat.lat]);
+      cursor = [e.lngLat.lng, e.lngLat.lat];
+      refreshSource();
+      setMeasureDistance(committedDistance());
+      setMeasurePending(0);
+      setMeasureArea(null);
+    };
+
+    const onMove = (e: maplibregl.MapMouseEvent) => {
+      cursor = [e.lngLat.lng, e.lngLat.lat];
+      if (finished || coords.length === 0) return;
+      refreshSource();
+      setMeasurePending(pendingDistance());
+    };
+
+    const onDblClick = (e: maplibregl.MapMouseEvent) => {
+      e.preventDefault();
+      if (finished) return;
+      // MapLibre fires click→click→dblclick for a double click, so the
+      // second click has already added a duplicate vertex at the same
+      // location. Drop it so the double-click only commits.
+      if (coords.length >= 2) {
+        const last = coords[coords.length - 1];
+        const prev = coords[coords.length - 2];
+        if (last[0] === prev[0] && last[1] === prev[1]) coords.pop();
+      }
+      finished = true;
+      refreshSource();
+      setMeasureDistance(committedDistance());
+      setMeasurePending(0);
+    };
+
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") reset();
+    };
+
+    const dblZoomWasEnabled = map.doubleClickZoom.isEnabled();
+    map.doubleClickZoom.disable();
+
+    map.on("click", onClick);
+    map.on("mousemove", onMove);
+    map.on("dblclick", onDblClick);
+    window.addEventListener("keydown", onKey);
+
+    const canvas = map.getCanvas();
+    canvas.style.cursor = "crosshair";
+
+    return () => {
+      map.off("click", onClick);
+      map.off("mousemove", onMove);
+      map.off("dblclick", onDblClick);
+      window.removeEventListener("keydown", onKey);
+      canvas.style.cursor = "";
+      if (dblZoomWasEnabled) map.doubleClickZoom.enable();
+      for (const layerId of [
+        MEASURE_POINTS_LAYER,
+        MEASURE_LINE_LAYER,
+        MEASURE_FILL_LAYER,
+      ]) {
+        if (map.getLayer(layerId)) map.removeLayer(layerId);
+      }
+      if (map.getSource(MEASURE_SOURCE_ID)) map.removeSource(MEASURE_SOURCE_ID);
+    };
+  }, [measureMode, styleReady]);
+
+  // ------------------------------------------------------------------
   // DEM overlay: read the selected .tif client-side, render it as a
   // hypsometric-tinted PNG and add it as an `image` source covering the
   // file's actual bbox. The .tif is in EPSG:3857 (Web Mercator) so we
@@ -8329,6 +8711,12 @@ export function GisGlobeViewport({
           active={infoMode}
           onClick={() => setInfoMode((v) => !v)}
         />
+        <ToolbarButton
+          title={measureMode ? "Stop measuring" : "Measure distance (click to add points, double-click to finish, Esc to reset)"}
+          icon={MEASURE_ICON}
+          active={measureMode}
+          onClick={() => setMeasureMode((v) => !v)}
+        />
         <ToolbarGroup
           icon={ADD_GROUP_ICON}
           title="Add features"
@@ -9051,6 +9439,27 @@ export function GisGlobeViewport({
               {cursorReadout.alt != null
                 ? `${Math.round(cursorReadout.alt)} m`
                 : "—"}
+            </div>
+          )}
+        </div>
+      )}
+
+      {measureMode && (
+        <div className="glb-measure-readout">
+          <div className="glb-measure-readout__row">
+            <span className="glb-measure-readout__label">
+              {measureArea != null ? "Perimeter" : "Distance"}
+            </span>
+            <span className="glb-measure-readout__value">
+              {formatMeters(measureDistance + measurePending)}
+            </span>
+          </div>
+          {measureArea != null && (
+            <div className="glb-measure-readout__row">
+              <span className="glb-measure-readout__label">Area</span>
+              <span className="glb-measure-readout__value">
+                {formatSquareMeters(measureArea)}
+              </span>
             </div>
           )}
         </div>

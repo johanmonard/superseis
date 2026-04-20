@@ -20,6 +20,8 @@ import {
 import { ErrorBoundary } from "../../components/ui/error-boundary";
 import { useAuthSession } from "../../lib/use-auth-session";
 import { useWorkspaceSidebar } from "../../lib/use-workspace-sidebar";
+import { PipelineReportProvider } from "../../lib/use-pipeline-report";
+import { PipelineReportDrawer } from "../../components/layout/pipeline-report-drawer";
 
 const isAuthStub = !process.env.NEXT_PUBLIC_AUTH_PROVIDER;
 
@@ -75,6 +77,23 @@ export default function WorkspaceRouteLayout({
     }
   }, [isAdminRoute, isLoading, router, session]);
 
+  // On a browser hard reload (F5 / Ctrl+R / address bar Enter), send the
+  // user back to the workspace home instead of re-rendering the current
+  // page. Fires once per tab load; client-side route changes stay intact.
+  const didRedirectRef = React.useRef(false);
+  React.useEffect(() => {
+    if (didRedirectRef.current) return;
+    didRedirectRef.current = true;
+    if (typeof window === "undefined") return;
+    const entries = performance.getEntriesByType(
+      "navigation",
+    ) as PerformanceNavigationTiming[];
+    const isReload = entries[0]?.type === "reload";
+    if (isReload && pathname !== "/") {
+      router.replace("/");
+    }
+  }, [pathname, router]);
+
   const visibleNavigation = React.useMemo(() => {
     const released = filterNavigationForWorkspaceRelease(navigation);
     return released.filter((item) => !(item.adminOnly && !session?.is_admin));
@@ -96,31 +115,34 @@ export default function WorkspaceRouteLayout({
   }
 
   return (
-    <WorkspaceLayout
-      sidebarWidth={isSidebarCollapsed ? "collapsed" : "default"}
-      mainClassName="grid h-screen grid-rows-[minmax(0,1fr)]"
-      sidebar={
-        <WorkspaceSidebarNav
-          navigation={visibleNavigation}
-          isCollapsed={isSidebarCollapsed}
-          onToggleCollapsed={setIsSidebarCollapsed}
-          brandInitials={appConfig.initials}
-          brandName={appConfig.name}
-          brandTagline={appConfig.tagline}
-          showAuthStubBanner={isAuthStub}
-        />
-      }
-    >
-      <div className="flex h-full min-h-0 flex-col gap-4 lg:gap-6">
-        <WorkspacePageHeader
-          session={session}
-          pageTitle={pageIdentity?.title}
-          pageSubtitle={pageIdentity?.subtitle}
-        />
-        <ErrorBoundary>
-          <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
-        </ErrorBoundary>
-      </div>
-    </WorkspaceLayout>
+    <PipelineReportProvider>
+      <WorkspaceLayout
+        sidebarWidth={isSidebarCollapsed ? "collapsed" : "default"}
+        mainClassName="grid h-screen grid-rows-[minmax(0,1fr)]"
+        sidebar={
+          <WorkspaceSidebarNav
+            navigation={visibleNavigation}
+            isCollapsed={isSidebarCollapsed}
+            onToggleCollapsed={setIsSidebarCollapsed}
+            brandInitials={appConfig.initials}
+            brandName={appConfig.name}
+            brandTagline={appConfig.tagline}
+            showAuthStubBanner={isAuthStub}
+          />
+        }
+      >
+        <div className="flex h-full min-h-0 flex-col gap-4 lg:gap-6">
+          <WorkspacePageHeader
+            session={session}
+            pageTitle={pageIdentity?.title}
+            pageSubtitle={pageIdentity?.subtitle}
+          />
+          <ErrorBoundary>
+            <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
+          </ErrorBoundary>
+        </div>
+      </WorkspaceLayout>
+      <PipelineReportDrawer />
+    </PipelineReportProvider>
   );
 }

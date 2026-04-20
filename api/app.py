@@ -75,7 +75,9 @@ from api.routes.project import router as project_router
 from api.routes.project_files import router as project_files_router
 from api.routes.project_layers import router as project_layers_router
 from api.routes.project_osm import router as project_osm_router
+from api.routes.project_grid_artifacts import router as project_grid_artifacts_router
 from api.routes.project_pipeline import router as project_pipeline_router
+from api.routes.project_rasters import router as project_rasters_router
 from api.routes.project_sections import router as project_sections_router
 
 
@@ -90,7 +92,9 @@ app.include_router(project_router)
 app.include_router(project_files_router)
 app.include_router(project_layers_router)
 app.include_router(project_osm_router)
+app.include_router(project_grid_artifacts_router)
 app.include_router(project_pipeline_router)
+app.include_router(project_rasters_router)
 app.include_router(project_sections_router)
 
 

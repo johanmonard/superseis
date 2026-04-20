@@ -124,6 +124,62 @@ export function resetPipeline(
   )
 }
 
+export function resetPipelineStep(
+  projectId: number,
+  stepName: string,
+): Promise<{ status: string; step: string }> {
+  return requestJson<{ status: string; step: string }>(
+    `/project/${projectId}/pipeline/reset/${stepName}`,
+    { method: 'POST' },
+  )
+}
+
+export type ClosureStepStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+
+export interface ClosureStepProgress {
+  step: string
+  status: ClosureStepStatus
+  fraction: number
+  message: string
+  messages: string[]
+  error: string | null
+}
+
+export interface ClosureProgress {
+  target: string
+  steps: ClosureStepProgress[]
+  current_index: number
+  done: boolean
+  error: string | null
+  running: boolean
+}
+
+export function runPipelineStepClosure(
+  projectId: number,
+  stepName: string,
+): Promise<ClosureProgress> {
+  return requestJson<ClosureProgress>(
+    `/project/${projectId}/pipeline/run-closure/${stepName}`,
+    { method: 'POST' },
+  )
+}
+
+export function fetchClosureProgress(
+  projectId: number,
+  stepName: string,
+  signal?: AbortSignal,
+): Promise<ClosureProgress> {
+  return requestJson<ClosureProgress>(
+    `/project/${projectId}/pipeline/progress-closure/${stepName}`,
+    { signal },
+  )
+}
+
 export function setActiveOption(
   projectId: number,
   section: string,

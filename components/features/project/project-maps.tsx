@@ -277,9 +277,12 @@ function SortableLayerList({
    Main component
    ------------------------------------------------------------------ */
 
+export type ActiveMapLayerSource = "polygons" | "gis_layers";
+
 export interface ActiveMapLayer {
   name: string;
   color: string;
+  sourceCategory: ActiveMapLayerSource;
   sourceFiles: string[];
   sourceValues: string[];
 }
@@ -291,6 +294,7 @@ export interface ActiveMapInfo {
 interface StoredLayer {
   name?: string;
   color?: string;
+  from?: string;
   sourceFiles?: string[];
   sourceValues?: string[];
 }
@@ -343,6 +347,7 @@ export function ProjectMaps({
       out.push({
         name,
         color: typeof stored.color === "string" ? stored.color : "#888888",
+        sourceCategory: stored.from === "polygons" ? "polygons" : "gis_layers",
         sourceFiles: Array.isArray(stored.sourceFiles) ? stored.sourceFiles : [],
         sourceValues: Array.isArray(stored.sourceValues) ? stored.sourceValues : [],
       });
@@ -355,7 +360,7 @@ export function ProjectMaps({
       resolvedLayers
         .map(
           (l) =>
-            `${l.name}|${l.color}|${l.sourceFiles.join(",")}|${l.sourceValues.join(",")}`,
+            `${l.name}|${l.color}|${l.sourceCategory}|${l.sourceFiles.join(",")}|${l.sourceValues.join(",")}`,
         )
         .join("||"),
     [resolvedLayers],

@@ -322,7 +322,7 @@ interface OsmPanelData {
   marginLeft: string;
   marginRight: string;
   marginBottom: string;
-  rlAngle: string;
+  rlAzimuth: string;
   skipIfExists: boolean;
   selectedLayers: string[];
   availableLayers: string[];
@@ -334,7 +334,7 @@ const DEFAULT_OSM_PANEL: OsmPanelData = {
   marginLeft: "1000",
   marginRight: "1000",
   marginBottom: "1000",
-  rlAngle: "0",
+  rlAzimuth: "0",
   skipIfExists: true,
   selectedLayers: [],
   availableLayers: [],
@@ -389,13 +389,13 @@ function OsmDownloadPanel({
         right: Number(osmData.marginRight) || 0,
         bottom: Number(osmData.marginBottom) || 0,
       },
-      azimuth: Number(osmData.rlAngle) || 0,
+      azimuth: Number(osmData.rlAzimuth) || 0,
     });
   }, [
     onViewportChange, osmData.refPolygon,
     osmData.marginTop, osmData.marginLeft,
     osmData.marginRight, osmData.marginBottom,
-    osmData.rlAngle,
+    osmData.rlAzimuth,
   ]);
 
   // Workflow state
@@ -426,7 +426,7 @@ function OsmDownloadPanel({
       right: Number(osmData.marginRight) || 0,
       bottom: Number(osmData.marginBottom) || 0,
     };
-    const rect = computeMarginRect(geojson.features, margins, Number(osmData.rlAngle) || 0);
+    const rect = computeMarginRect(geojson.features, margins, Number(osmData.rlAzimuth) || 0);
     if (!rect) return false;
     // 3. Build a GPKG with the rectangle polygon
     const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
@@ -443,7 +443,7 @@ function OsmDownloadPanel({
     // 4. Save to disk
     await saveProjectFileRaw(projectId, "polygons", CLIPPING_FILE, bytes.buffer as ArrayBuffer);
     return true;
-  }, [projectId, osmData.refPolygon, osmData.marginTop, osmData.marginLeft, osmData.marginRight, osmData.marginBottom, osmData.rlAngle]);
+  }, [projectId, osmData.refPolygon, osmData.marginTop, osmData.marginLeft, osmData.marginRight, osmData.marginBottom, osmData.rlAzimuth]);
 
   const handleDownload = React.useCallback(async () => {
     if (!projectId || !canDownload) return;
@@ -566,8 +566,8 @@ function OsmDownloadPanel({
               onLeftChange={(v) => updateOsm({ ...osmData, marginLeft: v })}
               onRightChange={(v) => updateOsm({ ...osmData, marginRight: v })}
               onBottomChange={(v) => updateOsm({ ...osmData, marginBottom: v })}
-              azimuth={Number(osmData.rlAngle) || 0}
-              onAzimuthChange={(v) => updateOsm({ ...osmData, rlAngle: String(v) })}
+              azimuth={Number(osmData.rlAzimuth) || 0}
+              onAzimuthChange={(v) => updateOsm({ ...osmData, rlAzimuth: String(v) })}
             />
           </div>
         </Field>

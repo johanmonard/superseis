@@ -5,12 +5,14 @@ import { appIcons } from "@/components/ui/icon";
 
 import { Button } from "@/components/ui/button";
 
-const { alertTriangle: AlertTriangle, check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
+const { alertTriangle: AlertTriangle, check: Check, pencil: Pencil, play: Play, plus: Plus, trash: Trash2, x: X } = appIcons;
 import { CoordinateInput } from "@/components/ui/coordinate-input";
 import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
+import { Icon } from "@/components/ui/icon";
 import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
+import { usePipelineReport } from "@/lib/use-pipeline-report";
 import { cn } from "@/lib/utils";
 import { useProjectSection } from "@/services/query/project-sections";
 
@@ -197,7 +199,7 @@ export function ProjectDesignOptions() {
     return map;
   }, [partitioningGroups]);
 
-  const { data, update } = useSectionData<DesignOptionsData>(projectId, "design_options", DEFAULT_DESIGN_OPTIONS);
+  const { data, update, flush } = useSectionData<DesignOptionsData>(projectId, "design_options", DEFAULT_DESIGN_OPTIONS);
   const options = data.options;
   const activeId = data.activeId || options[0]?.id || "";
 
@@ -318,8 +320,60 @@ export function ProjectDesignOptions() {
     setEditingId(null);
   };
 
+  const { state: pipelineState, startClosure } = usePipelineReport();
+  const gridRunning =
+    pipelineState.kind === "running" && pipelineState.target === "grid";
+
+  const handleShowGrid = React.useCallback(async () => {
+    if (!projectId || gridRunning) return;
+    // Autosave is debounced 2 s — if the user edits the option and clicks
+    // Show grid within that window, the closure would fire against stale
+    // server state and produce a grid for the previous selection. Flush
+    // the pending write before kicking off the pipeline.
+    await flush();
+    startClosure(projectId, "grid");
+  }, [projectId, gridRunning, flush, startClosure]);
+
+  // Auto-re-run the grid when the user picks a different option — the
+  // parquets on disk belong to whichever option was previously active, so
+  // leaving them stale would mislead the viewport. Skip the very first
+  // render (initial activeId load) to avoid running on page mount.
+  const lastRunOptionRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!projectId) return;
+    if (!activeId) return;
+    if (lastRunOptionRef.current === null) {
+      // First observed activeId; seed the ref and skip auto-run so we
+      // only trigger on subsequent user-driven switches.
+      lastRunOptionRef.current = activeId;
+      return;
+    }
+    if (lastRunOptionRef.current === activeId) return;
+    lastRunOptionRef.current = activeId;
+    if (gridRunning) return;
+    void handleShowGrid();
+  }, [projectId, activeId, gridRunning, handleShowGrid]);
+
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
+      {/* Grid trigger — runs the grid step (+ all dirty upstream) so the
+          viewport can show the theoretical stations produced by the active
+          option. Progress surfaces in the bottom drawer. */}
+      <div className="flex items-center justify-end">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={handleShowGrid}
+          disabled={!projectId || gridRunning}
+        >
+          {gridRunning ? (
+            <Icon icon={appIcons.loader} size={12} className="mr-[var(--space-1)] animate-spin" />
+          ) : (
+            <Play size={12} className="mr-[var(--space-1)]" />
+          )}
+          Show grid
+        </Button>
+      </div>
       {/* Option tabs */}
       <div className="flex flex-col gap-[var(--space-2)]">
         <div className="flex flex-wrap items-center gap-[var(--space-1)]">

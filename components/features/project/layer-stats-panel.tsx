@@ -10,7 +10,7 @@ import {
   type LayerStats,
 } from "@/services/api/project-layers";
 
-const { x: X, loader: Loader, alertTriangle: AlertTriangle } = appIcons;
+const { x: X, loader: Loader, alertTriangle: AlertTriangle, chevronDown: ChevronDown, chevronRight: ChevronRight } = appIcons;
 
 interface LayerStatsPanelProps {
   projectId: number | null;
@@ -342,17 +342,32 @@ function LayerSection({ stats }: { stats: LayerStats }) {
       ? (stats.total_inside / stats.polygon_area_km2) * 100
       : null;
 
+  const [open, setOpen] = React.useState(false);
+
   return (
     <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)]">
-      <div className="flex items-baseline justify-between gap-[var(--space-2)] border-b border-[var(--color-border-subtle)] px-[var(--space-3)] py-[var(--space-2)]">
-        <div className="flex min-w-0 flex-col">
-          <span className="truncate text-xs font-semibold text-[var(--color-text-primary)]">
-            {stats.layer}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className={cn(
+          "flex w-full items-baseline justify-between gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] text-left",
+          open && "border-b border-[var(--color-border-subtle)]",
+        )}
+      >
+        <div className="flex min-w-0 flex-1 items-start gap-[var(--space-2)]">
+          <span className="mt-[3px] shrink-0 text-[var(--color-text-muted)]">
+            {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           </span>
-          <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">
-            {stats.geometry_type} · {unitLabel}
-            {!stats.field_present && " · field missing"}
-          </span>
+          <div className="flex min-w-0 flex-col">
+            <span className="truncate text-xs font-semibold text-[var(--color-text-primary)]">
+              {stats.layer}
+            </span>
+            <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">
+              {stats.geometry_type} · {unitLabel}
+              {!stats.field_present && " · field missing"}
+            </span>
+          </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-[2px]">
           <span className="font-mono text-[11px] text-[var(--color-text-secondary)]">
@@ -364,14 +379,16 @@ function LayerSection({ stats }: { stats: LayerStats }) {
             </span>
           )}
         </div>
-      </div>
+      </button>
 
-      {stats.by_class.length === 0 ? (
-        <p className="p-[var(--space-3)] text-[11px] text-[var(--color-text-muted)]">
-          No features inside polygon.
-        </p>
-      ) : (
-        <ClassTable stats={stats} valueFormatter={valueFormatter} />
+      {open && (
+        stats.by_class.length === 0 ? (
+          <p className="p-[var(--space-3)] text-[11px] text-[var(--color-text-muted)]">
+            No features inside polygon.
+          </p>
+        ) : (
+          <ClassTable stats={stats} valueFormatter={valueFormatter} />
+        )
       )}
     </div>
   );

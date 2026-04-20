@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
+import { useProjectSection } from "@/services/query/project-sections";
 
 const { check: Check, chevronLeft: ChevronLeft, chevronRight: ChevronRight, gripVertical: GripVertical, minus: Minus, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
 
@@ -57,15 +58,6 @@ interface OffsetterConfig {
    Dummy data
    ------------------------------------------------------------------ */
 
-const DUMMY_DESIGN_OPTIONS = ["Design 1"];
-const DUMMY_MAPS = ["Map 1"];
-const DUMMY_PARTITIONINGS = ["Design", "Zipper"];
-const DUMMY_REGIONS: Record<string, string[]> = {
-  Design: ["design_reg"],
-  Zipper: ["zipper_reg_a", "zipper_reg_b"],
-};
-const DUMMY_MAP_LAYERS = ["roads", "railways", "waterways", "water_a", "buildings", "landuse", "transport_a"];
-
 const RULE_TYPE_OPTIONS = ["Max crossline", "Shifted inline", "Max radius"];
 const OFFSET_TEMPLATES: Record<string, OffsetRule[]> = {
   "Template 1": [
@@ -83,16 +75,12 @@ const OFFSET_TEMPLATES: Record<string, OffsetRule[]> = {
   ],
 };
 
-function createLayerRules(): LayerRule[] {
-  return DUMMY_MAP_LAYERS.map((l) => ({ layer: l, offset: true, skip: false }));
-}
-
 function createParamSet(): ParamSet {
   return {
     id: crypto.randomUUID(),
-    partitioning: "Design",
+    partitioning: "",
     region: "",
-    layerRules: createLayerRules(),
+    layerRules: [],
     offsetRules: [],
   };
 }
@@ -358,13 +346,39 @@ function PointTypePanel({
   label,
   config,
   onChange,
+  partitioningNames,
+  regionsByPartitioning,
+  availableLayers,
 }: {
   label: string;
   config: PointTypeConfig;
   onChange: (config: PointTypeConfig) => void;
+  partitioningNames: string[];
+  regionsByPartitioning: Record<string, string[]>;
+  availableLayers: string[];
 }) {
   const param = config.params[config.activeParamIdx] ?? config.params[0];
-  const regions = DUMMY_REGIONS[param.partitioning] ?? [];
+  const regions = regionsByPartitioning[param.partitioning] ?? [];
+
+  // Reconcile the stored layer rules against the currently available layers
+  // (from the selected map): preserve the user's order and toggles for layers
+  // still in the map, append any newly available layers, and drop rules whose
+  // layer no longer exists.
+  const effectiveLayerRules = React.useMemo(() => {
+    const inMap = new Set(availableLayers);
+    const seen = new Set<string>();
+    const kept: LayerRule[] = [];
+    for (const r of param.layerRules) {
+      if (inMap.has(r.layer) && !seen.has(r.layer)) {
+        kept.push(r);
+        seen.add(r.layer);
+      }
+    }
+    for (const layer of availableLayers) {
+      if (!seen.has(layer)) kept.push({ layer, offset: true, skip: false });
+    }
+    return kept;
+  }, [param.layerRules, availableLayers]);
 
   const setIdx = (idx: number) => onChange({ ...config, activeParamIdx: idx });
 
@@ -389,11 +403,13 @@ function PointTypePanel({
   };
 
   const updateLayerRule = (layerIdx: number, patch: Partial<LayerRule>) => {
-    updateParam({ layerRules: param.layerRules.map((r, i) => i === layerIdx ? { ...r, ...patch } : r) });
+    updateParam({
+      layerRules: effectiveLayerRules.map((r, i) => (i === layerIdx ? { ...r, ...patch } : r)),
+    });
   };
 
   const reorderLayerRules = (from: number, to: number) => {
-    const next = [...param.layerRules];
+    const next = [...effectiveLayerRules];
     const [moved] = next.splice(from, 1);
     next.splice(to, 0, moved);
     updateParam({ layerRules: next });
@@ -460,8 +476,9 @@ function PointTypePanel({
       {/* Partitioning + Region */}
       <div className="flex flex-col gap-[var(--space-3)]">
         <Field label="Partitioning" layout="horizontal" labelWidth="5.5rem">
-          <Select value={param.partitioning} onChange={(e) => updateParam({ partitioning: e.target.value })}>
-            {DUMMY_PARTITIONINGS.map((r) => <option key={r} value={r}>{r}</option>)}
+          <Select value={param.partitioning} onChange={(e) => updateParam({ partitioning: e.target.value, region: "" })}>
+            <option value="">Select…</option>
+            {partitioningNames.map((r) => <option key={r} value={r}>{r}</option>)}
           </Select>
         </Field>
         <Field label="Region" layout="horizontal" labelWidth="5.5rem">
@@ -475,7 +492,7 @@ function PointTypePanel({
       {/* Layer Rules */}
       <div className="mt-[var(--space-3)]" />
       <SortableLayerRules
-        rules={param.layerRules}
+        rules={effectiveLayerRules}
         onUpdate={updateLayerRule}
         onReorder={reorderLayerRules}
       />
@@ -541,6 +558,40 @@ export function ProjectOffsetters() {
 
   const { data, update } = useSectionData<OffsettersData>(projectId, "offsetters", DEFAULT_OFFSETTERS);
 
+  // Design option names come from the design_options section
+  const { data: designOptionsSection } = useProjectSection(projectId, "design_options");
+  const designOptionNames = React.useMemo(() => {
+    const opts = (designOptionsSection?.data as { options?: { name: string }[] } | undefined)?.options;
+    return (opts ?? []).map((o) => o.name).filter((n) => n && n.length > 0);
+  }, [designOptionsSection]);
+
+  // Maps: both the names (for the Map dropdown) and each map's ordered layer list
+  const { data: mapsSection } = useProjectSection(projectId, "maps");
+  const mapsList = React.useMemo(() => {
+    const maps = (mapsSection?.data as { maps?: { name: string; layers?: string[] }[] } | undefined)?.maps;
+    return maps ?? [];
+  }, [mapsSection]);
+  const mapNames = React.useMemo(
+    () => mapsList.map((m) => m.name).filter((n) => n && n.length > 0),
+    [mapsList],
+  );
+
+  // Partitioning: names for the dropdown, polygons as the region list per partitioning
+  const { data: partitioningSection } = useProjectSection(projectId, "partitioning");
+  const partitioningGroups = React.useMemo(() => {
+    const groups = (partitioningSection?.data as { groups?: { name: string; polygons?: string[] }[] } | undefined)?.groups;
+    return groups ?? [];
+  }, [partitioningSection]);
+  const partitioningNames = React.useMemo(
+    () => partitioningGroups.map((g) => g.name).filter((n) => n && n.length > 0),
+    [partitioningGroups],
+  );
+  const regionsByPartitioning = React.useMemo(() => {
+    const m: Record<string, string[]> = {};
+    for (const g of partitioningGroups) m[g.name] = g.polygons ?? [];
+    return m;
+  }, [partitioningGroups]);
+
   const configs = data.configs;
   const activeId = data.activeId || configs[0]?.id || "";
   const active = configs.find((c) => c.id === activeId) ?? configs[0];
@@ -551,6 +602,12 @@ export function ProjectOffsetters() {
       update({ ...data, configs: newConfigs });
     }, [data, update]
   );
+
+  // Layers available for the currently selected map — drives Layer Rules lists
+  const availableLayers = React.useMemo(() => {
+    const m = mapsList.find((x) => x.name === active.map);
+    return m?.layers ?? [];
+  }, [mapsList, active.map]);
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
@@ -574,14 +631,14 @@ export function ProjectOffsetters() {
       <Field label="Design Option" layout="horizontal">
         <Select value={active.designOption} onChange={(e) => updateConfig(activeId, { designOption: e.target.value })}>
           <option value="">Select…</option>
-          {DUMMY_DESIGN_OPTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
+          {designOptionNames.map((d) => <option key={d} value={d}>{d}</option>)}
         </Select>
       </Field>
 
       <Field label="Map" layout="horizontal">
         <Select value={active.map} onChange={(e) => updateConfig(activeId, { map: e.target.value })}>
           <option value="">Select…</option>
-          {DUMMY_MAPS.map((m) => <option key={m} value={m}>{m}</option>)}
+          {mapNames.map((m) => <option key={m} value={m}>{m}</option>)}
         </Select>
       </Field>
 
@@ -595,11 +652,17 @@ export function ProjectOffsetters() {
           label="Sources"
           config={active.sources}
           onChange={(sources) => updateConfig(activeId, { sources })}
+          partitioningNames={partitioningNames}
+          regionsByPartitioning={regionsByPartitioning}
+          availableLayers={availableLayers}
         />
         <PointTypePanel
           label="Receivers"
           config={active.receivers}
           onChange={(receivers) => updateConfig(activeId, { receivers })}
+          partitioningNames={partitioningNames}
+          regionsByPartitioning={regionsByPartitioning}
+          availableLayers={availableLayers}
         />
       </div>
     </div>

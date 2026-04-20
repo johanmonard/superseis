@@ -24,7 +24,7 @@ interface SimulationExtent {
   marginLeft: string;
   marginRight: string;
   marginBottom: string;
-  rlAngle: string;
+  rlAzimuth: string;
 }
 
 interface SurveyGroup {
@@ -41,7 +41,7 @@ const DEFAULT_SIMULATION: SimulationExtent = {
   marginLeft: "1000",
   marginRight: "1000",
   marginBottom: "1000",
-  rlAngle: "0",
+  rlAzimuth: "0",
 };
 
 function createGroup(name: string): SurveyGroup {
@@ -425,14 +425,14 @@ export function ProjectSurvey({
         right: Number(simulation.marginRight) || 0,
         bottom: Number(simulation.marginBottom) || 0,
       },
-      azimuth: Number(simulation.rlAngle) || 0,
+      azimuth: Number(simulation.rlAzimuth) || 0,
     });
   }, [
     onViewportChange, projectId,
     activeGroup.acquisitionPolygon, activeGroup.pois,
     simulation.marginTop, simulation.marginLeft,
     simulation.marginRight, simulation.marginBottom,
-    simulation.rlAngle,
+    simulation.rlAzimuth,
   ]);
 
   const updateGroup = React.useCallback(
@@ -496,9 +496,9 @@ export function ProjectSurvey({
   // When an option is selected, derive the simulation angle from its first design
   React.useEffect(() => {
     if (firstOptionAzimuth === undefined) return;
-    if (simulation.rlAngle === firstOptionAzimuth) return;
-    updateSimulation({ rlAngle: firstOptionAzimuth });
-  }, [firstOptionAzimuth, simulation.rlAngle, updateSimulation]);
+    if (simulation.rlAzimuth === firstOptionAzimuth) return;
+    updateSimulation({ rlAzimuth: firstOptionAzimuth });
+  }, [firstOptionAzimuth, simulation.rlAzimuth, updateSimulation]);
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
@@ -565,8 +565,8 @@ export function ProjectSurvey({
             onLeftChange={(v) => updateSimulation({ marginLeft: v })}
             onRightChange={(v) => updateSimulation({ marginRight: v })}
             onBottomChange={(v) => updateSimulation({ marginBottom: v })}
-            azimuth={Number(simulation.rlAngle) || 0}
-            onAzimuthChange={(v) => updateSimulation({ rlAngle: String(v) })}
+            azimuth={Number(simulation.rlAzimuth) || 0}
+            onAzimuthChange={(v) => updateSimulation({ rlAzimuth: String(v) })}
             azimuthTone={azimuthMismatch ? "warning" : "default"}
             azimuthDisabled={hasLinkedAzimuth}
           />

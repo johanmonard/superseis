@@ -153,7 +153,7 @@ export function useSectionData<T extends object>(
     return () => clearTimeout(t);
   }, [status]);
 
-  return { data, update, isLoading, status };
+  return { data, update, flush, isLoading, status };
 }
 
 /**

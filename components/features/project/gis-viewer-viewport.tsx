@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import maplibregl, {
   type Map as MLMap,
   type StyleSpecification,
@@ -12,6 +13,8 @@ import { MapboxOverlay } from "@deck.gl/mapbox";
 import { type FileCategory } from "@/services/api/project-files";
 import { useProjectFilesGeoJson } from "@/services/query/project-files";
 import type { VisibleFile, GisLayerStyle } from "./project-gis-viewer";
+import { Button } from "@/components/ui/button";
+import { appIcons, Icon } from "@/components/ui/icon";
 
 // ---------------------------------------------------------------------------
 // Tile sources (same catalog as animate-3d-viewport)
@@ -165,7 +168,11 @@ const GIS_CSS = `
     background-color: rgba(255,255,255,0.88); border: 1px solid rgba(15,23,42,0.12);
     backdrop-filter: blur(8px); font-family: system-ui, sans-serif;
     font-size: 11px; color: #1e293b; user-select: none; min-width: 120px;
-    max-height: 50%; overflow-y: auto;
+    max-height: 50%;
+  }
+  .gis-legend__body {
+    display: flex; flex-direction: column;
+    min-height: 0; flex: 1 1 auto; overflow-y: auto;
   }
   [data-theme="dark"] .gis-legend {
     background-color: rgba(15,23,42,0.82); border-color: rgba(255,255,255,0.12);
@@ -240,6 +247,26 @@ const GIS_CSS = `
     width: 10px; height: 10px; accent-color: #3b82f6;
     cursor: pointer; margin: 0; flex-shrink: 0;
   }
+  .gis-legend__vis-cb {
+    width: 11px; height: 11px; accent-color: #3b82f6;
+    cursor: pointer; margin: 0; flex-shrink: 0;
+  }
+  .gis-legend__row--hidden .gis-legend__label { opacity: 0.45; }
+  .gis-legend__add {
+    position: relative;
+    padding: 3px 6px 2px;
+  }
+  .gis-legend__sep {
+    height: 1px; margin: 4px 10px;
+    background-color: rgba(15,23,42,0.08);
+  }
+  [data-theme="dark"] .gis-legend__sep { background-color: rgba(255,255,255,0.08); }
+  .gis-legend__remove {
+    border: none; background: none; color: #94a3b8;
+    cursor: pointer; font-size: 12px; line-height: 1; padding: 0 2px;
+    flex-shrink: 0;
+  }
+  .gis-legend__remove:hover { color: #ef4444; }
 `;
 
 const CSS_ID = "gis-viewer-css";
@@ -247,6 +274,83 @@ const CSS_ID = "gis-viewer-css";
 // ---------------------------------------------------------------------------
 // SVG icons (inline to avoid import weight)
 // ---------------------------------------------------------------------------
+
+function PolygonAddButton({
+  options,
+  onAdd,
+}: {
+  options: ReadonlyArray<string>;
+  onAdd: (name: string) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  // The legend container creates a stacking context (via backdrop-filter),
+  // so any in-DOM popup would be clipped by it. Portal the popup to
+  // document.body with viewport-fixed coordinates pinned to the button.
+  const [pos, setPos] = React.useState<{ left: number; bottom: number } | null>(null);
+  const wrapperRef = React.useRef<HTMLDivElement>(null);
+  const popupRef = React.useRef<HTMLDivElement>(null);
+
+  const recompute = React.useCallback(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({ left: r.left, bottom: window.innerHeight - r.top });
+  }, []);
+
+  React.useEffect(() => {
+    if (!open) return;
+    recompute();
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (popupRef.current?.contains(target)) return;
+      if (wrapperRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onWin = () => recompute();
+    document.addEventListener("mousedown", handler);
+    window.addEventListener("resize", onWin);
+    window.addEventListener("scroll", onWin, true);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      window.removeEventListener("resize", onWin);
+      window.removeEventListener("scroll", onWin, true);
+    };
+  }, [open, recompute]);
+
+  return (
+    <div ref={wrapperRef}>
+      <Button variant="ghost" size="sm" onClick={() => setOpen(!open)}>
+        <Icon icon={appIcons.plus} size={12} className="mr-[var(--space-1)]" /> Polygon
+      </Button>
+      {open && pos && typeof document !== "undefined" &&
+        createPortal(
+          <div
+            ref={popupRef}
+            // eslint-disable-next-line template/no-jsx-style-prop -- runtime anchor from getBoundingClientRect
+            style={{
+              position: "fixed",
+              left: pos.left,
+              bottom: pos.bottom + 4,
+              zIndex: 10000,
+            }}
+            className="max-h-48 min-w-[10rem] overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] p-[var(--space-1)] shadow-[0_4px_12px_var(--color-shadow-alpha)]"
+          >
+            {options.map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => { onAdd(v); setOpen(false); }}
+                className="flex w-full items-center rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-2)] text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+              >
+                {v}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
 
 const ZoomInIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
 const ZoomOutIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>;
@@ -271,10 +375,36 @@ interface GisViewerViewportProps {
    * order) instead of one row per .gpkg, since multiple layers can share
    * a source file.
    */
-  legendItems?: ReadonlyArray<{ key: string; color: string; label: string }>;
+  legendItems?: ReadonlyArray<{
+    key: string;
+    color: string;
+    label: string;
+    visible?: boolean;
+    onToggle?: () => void;
+    onRemove?: () => void;
+    separator?: boolean;
+  }>;
+  /**
+   * Polygon filenames (without .gpkg) available to append to the legend.
+   * When provided alongside `onAddPolygon`, a picker row appears at the
+   * bottom of the default legend.
+   */
+  addPolygonOptions?: ReadonlyArray<string>;
+  onAddPolygon?: (name: string) => void;
+  /** Keys (`${category}/${filename}`) rendered with a remove button. */
+  removableKeys?: ReadonlySet<string>;
+  onRemoveFile?: (category: FileCategory, filename: string) => void;
+  /**
+   * Optional WGS84 bounds `[west, south, east, north]` to fit-to on mount
+   * and whenever the tuple identity changes. Used when the caller's only
+   * content is in `extraLayers` (e.g. deck.gl points) and the built-in
+   * fit-to-bounds — which only looks at `visibleFiles` — wouldn't frame
+   * anything.
+   */
+  fitBounds?: [number, number, number, number] | null;
 }
 
-export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extraLayers, legendExtra, legendItems }: GisViewerViewportProps) {
+export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extraLayers, legendExtra, legendItems, addPolygonOptions, onAddPolygon, removableKeys, onRemoveFile, fitBounds }: GisViewerViewportProps) {
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const mapContainerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<MLMap | null>(null);
@@ -621,6 +751,28 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
     }
   }, [visibleFiles, loadedKeys, geojsonByKey, styleReady, containerReady]);
 
+  // Explicit fit to caller-supplied bounds. Runs whenever the tuple
+  // identity changes, so a fresh grid run with a new bbox refits cleanly.
+  // Falls back to doing nothing when `fitBounds` is absent; doesn't
+  // compete with the visible-files fit above because it reacts to a
+  // different signal.
+  React.useEffect(() => {
+    if (!fitBounds) return;
+    if (!containerReady) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const [w, s, e, n] = fitBounds;
+    if (!Number.isFinite(w) || !Number.isFinite(s) || !Number.isFinite(e) || !Number.isFinite(n)) return;
+    map.resize();
+    map.fitBounds(
+      [
+        [w, s],
+        [e, n],
+      ],
+      { padding: 60, maxZoom: 14 },
+    );
+  }, [fitBounds, containerReady, styleReady]);
+
   // Toolbar handlers
   const handleZoomIn = () => mapRef.current?.zoomIn();
   const handleZoomOut = () => mapRef.current?.zoomOut();
@@ -655,14 +807,49 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
           <div className="gis-legend__header">
             <span className="gis-legend__title">Layers</span>
           </div>
-          {legendItems.map((item) => (
-            <div key={item.key} className="gis-legend__row">
-              {/* eslint-disable-next-line template/no-jsx-style-prop -- runtime color */}
-              <span className="gis-legend__color" style={{ backgroundColor: item.color }} />
-              <span className="gis-legend__label">{item.label}</span>
+          <div className="gis-legend__body">
+            {legendItems.map((item) => {
+              if (item.separator) {
+                return <div key={item.key} className="gis-legend__sep" />;
+              }
+              const visible = item.visible !== false;
+              return (
+                <div
+                  key={item.key}
+                  className={`gis-legend__row${visible ? "" : " gis-legend__row--hidden"}`}
+                >
+                  {item.onToggle && (
+                    <input
+                      type="checkbox"
+                      className="gis-legend__vis-cb"
+                      checked={visible}
+                      title={visible ? "Hide" : "Show"}
+                      onChange={item.onToggle}
+                    />
+                  )}
+                  {/* eslint-disable-next-line template/no-jsx-style-prop -- runtime color */}
+                  <span className="gis-legend__color" style={{ backgroundColor: item.color }} />
+                  <span className="gis-legend__label">{item.label}</span>
+                  {item.onRemove && (
+                    <button
+                      type="button"
+                      className="gis-legend__remove"
+                      title="Remove"
+                      onClick={item.onRemove}
+                    >
+                      {"\u00D7"}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+            {legendExtra}
+          </div>
+          {addPolygonOptions && onAddPolygon && addPolygonOptions.length > 0 && (
+            <div className="gis-legend__add">
+              <PolygonAddButton options={addPolygonOptions} onAdd={onAddPolygon} />
             </div>
-          ))}
-          {legendExtra}
+          )}
         </div>
       ) : visibleFiles.length > 0 && (
         <div className="gis-legend">
@@ -677,10 +864,23 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
               {legendSliders ? "\u25B4" : "\u25BE"}
             </button>
           </div>
+          <div className="gis-legend__body">
           {visibleFiles.map((f) => {
             const key = `${f.category}/${f.filename}`;
+            const visible = f.style.visible !== false;
+            const removable = removableKeys?.has(key) ?? false;
             return (
-              <div key={key} className="gis-legend__row">
+              <div
+                key={key}
+                className={`gis-legend__row${visible ? "" : " gis-legend__row--hidden"}`}
+              >
+                <input
+                  type="checkbox"
+                  className="gis-legend__vis-cb"
+                  checked={visible}
+                  title={visible ? "Hide" : "Show"}
+                  onChange={(e) => onStyleChange(f.category, f.filename, { visible: e.target.checked })}
+                />
                 {/* eslint-disable-next-line template/no-jsx-style-prop -- runtime color */}
                 <span className="gis-legend__color" style={{ backgroundColor: f.style.color }}>
                   <input
@@ -690,6 +890,16 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
                   />
                 </span>
                 <span className="gis-legend__label">{f.filename.replace(/\.gpkg$/, "")}</span>
+                {removable && onRemoveFile && (
+                  <button
+                    type="button"
+                    className="gis-legend__remove"
+                    title="Remove"
+                    onClick={() => onRemoveFile(f.category, f.filename)}
+                  >
+                    {"\u00D7"}
+                  </button>
+                )}
                 {legendSliders && (
                   <div className="gis-legend__sliders">
                     <span className="gis-legend__slider-label">W</span>
@@ -731,6 +941,12 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
             );
           })}
           {legendExtra}
+          </div>
+          {addPolygonOptions && onAddPolygon && addPolygonOptions.length > 0 && (
+            <div className="gis-legend__add">
+              <PolygonAddButton options={addPolygonOptions} onAdd={onAddPolygon} />
+            </div>
+          )}
         </div>
       )}
 

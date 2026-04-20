@@ -56,9 +56,12 @@ export default function MapsPage() {
       const fclassFilter =
         layer.sourceValues.length > 0 ? layer.sourceValues : undefined;
       for (const stem of layer.sourceFiles) {
-        const category: FileCategory = stem.startsWith("osm_edits_")
-          ? "osm_edits"
-          : "gis_layers";
+        const category: FileCategory =
+          layer.sourceCategory === "polygons"
+            ? "polygons"
+            : stem.startsWith("osm_edits_")
+              ? "osm_edits"
+              : "gis_layers";
         out.push({
           category,
           filename: `${stem}.gpkg`,

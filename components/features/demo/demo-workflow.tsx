@@ -15,6 +15,7 @@ import {
   fetchStepConfig,
   fetchStepProgress,
   resetPipeline,
+  resetPipelineStep,
   setActiveOption,
   type StepPlan,
   type StepConfig,
@@ -86,22 +87,31 @@ const PIPELINE_STEPS: StepDef[] = [
     number: 5,
     title: "Grid",
     description:
-      "Generate the seismic acquisition grid: source and receiver positions based on design parameters, regioning, and offset rules.",
-    configSections: ["survey", "grid", "mappers"],
-    dependencies: ["referentials", "mappers"],
+      "Generate the theoretical acquisition grid: source/receiver positions from design intervals, orientation, and polygon. No offsets applied.",
+    configSections: ["survey", "grid"],
+    dependencies: ["referentials"],
+  },
+  {
+    id: "offsets",
+    number: 6,
+    title: "Offsets",
+    description:
+      "Apply regioning, multioffset, and feature snap to the theoretical grid. Produces the final station positions and pseq/pid identifiers.",
+    configSections: ["survey", "grid", "mappers", "offsetters"],
+    dependencies: ["grid", "mappers"],
   },
   {
     id: "sequences",
-    number: 6,
+    number: 7,
     title: "Sequences",
     description:
       "Compute acquisition sequences: strip definitions, clustering, and ordering for each resource/department.",
     configSections: ["grid", "resources"],
-    dependencies: ["grid"],
+    dependencies: ["offsets"],
   },
   {
     id: "simulations",
-    number: 7,
+    number: 8,
     title: "Simulations",
     description:
       "Run crew motion simulations — compute production timelines for each department using sequenced grid and crew parameters.",
@@ -307,12 +317,14 @@ function StepConfigDisplay({
 function WorkflowSection({
   projectId,
   onStepRun,
+  onStepReset,
   stepStatuses,
   plan,
   runningStep,
 }: {
   projectId: number;
   onStepRun: (step: StepDef) => void;
+  onStepReset: (stepId: string) => void;
   stepStatuses: Record<string, PipelineStepStatus>;
   plan: StepPlan[] | null;
   runningStep: string | null;
@@ -432,19 +444,30 @@ function WorkflowSection({
       {/* Config sections */}
       <StepConfigDisplay stepConfig={stepConfig} isLoading={configLoading} />
 
-      {/* Run button */}
-      <Button
-        onClick={() => onStepRun(selectedStep)}
-        disabled={runningStep !== null}
-        className="gap-[var(--space-2)]"
-      >
-        {runningStep === selectedStep.id ? (
-          <Loader size={14} className="animate-spin" />
-        ) : (
-          <Play size={14} />
-        )}
-        Run Step {selectedStep.number}: {selectedStep.title}
-      </Button>
+      {/* Run / reset */}
+      <div className="flex items-center gap-[var(--space-2)]">
+        <Button
+          onClick={() => onStepRun(selectedStep)}
+          disabled={runningStep !== null}
+          className="gap-[var(--space-2)]"
+        >
+          {runningStep === selectedStep.id ? (
+            <Loader size={14} className="animate-spin" />
+          ) : (
+            <Play size={14} />
+          )}
+          Run Step {selectedStep.number}: {selectedStep.title}
+        </Button>
+        <button
+          type="button"
+          onClick={() => onStepReset(selectedStep.id)}
+          disabled={runningStep !== null}
+          className="flex items-center gap-1 text-xs text-[var(--color-status-danger)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+        >
+          <Refresh size={12} />
+          Reset step
+        </button>
+      </div>
     </div>
   );
 }
@@ -657,6 +680,20 @@ export function DemoWorkflowPage() {
     }
   }, [projectId, refreshStatus, addLog]);
 
+  const handleResetStep = React.useCallback(
+    async (stepId: string) => {
+      if (!projectId) return;
+      try {
+        await resetPipelineStep(projectId, stepId);
+        await refreshStatus();
+        addLog(stepId, "info", `Step "${stepId}" reset — marked dirty.`);
+      } catch {
+        addLog(stepId, "error", `Failed to reset step "${stepId}".`);
+      }
+    },
+    [projectId, refreshStatus, addLog],
+  );
+
   const handleRunStep = React.useCallback(
     async (step: StepDef) => {
       if (!projectId || runningStep) return;
@@ -769,7 +806,7 @@ export function DemoWorkflowPage() {
               className="flex items-center gap-1 text-xs text-[var(--color-status-danger)] hover:text-[var(--color-text-primary)]"
             >
               <Refresh size={12} />
-              Reset
+              Reset all
             </button>
             <button
               type="button"
@@ -784,6 +821,7 @@ export function DemoWorkflowPage() {
         <WorkflowSection
           projectId={projectId}
           onStepRun={handleRunStep}
+          onStepReset={handleResetStep}
           stepStatuses={stepStatuses}
           plan={plan}
           runningStep={runningStep}
