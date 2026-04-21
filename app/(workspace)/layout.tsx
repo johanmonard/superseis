@@ -20,6 +20,7 @@ import {
 import { ErrorBoundary } from "../../components/ui/error-boundary";
 import { useAuthSession } from "../../lib/use-auth-session";
 import { useWorkspaceSidebar } from "../../lib/use-workspace-sidebar";
+import { useActiveProject } from "../../lib/use-active-project";
 import { PipelineReportProvider } from "../../lib/use-pipeline-report";
 import { PipelineReportDrawer } from "../../components/layout/pipeline-report-drawer";
 
@@ -63,7 +64,9 @@ export default function WorkspaceRouteLayout({
     isCollapsed: isSidebarCollapsed,
     setIsCollapsed: setIsSidebarCollapsed,
   } = useWorkspaceSidebar();
+  const { activeProject } = useActiveProject();
   const isAdminRoute = pathname === "/admin" || pathname.startsWith("/admin/");
+  const isLandingShell = pathname === "/" && !activeProject;
 
   React.useEffect(() => {
     if (!isLoading && !session) {
@@ -119,6 +122,7 @@ export default function WorkspaceRouteLayout({
       <WorkspaceLayout
         sidebarWidth={isSidebarCollapsed ? "collapsed" : "default"}
         mainClassName="grid h-screen grid-rows-[minmax(0,1fr)]"
+        hideSidebar={isLandingShell}
         sidebar={
           <WorkspaceSidebarNav
             navigation={visibleNavigation}
@@ -132,11 +136,13 @@ export default function WorkspaceRouteLayout({
         }
       >
         <div className="flex h-full min-h-0 flex-col gap-4 lg:gap-6">
-          <WorkspacePageHeader
-            session={session}
-            pageTitle={pageIdentity?.title}
-            pageSubtitle={pageIdentity?.subtitle}
-          />
+          {!isLandingShell && (
+            <WorkspacePageHeader
+              session={session}
+              pageTitle={pageIdentity?.title}
+              pageSubtitle={pageIdentity?.subtitle}
+            />
+          )}
           <ErrorBoundary>
             <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
           </ErrorBoundary>

@@ -8,6 +8,7 @@ export interface WorkspaceLayoutProps {
   children: React.ReactNode;
   sidebarWidth?: SidebarWidth;
   showSidebarOnMobile?: boolean;
+  hideSidebar?: boolean;
   className?: string;
   mainClassName?: string;
 }
@@ -17,14 +18,17 @@ export function WorkspaceLayout({
   children,
   sidebarWidth = "default",
   showSidebarOnMobile = false,
+  hideSidebar = false,
   className,
   mainClassName,
 }: WorkspaceLayoutProps) {
   return (
     <div className={cn("flex min-h-screen bg-[var(--color-bg-canvas)]", className)}>
-      <div className={cn("shrink-0", !showSidebarOnMobile && "hidden md:block")}>
-        <Sidebar width={sidebarWidth}>{sidebar}</Sidebar>
-      </div>
+      {!hideSidebar && (
+        <div className={cn("shrink-0", !showSidebarOnMobile && "hidden md:block")}>
+          <Sidebar width={sidebarWidth}>{sidebar}</Sidebar>
+        </div>
+      )}
       <main
         className={cn(
           "min-w-0 flex-1 overflow-auto p-4 text-[var(--color-text-primary)] lg:p-6",
