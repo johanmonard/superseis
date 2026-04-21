@@ -7,9 +7,17 @@ export interface ProjectFiles {
   gis_layers: string[]
   osm_edits: string[]
   dem: string[]
+  /** Pipeline-generated .gpkg files (theoretical_grid, offset_grid). Read-only. */
+  seismic: string[]
 }
 
-export type FileCategory = 'polygons' | 'poi' | 'gis_layers' | 'osm_edits' | 'dem'
+export type FileCategory =
+  | 'polygons'
+  | 'poi'
+  | 'gis_layers'
+  | 'osm_edits'
+  | 'dem'
+  | 'seismic'
 
 export function fetchProjectFiles(
   projectId: number,

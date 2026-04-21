@@ -18,7 +18,13 @@ from api.dojo import get_dojo_project_service
 from api.routes.project_sections import (
     _heal_typed_layers,
     _heal_typed_mappers,
+    _heal_typed_offsetters,
     _rebuild_typed_grid_design_def,
+)
+from api.seismic_gpkg import (
+    ensure_seismic_dir,
+    write_offset_grid_gpkg,
+    write_theoretical_grid_gpkg,
 )
 
 from dojo.v3.adapters.v3_runner import V3Runner
@@ -40,6 +46,35 @@ def _get_pipeline_service(dojo_svc: ProjectService) -> PipelineService:
     if _pipeline_service is None:
         _pipeline_service = PipelineService(dojo_svc, runner=V3Runner())
     return _pipeline_service
+
+
+def _post_step_seismic_artifacts(
+    dojo_svc: ProjectService,
+    project_id: int,
+    step: Step,
+) -> None:
+    """Mirror parquet output to ``inputs/gis/seismic/*.gpkg`` after a step.
+
+    Kept tolerant: any failure to write the convenience .gpkg is silently
+    swallowed so it can never fail the pipeline itself. The parquet is
+    authoritative.
+    """
+    try:
+        project_dir = dojo_svc.get_project_dir(project_id)
+        cfg = dojo_svc.get_config(project_id)
+        epsg = int(cfg.metadata.epsg) if cfg.metadata.epsg else 4326
+    except (ProjectNotFoundError, ValueError, TypeError):
+        return
+    try:
+        ensure_seismic_dir(project_dir)
+        if step == Step.GRID:
+            write_theoretical_grid_gpkg(project_dir, epsg)
+        elif step == Step.OFFSETS:
+            write_offset_grid_gpkg(project_dir, epsg)
+    except Exception:
+        # Deliberately silent — the Files page will simply lack this
+        # convenience layer until the next successful run.
+        pass
 
 
 async def _get_project_for_user(
@@ -158,6 +193,7 @@ async def run_step(
         cfg = dojo_svc.get_config(project_id)
         _heal_typed_layers(cfg, cfg.layers_ui or {}, dojo_svc, project_id)
         _heal_typed_mappers(cfg, cfg.maps_ui or {}, dojo_svc, project_id)
+        _heal_typed_offsetters(cfg, cfg.offsetters_ui or {}, dojo_svc, project_id)
         if _rebuild_typed_grid_design_def(cfg):
             cfg.save(str(dojo_svc.get_project_dir(project_id) / "config.json"))
     except ProjectNotFoundError:
@@ -194,6 +230,8 @@ async def run_step(
                 "status": manifest.status.value,
                 "error": manifest.error,
             }
+            if manifest.status == StepStatus.COMPLETED:
+                _post_step_seismic_artifacts(dojo_svc, project_id, step)
         except ProjectNotFoundError:
             _step_progress[progress_key]["result"] = {
                 "status": "failed", "error": "Dojo project not found",
@@ -241,6 +279,7 @@ async def run_step_closure(
         cfg = dojo_svc.get_config(project_id)
         _heal_typed_layers(cfg, cfg.layers_ui or {}, dojo_svc, project_id)
         _heal_typed_mappers(cfg, cfg.maps_ui or {}, dojo_svc, project_id)
+        _heal_typed_offsetters(cfg, cfg.offsetters_ui or {}, dojo_svc, project_id)
         if _rebuild_typed_grid_design_def(cfg):
             cfg.save(str(dojo_svc.get_project_dir(project_id) / "config.json"))
     except ProjectNotFoundError:
@@ -319,6 +358,7 @@ async def run_step_closure(
                     break
                 entry["status"] = "completed"
                 entry["fraction"] = 1.0
+                _post_step_seismic_artifacts(dojo_svc, project_id, step)
             except ProjectNotFoundError:
                 entry["status"] = "failed"
                 entry["error"] = "Dojo project not found"

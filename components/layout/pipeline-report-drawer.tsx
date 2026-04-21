@@ -96,26 +96,34 @@ function StatusDot({ status }: { status: ClosureStepStatus }) {
 }
 
 function StepCard({ step }: { step: ClosureStepProgress }) {
+  const hasLog = step.messages.length > 0;
   return (
-    <div className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] p-[var(--space-3)]">
-      <div className="flex items-center gap-[var(--space-2)]">
-        <StatusDot status={step.status} />
-        <span className="flex-1 text-xs font-semibold text-[var(--color-text-primary)]">
-          {step.step}
-        </span>
-        <span className="text-[10px] font-mono text-[var(--color-text-muted)]">
-          {Math.round(step.fraction * 100)}%
-        </span>
+    <div className="flex gap-[var(--space-3)] rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] p-[var(--space-2)]">
+      {/* Title column — status, step name, percentage stacked on the left. */}
+      <div className="flex w-40 shrink-0 flex-col justify-center gap-[var(--space-1)]">
+        <div className="flex items-center gap-[var(--space-2)]">
+          <StatusDot status={step.status} />
+          <span className="flex-1 truncate text-xs font-semibold text-[var(--color-text-primary)]">
+            {step.step}
+          </span>
+          <span className="text-[10px] font-mono text-[var(--color-text-muted)]">
+            {Math.round(step.fraction * 100)}%
+          </span>
+        </div>
+        {step.error && (
+          <p className="text-[11px] text-[var(--color-status-danger)]">
+            {step.error}
+          </p>
+        )}
       </div>
-      {step.error && (
-        <p className="mt-[var(--space-1)] text-[11px] text-[var(--color-status-danger)]">
-          {step.error}
-        </p>
-      )}
-      {step.messages.length > 0 && (
-        <pre className="mt-[var(--space-2)] max-h-40 overflow-y-auto whitespace-pre-wrap rounded-[var(--radius-sm)] bg-[var(--color-bg-canvas)] p-[var(--space-2)] text-[10px] font-mono text-[var(--color-text-secondary)]">
+
+      {/* Terminal column — scrolling log messages fill the rest of the row. */}
+      {hasLog ? (
+        <pre className="max-h-28 flex-1 overflow-y-auto whitespace-pre-wrap rounded-[var(--radius-sm)] bg-[var(--color-bg-canvas)] p-[var(--space-2)] text-[10px] font-mono text-[var(--color-text-secondary)]">
           {step.messages.slice(-30).join("\n")}
         </pre>
+      ) : (
+        <div className="flex-1 rounded-[var(--radius-sm)] bg-[var(--color-bg-canvas)]/40" />
       )}
     </div>
   );

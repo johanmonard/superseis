@@ -33,7 +33,9 @@ from dojo.v3.services.project_service import ProjectNotFoundError, ProjectServic
 
 router = APIRouter(prefix="/project/{project_id}/files", tags=["project-files"])
 
-VALID_CATEGORIES = frozenset(["polygons", "poi", "gis_layers", "osm_edits", "dem"])
+VALID_CATEGORIES = frozenset(
+    ["polygons", "poi", "gis_layers", "osm_edits", "dem", "seismic"],
+)
 UPLOAD_CATEGORIES = frozenset(["polygons", "poi", "gis_layers"])
 ALLOWED_EXTENSIONS = frozenset([".gpkg", ".kml", ".zip"])
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
@@ -58,6 +60,8 @@ _CATEGORY_DIR_MAP = {
     "gis_layers": "gis_layers",
     "osm_edits": "osm_edits",
     "dem": "dem",
+    # Read-only: populated by pipeline steps (grid/offsets → .gpkg).
+    "seismic": "seismic",
 }
 
 
@@ -128,6 +132,7 @@ class FileListResponse(BaseModel):
     gis_layers: list[str]
     osm_edits: list[str]
     dem: list[str]
+    seismic: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -144,8 +149,12 @@ async def list_all_files(
     """List all GIS files across all categories."""
     await _get_project_for_user(project_id, principal, db)
     result: dict[str, list[str]] = {}
-    for cat in ("polygons", "poi", "gis_layers", "osm_edits"):
+    for cat in ("polygons", "poi", "gis_layers", "osm_edits", "seismic"):
         gis_path = _gis_dir(dojo_svc, project_id, cat)
+        if cat == "seismic":
+            # Lazily create the folder so the Files page always shows the
+            # SEISMIC section (even before the first pipeline run).
+            gis_path.mkdir(parents=True, exist_ok=True)
         if gis_path.exists():
             result[cat] = sorted(
                 f.name for f in gis_path.iterdir()

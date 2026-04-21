@@ -22,7 +22,23 @@ async def lifespan(application: FastAPI):
         await bootstrap_super_admin(session)
 
     # Initialize dojo ProjectService
-    init_project_service(storage_dir=os.environ.get("DOJO_STORAGE_DIR"))
+    svc = init_project_service(storage_dir=os.environ.get("DOJO_STORAGE_DIR"))
+
+    # Ensure the seismic subfolder exists under every known project's
+    # inputs/gis tree. This makes the Files page's SEISMIC section
+    # always available — even for projects that predate the feature.
+    try:
+        from api.seismic_gpkg import ensure_seismic_dir
+        from pathlib import Path as _Path  # noqa: N812
+        for pid in svc.list_projects():
+            try:
+                pdir = _Path(svc.get_project_dir(pid))
+                ensure_seismic_dir(pdir)
+            except Exception:
+                # A single bad project shouldn't block startup.
+                continue
+    except Exception:
+        pass
 
     yield
 
@@ -76,6 +92,7 @@ from api.routes.project_files import router as project_files_router
 from api.routes.project_layers import router as project_layers_router
 from api.routes.project_osm import router as project_osm_router
 from api.routes.project_grid_artifacts import router as project_grid_artifacts_router
+from api.routes.project_offset_artifacts import router as project_offset_artifacts_router
 from api.routes.project_pipeline import router as project_pipeline_router
 from api.routes.project_rasters import router as project_rasters_router
 from api.routes.project_sections import router as project_sections_router
@@ -93,6 +110,7 @@ app.include_router(project_files_router)
 app.include_router(project_layers_router)
 app.include_router(project_osm_router)
 app.include_router(project_grid_artifacts_router)
+app.include_router(project_offset_artifacts_router)
 app.include_router(project_pipeline_router)
 app.include_router(project_rasters_router)
 app.include_router(project_sections_router)

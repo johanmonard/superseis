@@ -17,7 +17,17 @@ from api.db.engine import get_db
 from api.db.models import Project
 from api.dojo import get_dojo_project_service
 
-from dojo.v3.domain.config import DesignDef, GridOption, LayerDef, Margins, SurveyExtent, SurveyOption
+from dojo.v3.domain.config import (
+    DesignDef,
+    GridOption,
+    LayerDef,
+    Margins,
+    OffsetRule,
+    OffsetterOption,
+    PointTypeOffsetter,
+    SurveyExtent,
+    SurveyOption,
+)
 from dojo.v3.services.project_service import ProjectNotFoundError, ProjectService
 
 router = APIRouter(prefix="/project/{project_id}/sections", tags=["project-sections"])
@@ -374,6 +384,286 @@ def _heal_survey_rl_angle(
     if changed:
         project_dir = dojo_svc.get_project_dir(project_id)
         cfg.save(str(project_dir / "config.json"))
+
+
+def _rebuild_typed_offsetters(cfg: Any, ui_data: dict[str, Any]) -> bool:
+    """Populate ``cfg.offsetters`` + active selection from ``offsetters_ui``.
+
+    The offsetters step consumes typed OffsetterOption / PointTypeOffsetter
+    objects. Projects saved before this bridge existed carry only the UI
+    blob, so the step runs as a no-op. Every call rebuilds from scratch —
+    running the healer twice in a row produces identical output.
+
+    Offsets depend on the theoretical grid having the right regioning. The
+    offsetter's DesignOption and the active grid option share names by UI
+    contract — sync them so a mismatched active_options.grid doesn't
+    silently produce a regioning-free grid.
+
+    Returns True if either cfg.offsetters or cfg.active_options.offsetter
+    or cfg.active_options.grid changed.
+    """
+    configs = (ui_data or {}).get("configs") or []
+
+    # --- Indexes resolved up-front ---------------------------------------
+    layer_name_to_zone: dict[str, int] = {}
+    for ul in (cfg.layers_ui or {}).get("layers") or []:
+        name = ul.get("name")
+        try:
+            code = int(ul.get("code"))
+        except (TypeError, ValueError):
+            continue
+        if isinstance(name, str) and name.strip():
+            layer_name_to_zone[name.strip()] = code
+
+    partitioning_by_name: dict[str, dict[str, Any]] = {}
+    for g in (cfg.partitioning or {}).get("groups") or []:
+        name = g.get("name")
+        if isinstance(name, str) and name.strip():
+            partitioning_by_name[name.strip()] = {
+                "regionTag": g.get("regionTag") or "",
+                "polygons": [p for p in (g.get("polygons") or []) if isinstance(p, str)],
+            }
+
+    design_option_by_name: dict[str, dict[str, Any]] = {}
+    for opt in (cfg.design_options or {}).get("options") or []:
+        name = opt.get("name")
+        if isinstance(name, str) and name.strip():
+            design_option_by_name[name.strip()] = opt
+
+    design_idx_by_name: dict[str, int] = {}
+    design_groups_list: list[dict[str, Any]] = list((cfg.design or {}).get("groups") or [])
+    for i, g in enumerate(design_groups_list):
+        n = g.get("name")
+        if isinstance(n, str) and n.strip():
+            design_idx_by_name[n.strip()] = i
+
+    # --- Per-side translation -------------------------------------------
+    # Saisai rule axes follow the simulation referential: j-axis is aligned
+    # along receiver lines (compute_referential uses ``azimuth_j=-rl_angle``),
+    # so the crossline axis depends on which station type is moving:
+    #   - Sources move across *source* lines → crossline = j-axis
+    #   - Receivers move across *receiver* lines → crossline = i-axis
+    # "Shifted inline" is the orthogonal axis with a fixed crossline shift.
+    def _rule_axes(ptype: str) -> tuple[str, str]:
+        if ptype == "s":
+            return "j_range", "i_range_at"   # crossline, inline-at
+        return "i_range", "j_range_at"
+
+    def _heal_side(ptype: str, side: dict[str, Any], design_option_name: str) -> PointTypeOffsetter | None:
+        cross_rule, inline_rule = _rule_axes(ptype)
+        part = partitioning_by_name.get((side.get("partitioning") or "").strip())
+        if part is None:
+            return None
+        region_tag = part["regionTag"]
+        polygons = part["polygons"]
+
+        design_option = design_option_by_name.get((design_option_name or "").strip())
+        if design_option is None:
+            return None
+
+        layer_rules = side.get("layerRules") or []
+
+        zones_ok = sorted({
+            layer_name_to_zone[r["layer"]]
+            for r in layer_rules
+            if not r.get("offset") and not r.get("skip") and r.get("layer") in layer_name_to_zone
+        })
+        zones_keep = sorted({
+            layer_name_to_zone[r["layer"]]
+            for r in layer_rules
+            if r.get("offset") and not r.get("skip") and r.get("layer") in layer_name_to_zone
+        })
+        # Base offset_from zone set (same across params).
+        base_from_zones = sorted({0} | {
+            layer_name_to_zone[r["layer"]]
+            for r in layer_rules
+            if r.get("offset") and r.get("layer") in layer_name_to_zone
+        })
+
+        # The grid runner writes ``design_reg`` as the 0-based key of
+        # ``grid_opt.design_def``, which in turn is the enumerate index of
+        # ``design_option.rows``. Match that same position so the offsets
+        # step's ``filter_df_from_dict`` actually finds rows.
+        rows = design_option.get("rows") or []
+
+        params_out: list[OffsetRule] = []
+        for p in side.get("params") or []:
+            region_name = (p.get("region") or "").strip()
+            if region_name not in polygons:
+                continue
+
+            row_idx = next(
+                (
+                    i for i, r in enumerate(rows)
+                    if (r.get("region") or "").strip() == region_name
+                ),
+                -1,
+            )
+            if row_idx < 0:
+                continue
+            region_index = row_idx
+
+            row = rows[row_idx]
+            design_name = (row.get("design") or "").strip()
+            if design_name not in design_idx_by_name:
+                continue
+            design_idx = design_idx_by_name[design_name]
+            # Per-param bin_grid from the resolved design's own intervals.
+            # Legacy uses different bin_grids per region when designs
+            # differ; a single global value would round-trip incorrectly.
+            design_attrs = design_groups_list[design_idx]
+            try:
+                vals = [
+                    int(float(design_attrs.get("rpi") or 0)),
+                    int(float(design_attrs.get("spi") or 0)),
+                    int(float(design_attrs.get("rli") or 0)),
+                    int(float(design_attrs.get("sli") or 0)),
+                ]
+                bin_grid = max(1, min(v for v in vals if v > 0) // 2) if any(v > 0 for v in vals) else 20
+            except (TypeError, ValueError):
+                bin_grid = 20
+
+            offset_from: dict[str, Any] = {"zone_theo": base_from_zones}
+            if region_tag:
+                offset_from[region_tag] = region_index
+
+            # offset_to = priority groups from targetPriority
+            offset_to: list[tuple[int, ...]] = []
+            current_group: list[int] = []
+            for entry in p.get("targetPriority") or []:
+                kind = entry.get("kind")
+                if kind == "sep":
+                    if current_group:
+                        offset_to.append(tuple(current_group))
+                        current_group = []
+                elif kind == "layer":
+                    zone = layer_name_to_zone.get((entry.get("layer") or "").strip())
+                    if zone is not None:
+                        current_group.append(zone)
+            if current_group:
+                offset_to.append(tuple(current_group))
+            offset_to = [g for g in offset_to if g]
+
+            rules: list[tuple[int, str, Any]] = []
+            for prio, r in enumerate(p.get("offsetRules") or []):
+                rt = (r.get("ruleType") or "").strip()
+                v_raw = r.get("value")
+                if v_raw is None or v_raw == "":
+                    continue
+                try:
+                    v_bins = int(round(float(v_raw) / bin_grid))
+                except (TypeError, ValueError):
+                    continue
+                if rt == "Max crossline":
+                    rules.append((prio, cross_rule, v_bins))
+                elif rt == "Shifted inline":
+                    va_raw = r.get("valueAt")
+                    if va_raw is None or va_raw == "":
+                        # No crossline shift — fall back to pure inline
+                        # sweep. Inline axis is the complement of the
+                        # crossline axis: i for sources, j for receivers.
+                        inline_bare = "i_range" if ptype == "s" else "j_range"
+                        rules.append((prio, inline_bare, v_bins))
+                    else:
+                        try:
+                            va_bins = int(round(float(va_raw) / bin_grid))
+                        except (TypeError, ValueError):
+                            continue
+                        rules.append((prio, inline_rule, (v_bins, va_bins)))
+                elif rt == "Max radius":
+                    rules.append((prio, "radius", v_bins))
+                # unknown rule types silently dropped
+
+            params_out.append(OffsetRule(
+                offset_from=offset_from,
+                offset_to=offset_to,
+                rules=rules,
+                design_idx=design_idx,
+            ))
+
+        if not params_out:
+            return None
+
+        try:
+            snapper_max_dist = int(float(side.get("snapperMaxDist") or 0))
+        except (TypeError, ValueError):
+            snapper_max_dist = 0
+
+        return PointTypeOffsetter(
+            mapper=(side.get("map") or "").strip(),
+            zones_ok_filter={"zone_theo": zones_ok},
+            zones_keep_filter={"zone_theo": zones_keep},
+            parameters=params_out,
+            snapper_max_dist=snapper_max_dist,
+        )
+
+    # --- Rebuild cfg.offsetters -----------------------------------------
+    new_offsetters: dict[str, OffsetterOption] = {}
+    for c in configs:
+        name = (c.get("name") or "").strip()
+        if not name:
+            continue
+        design_option_name = (c.get("designOption") or "").strip()
+        option = OffsetterOption(
+            s=_heal_side("s", c.get("sources") or {}, design_option_name),
+            r=_heal_side("r", c.get("receivers") or {}, design_option_name),
+        )
+        new_offsetters[name] = option
+
+    prev = {k: v.model_dump() for k, v in (cfg.offsetters or {}).items()}
+    nxt = {k: v.model_dump() for k, v in new_offsetters.items()}
+    changed = False
+    if prev != nxt:
+        cfg.offsetters.clear()
+        cfg.offsetters.update(new_offsetters)
+        changed = True
+
+    # --- Active offsetter selection -------------------------------------
+    active_id = (ui_data or {}).get("activeId") or ""
+    active_name = ""
+    for c in configs:
+        if c.get("id") == active_id:
+            active_name = (c.get("name") or "").strip()
+            break
+    if not active_name and configs:
+        active_name = (configs[0].get("name") or "").strip()
+    if cfg.active_options.offsetter != active_name:
+        cfg.active_options.offsetter = active_name
+        changed = True
+
+    # --- Cascade: sync active grid with active offsetter's designOption --
+    # Offsets depend on the theoretical grid carrying the regioning the
+    # offsetter expects. Same names by UI contract — resync so a stale
+    # active_options.grid doesn't silently produce a regioning-free grid.
+    if active_name:
+        active_cfg = next((c for c in configs if (c.get("name") or "").strip() == active_name), None)
+        if active_cfg is not None:
+            design_option_name = (active_cfg.get("designOption") or "").strip()
+            if design_option_name and design_option_name in (cfg.grid or {}):
+                if cfg.active_options.grid != design_option_name:
+                    cfg.active_options.grid = design_option_name
+                    changed = True
+
+    return changed
+
+
+def _heal_typed_offsetters(
+    cfg: Any,
+    ui: dict[str, Any],
+    dojo_svc: ProjectService,
+    project_id: int,
+) -> bool:
+    """Rebuild cfg.offsetters from offsetters_ui if it's out of sync.
+
+    Returns True if anything changed (so callers can batch saves).
+    """
+    if not ui or not (ui.get("configs") or []):
+        return False
+    if _rebuild_typed_offsetters(cfg, ui):
+        project_dir = dojo_svc.get_project_dir(project_id)
+        cfg.save(str(project_dir / "config.json"))
+        return True
+    return False
 
 
 def _write_section(section: str, data: dict[str, Any], dojo_svc: ProjectService, project_id: int) -> None:
