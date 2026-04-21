@@ -472,9 +472,21 @@ export function ProjectDesignOptions() {
           onChange={(e) => {
             const name = e.target.value;
             const polygons = partitioningRegions[name] ?? [];
-            // Auto-create one row per region polygon
+            // Auto-create one row per region polygon, and pre-fill the
+            // design when the region name matches a design name (case-
+            // insensitive). This mirrors how settled configs look on
+            // disk (e.g. region "outer" → design "Outer") and avoids the
+            // "No designs in this option" dead-end on the Resolution
+            // dropdown right after picking a partitioning.
+            const designByLowerName = new Map(
+              designNames.map((d) => [d.toLowerCase(), d]),
+            );
             const rows = polygons.length > 0
-              ? polygons.map((p) => createRow(p))
+              ? polygons.map((p) => {
+                  const match = designByLowerName.get(p.toLowerCase());
+                  const row = createRow(p);
+                  return match ? { ...row, design: match } : row;
+                })
               : [createRow()];
             updateOption(activeId, { partitioning: name, rows });
           }}

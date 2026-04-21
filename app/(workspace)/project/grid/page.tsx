@@ -40,7 +40,7 @@ function toParams(g: DesignGroup): PatchParams {
   };
 }
 
-export default function DesignPage() {
+export default function GridPage() {
   const [tab, setTab] = React.useState<DesignTab>("attributes");
   const [params, setParams] = React.useState<PatchParams | null>(null);
   const { activeProject } = useActiveProject();
@@ -89,15 +89,15 @@ export default function DesignPage() {
   }, [tab, params, projectId, regioning]);
 
   return (
-    <ProjectSettingsPage title="Design" panelTitle="Design" viewport={viewport}>
+    <ProjectSettingsPage title="Grid" panelTitle="Parameters" viewport={viewport}>
       <Tabs
         value={tab}
         onValueChange={(v) => setTab(v as DesignTab)}
         className="flex min-h-0 flex-1 flex-col"
       >
         <TabsList>
-          <TabsTrigger value="attributes">Attributes</TabsTrigger>
-          <TabsTrigger value="region">Options</TabsTrigger>
+          <TabsTrigger value="attributes">Designs</TabsTrigger>
+          <TabsTrigger value="region">Region Assignments</TabsTrigger>
         </TabsList>
         <TabsContent value="attributes" className="min-h-0 flex-1 overflow-y-auto">
           <ProjectDesign onActiveChange={handleActiveChange} />

@@ -57,7 +57,7 @@ export const navigation: NavigationItem[] = [
           { label: "Definition", href: "/project/definition", icon: "dashboards" },
           { label: "Files", href: "/project/files", icon: "folderOpen" },
           { label: "Partitioning", href: "/project/partitioning", icon: "grid" },
-          { label: "Design", href: "/project/design", icon: "compass" },
+          { label: "Grid", href: "/project/grid", icon: "compass" },
           { label: "Survey", href: "/project/survey", icon: "mountain" },
           { label: "Layers", href: "/project/layers", icon: "layers" },
           { label: "Maps", href: "/project/maps", icon: "mapPin" },

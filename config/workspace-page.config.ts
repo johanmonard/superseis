@@ -61,8 +61,8 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
     subtitle: "Partition the project area in regions.",
   },
   {
-    href: "/project/design",
-    title: "Design",
+    href: "/project/grid",
+    title: "Grid",
     subtitle: "Survey design parameters & region assignment.",
   },
   {
