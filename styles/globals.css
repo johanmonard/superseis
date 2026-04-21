@@ -11,7 +11,20 @@ input:-webkit-autofill:active {
   transition: background-color 5000s ease-in-out 0s !important;
 }
 
-:root {
+/* ============================================================
+   Theme registry — add new themes by appending a block below
+   that targets [data-theme="your-id"] and overrides the
+   semantic tokens you want to diverge. Then register the id
+   in lib/theme.ts (THEME_REGISTRY).
+
+   :root holds the baseline (used when data-theme is unset).
+   "default" and "light" both alias to the baseline until you
+   decide to give them different values.
+   ============================================================ */
+
+:root,
+[data-theme="default"],
+[data-theme="light"] {
   --color-bg-canvas: var(--slate-100);
   --color-bg-surface: #ffffff;
   --color-bg-elevated: var(--slate-50);
@@ -63,7 +76,7 @@ input:-webkit-autofill:active {
   --layout-max-width: none;
 }
 
-[data-theme="dark"] {
+[data-theme-kind="dark"] {
   color-scheme: dark;
   --color-bg-canvas: var(--slate-900);
   --color-bg-surface: var(--slate-800);
@@ -110,6 +123,72 @@ input:-webkit-autofill:active {
   --color-border-modal: var(--slate-600);
   --color-bg-modal: var(--slate-800);
   --color-shadow-alpha: rgba(0, 0, 0, 0.3);
+}
+
+/* ============================================================
+   Test 1 — modern minimalist (light)
+   Palette: zinc neutrals + indigo accent
+   ============================================================ */
+[data-theme="test-1-light"] {
+  --color-bg-canvas: var(--zinc-50);
+  --color-bg-surface: #ffffff;
+  --color-bg-elevated: var(--zinc-100);
+
+  --color-border-subtle: var(--zinc-200);
+  --color-border-strong: var(--zinc-300);
+
+  --color-text-primary: var(--zinc-900);
+  --color-text-secondary: var(--zinc-600);
+  --color-text-muted: var(--zinc-400);
+
+  --color-accent: var(--indigo-500);
+  --color-accent-foreground: var(--zinc-50);
+  --color-focus-ring: var(--indigo-500);
+  --color-overlay: rgba(24, 24, 27, 0.45);
+
+  --color-border-table: var(--zinc-200);
+  --color-bg-table-header: var(--zinc-50);
+  --color-bg-table-totals: var(--zinc-100);
+  --color-bg-soft: var(--zinc-100);
+  --color-scrollbar-track: rgba(228, 228, 231, 0.9);
+  --color-scrollbar-thumb: rgba(161, 161, 170, 0.5);
+  --color-scrollbar-thumb-hover: rgba(113, 113, 122, 0.6);
+
+  --color-border-modal: var(--zinc-300);
+  --color-bg-modal: #ffffff;
+  --color-shadow-alpha: rgba(24, 24, 27, 0.06);
+}
+
+/* ============================================================
+   Test 1 — modern minimalist (dark)
+   Inherits baseline dark tokens from [data-theme-kind="dark"];
+   only overrides the surface/text/accent palette.
+   ============================================================ */
+[data-theme="test-1-dark"] {
+  --color-bg-canvas: var(--zinc-950);
+  --color-bg-surface: var(--zinc-900);
+  --color-bg-elevated: var(--zinc-800);
+
+  --color-border-subtle: var(--zinc-800);
+  --color-border-strong: var(--zinc-700);
+
+  --color-text-primary: var(--zinc-50);
+  --color-text-secondary: var(--zinc-400);
+  --color-text-muted: var(--zinc-500);
+
+  --color-accent: var(--indigo-400);
+  --color-accent-foreground: var(--zinc-950);
+  --color-focus-ring: var(--indigo-400);
+
+  --color-data-neutral: var(--zinc-500);
+
+  --color-border-table: var(--zinc-800);
+  --color-bg-table-header: var(--zinc-900);
+  --color-bg-table-totals: var(--zinc-900);
+  --color-bg-soft: var(--zinc-900);
+
+  --color-border-modal: var(--zinc-700);
+  --color-bg-modal: var(--zinc-900);
 }
 
 * {
@@ -215,24 +294,24 @@ body {
 }
 
 /* React Flow controls — dark mode overrides */
-[data-theme="dark"] .react-flow__controls {
+[data-theme-kind="dark"] .react-flow__controls {
   background: var(--color-bg-surface);
   border-color: var(--color-border-subtle);
   box-shadow: 0 1px 4px var(--color-shadow-alpha);
 }
 
-[data-theme="dark"] .react-flow__controls-button {
+[data-theme-kind="dark"] .react-flow__controls-button {
   background: var(--color-bg-surface);
   border-color: var(--color-border-subtle);
   fill: var(--color-text-secondary);
   color: var(--color-text-secondary);
 }
 
-[data-theme="dark"] .react-flow__controls-button:hover {
+[data-theme-kind="dark"] .react-flow__controls-button:hover {
   background: var(--color-bg-elevated);
 }
 
-[data-theme="dark"] .react-flow__controls-button svg {
+[data-theme-kind="dark"] .react-flow__controls-button svg {
   fill: var(--color-text-secondary);
 }
 
@@ -245,4 +324,44 @@ body {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+@keyframes landing-logo-glow {
+  0%,
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(var(--logo-glow-min-scale, 0.85));
+  }
+  50% {
+    opacity: var(--logo-glow-max-opacity, 0.7);
+    transform: translate(-50%, -50%) scale(var(--logo-glow-max-scale, 1.1));
+  }
+}
+
+.landing-logo-glow {
+  opacity: 0;
+  animation-name: landing-logo-glow;
+  animation-duration: var(--logo-glow-duration, 5000ms);
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-fill-mode: both;
+}
+
+@keyframes landing-caret-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+.landing-caret {
+  animation: landing-caret-blink 1.05s steps(1) infinite;
+}
+
+@keyframes about-paragraph-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.about-paragraph-in {
+  opacity: 0;
+  animation: about-paragraph-in 1400ms ease-out forwards;
 }

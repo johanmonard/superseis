@@ -33,7 +33,11 @@ import { useGeoJsonProjectScopePrune } from "../../services/query/project-files"
 import { GisPreloadToggle } from "../features/project/gis-preload-toggle";
 import { useLogoutMutation } from "../../lib/use-auth-session";
 import { useThemePreferences } from "../../lib/use-theme-preferences";
-import type { ThemeDensity } from "../../lib/theme";
+import {
+  THEME_REGISTRY,
+  type ThemeDensity,
+  type ThemeMode,
+} from "../../lib/theme";
 import { getApiErrorMessage } from "../../services/api/auth";
 
 const {
@@ -68,11 +72,22 @@ export function WorkspacePageHeader({
   const logoutMutation = useLogoutMutation();
   const { prefs: themePrefs, updatePrefs: setThemePrefs } = useThemePreferences();
 
-  const toggleTheme = React.useCallback(() => {
-    setThemePrefs((current) => ({
-      ...current,
-      mode: current.mode === "dark" ? "light" : "dark",
-    }));
+  const currentThemeDef = THEME_REGISTRY.find((t) => t.id === themePrefs.mode);
+  const isDark = currentThemeDef?.kind === "dark";
+
+  const handleThemeChange = React.useCallback(
+    (nextMode: ThemeMode) => {
+      setThemePrefs((current) => ({ ...current, mode: nextMode }));
+    },
+    [setThemePrefs]
+  );
+
+  const toggleDarkMode = React.useCallback(() => {
+    setThemePrefs((current) => {
+      const def = THEME_REGISTRY.find((t) => t.id === current.mode);
+      const fallback = def?.kind === "dark" ? "default" : "dark";
+      return { ...current, mode: (def?.counterpart ?? fallback) as ThemeMode };
+    });
   }, [setThemePrefs]);
 
   const handleDensityChange = React.useCallback(
@@ -254,9 +269,51 @@ export function WorkspacePageHeader({
               </div>
             </PopoverContent>
           </Popover>
-          <Button variant="ghost" size="sm" aria-label="Toggle theme" onClick={toggleTheme}>
-            <Icon icon={themePrefs.mode === "dark" ? appIcons.sun : appIcons.moon} />
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={isDark ? "Switch to light" : "Switch to dark"}
+            onClick={toggleDarkMode}
+          >
+            <Icon icon={isDark ? appIcons.sun : appIcons.moon} />
           </Button>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="ghost" size="sm" aria-label="Change theme">
+                <Icon icon={appIcons.palette} />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-48 p-[var(--space-2)]">
+              <div className="flex flex-col gap-[var(--space-1)]">
+                <p className="px-[var(--space-3)] pb-[var(--space-1)] pt-[var(--space-2)] text-xs font-medium text-[var(--color-text-muted)]">
+                  Theme
+                </p>
+                {THEME_REGISTRY.map((theme) => {
+                  const isActive = themePrefs.mode === theme.id;
+                  return (
+                    <button
+                      key={theme.id}
+                      type="button"
+                      onClick={() => handleThemeChange(theme.id)}
+                      className={cn(
+                        "flex flex-col items-start gap-0.5 rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-2)] text-left text-sm transition-colors",
+                        isActive
+                          ? "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] font-medium text-[var(--color-accent)]"
+                          : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)]"
+                      )}
+                    >
+                      <span>{theme.label}</span>
+                      {theme.description && (
+                        <span className="text-[10px] font-normal text-[var(--color-text-muted)]">
+                          {theme.description}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </PopoverContent>
+          </Popover>
           <Popover>
             <PopoverTrigger asChild>
               <Button variant="ghost" size="sm" className="gap-2" aria-label="Open session menu">

@@ -606,12 +606,12 @@ const GIS_CSS = `
     border-color: #f59e0b !important;
     animation: gis-pulse 2s ease-in-out infinite;
   }
-  [data-theme="dark"] .gis-btn {
+  [data-theme-kind="dark"] .gis-btn {
     background-color: var(--color-bg-surface);
     color: var(--color-text-primary);
     border-color: var(--color-border-strong);
   }
-  [data-theme="dark"] .gis-btn:hover:not(:disabled) {
+  [data-theme-kind="dark"] .gis-btn:hover:not(:disabled) {
     background-color: var(--color-bg-elevated);
   }
 
@@ -632,7 +632,7 @@ const GIS_CSS = `
     background-position: right 6px center;
     background-clip: padding-box;
   }
-  [data-theme="dark"] .gis-tile-select {
+  [data-theme-kind="dark"] .gis-tile-select {
     background-color: var(--color-bg-surface);
     color: var(--color-text-primary);
     border-color: var(--color-border-strong);

@@ -2108,6 +2108,7 @@ export function ProjectGisGlobe() {
   const featureCount = combinedData?.features.length ?? 0;
   const demFiles = fileList?.dem ?? [];
   const osmEditFiles = fileList?.osm_edits ?? [];
+  const seismicFiles = fileList?.seismic ?? [];
 
   return (
     <ProjectSettingsPage
@@ -2235,7 +2236,7 @@ export function ProjectGisGlobe() {
                           className="shrink-0 cursor-pointer"
                         />
                         <span
-                          className={`block size-3 shrink-0 rounded-[3px] border border-slate-900/25 ${checked ? "opacity-100" : "opacity-35"}`}
+                          className={`block size-3 shrink-0 rounded-[3px] border border-[var(--color-border-strong)] ${checked ? "opacity-100" : "opacity-35"}`}
                           // eslint-disable-next-line template/no-jsx-style-prop
                           style={{ backgroundColor: colorFor(fileKey) }}
                         />
@@ -2308,7 +2309,7 @@ export function ProjectGisGlobe() {
                         className="shrink-0 cursor-pointer"
                       />
                       <span
-                        className={`block size-3 shrink-0 rounded-[3px] border border-slate-900/25 ${checked ? "opacity-100" : "opacity-35"}`}
+                        className={`block size-3 shrink-0 rounded-[3px] border border-[var(--color-border-strong)] ${checked ? "opacity-100" : "opacity-35"}`}
                         // eslint-disable-next-line template/no-jsx-style-prop
                         style={{ backgroundColor: colorFor(fileKey) }}
                       />
@@ -2348,7 +2349,7 @@ export function ProjectGisGlobe() {
                         className="shrink-0 cursor-pointer"
                       />
                       <span
-                        className={`block size-3 shrink-0 rounded-[3px] border border-slate-900/25 ${checked ? "opacity-100" : "opacity-35"}`}
+                        className={`block size-3 shrink-0 rounded-[3px] border border-[var(--color-border-strong)] ${checked ? "opacity-100" : "opacity-35"}`}
                         // eslint-disable-next-line template/no-jsx-style-prop
                         style={{ backgroundColor: colorFor(fileKey) }}
                       />
@@ -2368,6 +2369,44 @@ export function ProjectGisGlobe() {
                   );
                 })}
               </>
+            )}
+          </div>
+        </div>
+
+        {/* Seismic section — pipeline-generated .gpkg (read-only). */}
+        <div className="flex flex-col gap-[var(--space-2)]">
+          <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+            Seismic
+          </span>
+          <div className="flex max-h-[200px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] p-[var(--space-2)]">
+            {seismicFiles.length === 0 ? (
+              <p className="text-xs text-[var(--color-text-muted)]">
+                No files
+              </p>
+            ) : (
+              seismicFiles.map((f) => {
+                const fileKey = `seismic/${f}`;
+                const checked = selectedFiles.includes(fileKey);
+                return (
+                  <div
+                    key={f}
+                    className="flex min-w-0 items-center gap-2 text-xs leading-tight"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleFileSelected(fileKey)}
+                      className="shrink-0 cursor-pointer"
+                    />
+                    <span
+                      className={`block size-3 shrink-0 rounded-[3px] border border-[var(--color-border-strong)] ${checked ? "opacity-100" : "opacity-35"}`}
+                      // eslint-disable-next-line template/no-jsx-style-prop
+                      style={{ backgroundColor: colorFor(fileKey) }}
+                    />
+                    <span className="min-w-0 flex-1 truncate">{f}</span>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>

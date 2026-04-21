@@ -592,13 +592,13 @@ export function WorkspaceSidebarNav({
                   src="/seiseye_logo_black.png"
                   alt={brandName}
                   fill
-                  className="object-contain [[data-theme=dark]_&]:hidden"
+                  className="object-contain [[data-theme-kind=dark]_&]:hidden"
                 />
                 <Image
                   src="/seiseye_logo_white.png"
                   alt={brandName}
                   fill
-                  className="hidden object-contain [[data-theme=dark]_&]:block"
+                  className="hidden object-contain [[data-theme-kind=dark]_&]:block"
                 />
               </span>
             </span>

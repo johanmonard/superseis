@@ -28,6 +28,24 @@
 
   /* Brand — red */
   --red-500: #cf3e4e;
+
+  /* Neutrals (zinc) — used by "test-1" theme */
+  --zinc-50: #fafafa;
+  --zinc-100: #f4f4f5;
+  --zinc-200: #e4e4e7;
+  --zinc-300: #d4d4d8;
+  --zinc-400: #a1a1aa;
+  --zinc-500: #71717a;
+  --zinc-600: #52525b;
+  --zinc-700: #3f3f46;
+  --zinc-800: #27272a;
+  --zinc-900: #18181b;
+  --zinc-950: #09090b;
+
+  /* Accent — indigo — used by "test-1" theme */
+  --indigo-400: #818cf8;
+  --indigo-500: #6366f1;
+  --indigo-600: #4f46e5;
 }
 
 /* ----------------------------------------------------------
