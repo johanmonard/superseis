@@ -98,7 +98,7 @@ const GIS_CSS = `
     user-select: none;
     backdrop-filter: blur(8px);
   }
-  [data-theme="dark"] .gis-toolbar {
+  [data-theme-kind="dark"] .gis-toolbar {
     background-color: rgba(15,23,42,0.88);
     border-color: rgba(255,255,255,0.14);
     box-shadow: 0 6px 24px rgba(0,0,0,0.5);
@@ -110,8 +110,8 @@ const GIS_CSS = `
     background-color: rgba(15,23,42,0.05); color: #1e293b;
   }
   .gis-btn:hover:not(:disabled) { background-color: rgba(15,23,42,0.1); }
-  [data-theme="dark"] .gis-btn { background-color: rgba(255,255,255,0.08); color: #e2e8f0; }
-  [data-theme="dark"] .gis-btn:hover:not(:disabled) { background-color: rgba(255,255,255,0.16); }
+  [data-theme-kind="dark"] .gis-btn { background-color: rgba(255,255,255,0.08); color: #e2e8f0; }
+  [data-theme-kind="dark"] .gis-btn:hover:not(:disabled) { background-color: rgba(255,255,255,0.16); }
   .gis-btn--active { background-color: #3b82f6 !important; color: #fff !important; }
   .gis-tile-select {
     font-size: 11px; font-family: system-ui, sans-serif;
@@ -122,7 +122,7 @@ const GIS_CSS = `
     background-repeat: no-repeat; background-position: right 6px center;
     background-clip: padding-box;
   }
-  [data-theme="dark"] .gis-tile-select {
+  [data-theme-kind="dark"] .gis-tile-select {
     background-color: rgba(255,255,255,0.08); color: #e2e8f0;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23cbd5e1'/%3E%3C/svg%3E");
   }
@@ -130,7 +130,7 @@ const GIS_CSS = `
     background-color: #fff;
     color: #1e293b;
   }
-  [data-theme="dark"] .gis-tile-select option {
+  [data-theme-kind="dark"] .gis-tile-select option {
     background-color: #0f172a;
     color: #e2e8f0;
   }
@@ -142,7 +142,7 @@ const GIS_CSS = `
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
-  [data-theme="dark"] .gis-tile-select optgroup {
+  [data-theme-kind="dark"] .gis-tile-select optgroup {
     background-color: #1e293b;
     color: #94a3b8;
   }
@@ -150,17 +150,17 @@ const GIS_CSS = `
     display: inline-flex; align-items: stretch; height: 34px; border-radius: 8px; overflow: hidden;
     background-color: rgba(15,23,42,0.05); border: 1px solid rgba(15,23,42,0.12);
   }
-  [data-theme="dark"] .gis-zoom-group { background-color: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.14); }
+  [data-theme-kind="dark"] .gis-zoom-group { background-color: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.14); }
   .gis-zoom-group > * { flex: 0 0 auto; height: 100%; border: 0 !important; border-radius: 0 !important; background-color: transparent !important; }
   .gis-zoom-group > * + * { border-left: 1px solid rgba(15,23,42,0.12) !important; }
-  [data-theme="dark"] .gis-zoom-group > * + * { border-left-color: rgba(255,255,255,0.14) !important; }
+  [data-theme-kind="dark"] .gis-zoom-group > * + * { border-left-color: rgba(255,255,255,0.14) !important; }
   .gis-zoom-group .gis-btn { width: 32px; }
   .gis-zoom-badge {
     display: inline-flex; align-items: center; justify-content: center;
     font-size: 13px; font-weight: 600; font-family: ui-monospace, monospace;
     padding: 0 10px; min-width: 58px; color: #0f172a; user-select: none;
   }
-  [data-theme="dark"] .gis-zoom-badge { color: #e2e8f0; }
+  [data-theme-kind="dark"] .gis-zoom-badge { color: #e2e8f0; }
   .gis-legend {
     position: absolute; top: 10px; left: 10px; z-index: 3;
     display: flex; flex-direction: column; gap: 0;
@@ -174,7 +174,7 @@ const GIS_CSS = `
     display: flex; flex-direction: column;
     min-height: 0; flex: 1 1 auto; overflow-y: auto;
   }
-  [data-theme="dark"] .gis-legend {
+  [data-theme-kind="dark"] .gis-legend {
     background-color: rgba(15,23,42,0.82); border-color: rgba(255,255,255,0.12);
     color: #e2e8f0;
   }
@@ -183,19 +183,19 @@ const GIS_CSS = `
     padding: 3px 10px 4px;
     border-bottom: 1px solid rgba(15,23,42,0.08); margin-bottom: 2px;
   }
-  [data-theme="dark"] .gis-legend__header { border-bottom-color: rgba(255,255,255,0.08); }
+  [data-theme-kind="dark"] .gis-legend__header { border-bottom-color: rgba(255,255,255,0.08); }
   .gis-legend__title {
     font-weight: 700; font-size: 10px; text-transform: uppercase;
     letter-spacing: 0.05em; color: #334155; flex: 1;
   }
-  [data-theme="dark"] .gis-legend__title { color: #cbd5e1; }
+  [data-theme-kind="dark"] .gis-legend__title { color: #cbd5e1; }
   .gis-legend__chevron {
     border: none; background: none; color: #94a3b8;
     cursor: pointer; font-size: 10px; line-height: 1; padding: 0 2px;
     display: flex; align-items: center;
   }
   .gis-legend__chevron:hover { color: #475569; }
-  [data-theme="dark"] .gis-legend__chevron:hover { color: #e2e8f0; }
+  [data-theme-kind="dark"] .gis-legend__chevron:hover { color: #e2e8f0; }
   .gis-legend__row {
     display: flex; align-items: center; gap: 5px;
     padding: 1.5px 10px;
@@ -204,7 +204,7 @@ const GIS_CSS = `
     position: relative; width: 10px; height: 10px; border-radius: 50%;
     border: 1.5px solid rgba(255,255,255,0.9); flex-shrink: 0; cursor: pointer;
   }
-  [data-theme="dark"] .gis-legend__color { border-color: rgba(255,255,255,0.5); }
+  [data-theme-kind="dark"] .gis-legend__color { border-color: rgba(255,255,255,0.5); }
   .gis-legend__color input[type="color"] {
     position: absolute; inset: 0; width: 100%; height: 100%;
     opacity: 0; cursor: pointer; border: 0; padding: 0;
@@ -214,7 +214,7 @@ const GIS_CSS = `
     overflow: hidden; text-overflow: ellipsis;
     color: #334155;
   }
-  [data-theme="dark"] .gis-legend__label { color: #cbd5e1; }
+  [data-theme-kind="dark"] .gis-legend__label { color: #cbd5e1; }
   .gis-legend__sliders {
     display: flex; align-items: center; gap: 4px;
     margin-left: auto; flex-shrink: 0;
@@ -224,7 +224,7 @@ const GIS_CSS = `
     text-transform: uppercase; letter-spacing: 0.03em;
     min-width: 10px; text-align: center;
   }
-  [data-theme="dark"] .gis-legend__slider-label { color: #94a3b8; }
+  [data-theme-kind="dark"] .gis-legend__slider-label { color: #94a3b8; }
   .gis-legend__slider {
     -webkit-appearance: none; appearance: none;
     width: 52px; height: 3px; border-radius: 2px;
@@ -240,9 +240,9 @@ const GIS_CSS = `
     width: 8px; height: 8px; border-radius: 50%;
     background: #475569; border: none; cursor: pointer;
   }
-  [data-theme="dark"] .gis-legend__slider { background: rgba(255,255,255,0.15); }
-  [data-theme="dark"] .gis-legend__slider::-webkit-slider-thumb { background: #94a3b8; }
-  [data-theme="dark"] .gis-legend__slider::-moz-range-thumb { background: #94a3b8; }
+  [data-theme-kind="dark"] .gis-legend__slider { background: rgba(255,255,255,0.15); }
+  [data-theme-kind="dark"] .gis-legend__slider::-webkit-slider-thumb { background: #94a3b8; }
+  [data-theme-kind="dark"] .gis-legend__slider::-moz-range-thumb { background: #94a3b8; }
   .gis-legend__fill-cb {
     width: 10px; height: 10px; accent-color: #3b82f6;
     cursor: pointer; margin: 0; flex-shrink: 0;
@@ -260,7 +260,19 @@ const GIS_CSS = `
     height: 1px; margin: 4px 10px;
     background-color: rgba(15,23,42,0.08);
   }
-  [data-theme="dark"] .gis-legend__sep { background-color: rgba(255,255,255,0.08); }
+  [data-theme-kind="dark"] .gis-legend__sep { background-color: rgba(255,255,255,0.08); }
+  .gis-legend__heading {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px 2px;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; color: #64748b;
+  }
+  .gis-legend__heading::after {
+    content: ""; flex: 1 1 auto; height: 1px;
+    background-color: rgba(15,23,42,0.08);
+  }
+  [data-theme-kind="dark"] .gis-legend__heading { color: #94a3b8; }
+  [data-theme-kind="dark"] .gis-legend__heading::after { background-color: rgba(255,255,255,0.08); }
   .gis-legend__remove {
     border: none; background: none; color: #94a3b8;
     cursor: pointer; font-size: 12px; line-height: 1; padding: 0 2px;
@@ -356,6 +368,8 @@ const ZoomInIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="n
 const ZoomOutIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>;
 const TiltIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3 L21 9 L12 15 L3 9 Z"/><path d="M3 9 L3 14 L12 20 L21 14 L21 9"/></svg>;
 const ExpandIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>;
+const LockIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>;
+const UnlockIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0"/></svg>;
 
 // ---------------------------------------------------------------------------
 // Component
@@ -415,6 +429,11 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
   const [pitchDisplay, setPitchDisplay] = React.useState(0);
   const [, setIsFullscreen] = React.useState(false);
   const [legendSliders, setLegendSliders] = React.useState(false);
+  // Session-level view lock. When true: MapLibre interaction handlers are
+  // disabled (no pan/zoom/rotate/tilt) and the auto-fit effects below
+  // short-circuit so newly-arriving data doesn't yank the camera around.
+  // Resets on unmount — this is intentionally not persisted.
+  const [locked, setLocked] = React.useState(false);
 
   // GeoJSON data comes from react-query so it persists across pages and is
   // deduplicated automatically. A stable derived map keeps lookup fast.
@@ -511,6 +530,30 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
     map.once("style.load", () => setStyleReady(true));
     map.setStyle(buildStyle(TILE_SOURCES[tileIndex]));
   }, [tileIndex]);
+
+  // View lock — toggle MapLibre's input handlers. We keep the toolbar's
+  // zoom / tilt buttons active even when locked so the user can still
+  // nudge the view on purpose; only ambient interactions (drag, wheel,
+  // keyboard) are frozen. Re-applied after a style swap since setStyle
+  // preserves handler state but a fresh map instance would need it.
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const handlers = [
+      map.dragPan,
+      map.scrollZoom,
+      map.doubleClickZoom,
+      map.touchZoomRotate,
+      map.dragRotate,
+      map.keyboard,
+      map.boxZoom,
+    ];
+    if (locked) {
+      handlers.forEach((h) => h?.disable());
+    } else {
+      handlers.forEach((h) => h?.enable());
+    }
+  }, [locked, styleReady]);
 
   // Reconcile MapLibre native sources/layers from `visibleFiles`.
   //
@@ -712,6 +755,7 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
     fittedKeysRef.current = "";
   }
   React.useEffect(() => {
+    if (locked) return;
     if (visibleFiles.length === 0) return;
     if (!containerReady) return;
     const map = mapRef.current;
@@ -749,7 +793,7 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
       map.fitBounds(bounds, { padding: 60, maxZoom: 14 });
       fittedKeysRef.current = currentKeys;
     }
-  }, [visibleFiles, loadedKeys, geojsonByKey, styleReady, containerReady]);
+  }, [visibleFiles, loadedKeys, geojsonByKey, styleReady, containerReady, locked]);
 
   // Explicit fit to caller-supplied bounds. Runs whenever the tuple
   // identity changes, so a fresh grid run with a new bbox refits cleanly.
@@ -757,6 +801,7 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
   // compete with the visible-files fit above because it reacts to a
   // different signal.
   React.useEffect(() => {
+    if (locked) return;
     if (!fitBounds) return;
     if (!containerReady) return;
     const map = mapRef.current;
@@ -771,7 +816,7 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
       ],
       { padding: 60, maxZoom: 14 },
     );
-  }, [fitBounds, containerReady, styleReady]);
+  }, [fitBounds, containerReady, styleReady, locked]);
 
   // Toolbar handlers
   const handleZoomIn = () => mapRef.current?.zoomIn();
@@ -810,6 +855,15 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
           <div className="gis-legend__body">
             {legendItems.map((item) => {
               if (item.separator) {
+                // Labelled separators render as a small section heading;
+                // unlabelled ones are just a thin rule line.
+                if (item.label) {
+                  return (
+                    <div key={item.key} className="gis-legend__heading">
+                      {item.label}
+                    </div>
+                  );
+                }
                 return <div key={item.key} className="gis-legend__sep" />;
               }
               const visible = item.visible !== false;
@@ -987,6 +1041,16 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
           title={pitchDisplay > 0 ? "Reset tilt" : "Tilt 60°"}
         >
           <TiltIcon />
+        </button>
+
+        {/* Lock view — disables ambient pan/zoom + prevents auto-fit */}
+        <button
+          className={`gis-btn${locked ? " gis-btn--active" : ""}`}
+          onClick={() => setLocked((v) => !v)}
+          title={locked ? "Unlock view" : "Lock view"}
+          aria-pressed={locked}
+        >
+          {locked ? <LockIcon /> : <UnlockIcon />}
         </button>
 
         {/* Fullscreen */}
