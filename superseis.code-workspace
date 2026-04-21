@@ -8,6 +8,9 @@
 		},
 		{
 			"path": "../ocfa"
+		},
+		{
+			"path": "../../SEISLAB/seisroot/SEISEYE SAS/johan.monard/gassum3d_v2/inputs/config"
 		}
 	],
 	"settings": {}
