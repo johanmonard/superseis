@@ -2214,7 +2214,7 @@ export function ProjectGisGlobe() {
                   <Plus size={14} />
                 </button>
               </div>
-              <div className="flex max-h-[200px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] p-[var(--space-2)]">
+              <div className="flex max-h-[200px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] p-[var(--space-2)]">
                 {files.length === 0 ? (
                   <p className="text-xs text-[var(--color-text-muted)]">
                     No files
@@ -2286,7 +2286,7 @@ export function ProjectGisGlobe() {
               </button>
             </div>
           </div>
-          <div className="flex max-h-[280px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] p-[var(--space-2)]">
+          <div className="flex max-h-[280px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] p-[var(--space-2)]">
             {(fileList?.gis_layers ?? []).length === 0 && osmEditFiles.length === 0 ? (
               <p className="text-xs text-[var(--color-text-muted)]">
                 No files
@@ -2378,7 +2378,7 @@ export function ProjectGisGlobe() {
           <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
             Seismic
           </span>
-          <div className="flex max-h-[200px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] p-[var(--space-2)]">
+          <div className="flex max-h-[200px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] p-[var(--space-2)]">
             {seismicFiles.length === 0 ? (
               <p className="text-xs text-[var(--color-text-muted)]">
                 No files
@@ -2416,7 +2416,7 @@ export function ProjectGisGlobe() {
           <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
             DEM
           </span>
-          <div className="flex max-h-[200px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] p-[var(--space-2)]">
+          <div className="flex max-h-[200px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] p-[var(--space-2)]">
             {demFiles.length === 0 ? (
               <p className="text-xs text-[var(--color-text-muted)]">
                 No files

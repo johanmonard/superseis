@@ -92,119 +92,109 @@ const GIS_CSS = `
     gap: 8px;
     padding: 6px 10px;
     border-radius: 999px;
-    background-color: rgba(255,255,255,0.92);
-    border: 1px solid rgba(15,23,42,0.12);
-    box-shadow: 0 6px 20px rgba(15,23,42,0.18);
+    background-color: color-mix(in srgb, var(--color-bg-surface) 92%, transparent);
+    border: 1px solid var(--color-border-subtle);
+    box-shadow: 0 6px 20px var(--color-shadow-alpha);
     user-select: none;
     backdrop-filter: blur(8px);
-  }
-  [data-theme-kind="dark"] .gis-toolbar {
-    background-color: rgba(15,23,42,0.88);
-    border-color: rgba(255,255,255,0.14);
-    box-shadow: 0 6px 24px rgba(0,0,0,0.5);
   }
   .gis-btn {
     width: 34px; height: 34px;
     display: flex; align-items: center; justify-content: center;
     border-radius: 6px; border: none; cursor: pointer;
-    background-color: rgba(15,23,42,0.05); color: #1e293b;
+    background-color: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+    color: var(--color-text-primary);
   }
-  .gis-btn:hover:not(:disabled) { background-color: rgba(15,23,42,0.1); }
-  [data-theme-kind="dark"] .gis-btn { background-color: rgba(255,255,255,0.08); color: #e2e8f0; }
-  [data-theme-kind="dark"] .gis-btn:hover:not(:disabled) { background-color: rgba(255,255,255,0.16); }
-  .gis-btn--active { background-color: #3b82f6 !important; color: #fff !important; }
+  .gis-btn:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+  }
+  .gis-btn--active {
+    background-color: var(--color-accent) !important;
+    color: var(--color-accent-foreground) !important;
+  }
   .gis-tile-select {
     font-size: 11px; font-family: system-ui, sans-serif;
     padding: 4px 22px 4px 8px; border-radius: 4px;
     border: none; cursor: pointer; outline: none; appearance: none;
-    background-color: rgba(15,23,42,0.05); color: #1e293b; font-weight: 500;
+    background-color: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+    color: var(--color-text-primary); font-weight: 500;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23666'/%3E%3C/svg%3E");
     background-repeat: no-repeat; background-position: right 6px center;
     background-clip: padding-box;
   }
   [data-theme-kind="dark"] .gis-tile-select {
-    background-color: rgba(255,255,255,0.08); color: #e2e8f0;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23cbd5e1'/%3E%3C/svg%3E");
   }
   .gis-tile-select option {
-    background-color: #fff;
-    color: #1e293b;
-  }
-  [data-theme-kind="dark"] .gis-tile-select option {
-    background-color: #0f172a;
-    color: #e2e8f0;
+    background-color: var(--color-bg-surface);
+    color: var(--color-text-primary);
   }
   .gis-tile-select optgroup {
-    background-color: #f1f5f9;
-    color: #64748b;
+    background-color: var(--color-bg-elevated);
+    color: var(--color-text-muted);
     font-weight: 600;
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
-  [data-theme-kind="dark"] .gis-tile-select optgroup {
-    background-color: #1e293b;
-    color: #94a3b8;
-  }
   .gis-zoom-group {
     display: inline-flex; align-items: stretch; height: 34px; border-radius: 8px; overflow: hidden;
-    background-color: rgba(15,23,42,0.05); border: 1px solid rgba(15,23,42,0.12);
+    background-color: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+    border: 1px solid var(--color-border-subtle);
   }
-  [data-theme-kind="dark"] .gis-zoom-group { background-color: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.14); }
   .gis-zoom-group > * { flex: 0 0 auto; height: 100%; border: 0 !important; border-radius: 0 !important; background-color: transparent !important; }
-  .gis-zoom-group > * + * { border-left: 1px solid rgba(15,23,42,0.12) !important; }
-  [data-theme-kind="dark"] .gis-zoom-group > * + * { border-left-color: rgba(255,255,255,0.14) !important; }
+  .gis-zoom-group > * + * { border-left: 1px solid var(--color-border-subtle) !important; }
   .gis-zoom-group .gis-btn { width: 32px; }
   .gis-zoom-badge {
     display: inline-flex; align-items: center; justify-content: center;
     font-size: 13px; font-weight: 600; font-family: ui-monospace, monospace;
-    padding: 0 10px; min-width: 58px; color: #0f172a; user-select: none;
+    padding: 0 10px; min-width: 58px;
+    color: var(--color-text-primary); user-select: none;
   }
-  [data-theme-kind="dark"] .gis-zoom-badge { color: #e2e8f0; }
   .gis-legend {
     position: absolute; top: 10px; left: 10px; z-index: 3;
     display: flex; flex-direction: column; gap: 0;
     padding: 5px 0; border-radius: 8px;
-    background-color: rgba(255,255,255,0.88); border: 1px solid rgba(15,23,42,0.12);
+    background-color: color-mix(in srgb, var(--color-bg-surface) 88%, transparent);
+    border: 1px solid var(--color-border-subtle);
     backdrop-filter: blur(8px); font-family: system-ui, sans-serif;
-    font-size: 11px; color: #1e293b; user-select: none; min-width: 120px;
+    font-size: 11px;
+    color: var(--color-text-primary);
+    user-select: none; min-width: 120px;
     max-height: 50%;
   }
   .gis-legend__body {
     display: flex; flex-direction: column;
     min-height: 0; flex: 1 1 auto; overflow-y: auto;
   }
-  [data-theme-kind="dark"] .gis-legend {
-    background-color: rgba(15,23,42,0.82); border-color: rgba(255,255,255,0.12);
-    color: #e2e8f0;
-  }
   .gis-legend__header {
     display: flex; align-items: center; gap: 6px;
     padding: 3px 10px 4px;
-    border-bottom: 1px solid rgba(15,23,42,0.08); margin-bottom: 2px;
+    border-bottom: 1px solid var(--color-border-subtle);
+    margin-bottom: 2px;
   }
-  [data-theme-kind="dark"] .gis-legend__header { border-bottom-color: rgba(255,255,255,0.08); }
   .gis-legend__title {
     font-weight: 700; font-size: 10px; text-transform: uppercase;
-    letter-spacing: 0.05em; color: #334155; flex: 1;
+    letter-spacing: 0.05em;
+    color: var(--color-text-secondary);
+    flex: 1;
   }
-  [data-theme-kind="dark"] .gis-legend__title { color: #cbd5e1; }
   .gis-legend__chevron {
-    border: none; background: none; color: #94a3b8;
+    border: none; background: none;
+    color: var(--color-text-muted);
     cursor: pointer; font-size: 10px; line-height: 1; padding: 0 2px;
     display: flex; align-items: center;
   }
-  .gis-legend__chevron:hover { color: #475569; }
-  [data-theme-kind="dark"] .gis-legend__chevron:hover { color: #e2e8f0; }
+  .gis-legend__chevron:hover { color: var(--color-text-primary); }
   .gis-legend__row {
     display: flex; align-items: center; gap: 5px;
     padding: 1.5px 10px;
   }
   .gis-legend__color {
     position: relative; width: 10px; height: 10px; border-radius: 50%;
-    border: 1.5px solid rgba(255,255,255,0.9); flex-shrink: 0; cursor: pointer;
+    border: 1.5px solid var(--color-border-strong);
+    flex-shrink: 0; cursor: pointer;
   }
-  [data-theme-kind="dark"] .gis-legend__color { border-color: rgba(255,255,255,0.5); }
   .gis-legend__color input[type="color"] {
     position: absolute; inset: 0; width: 100%; height: 100%;
     opacity: 0; cursor: pointer; border: 0; padding: 0;
@@ -212,43 +202,44 @@ const GIS_CSS = `
   .gis-legend__label {
     flex: 1; min-width: 0; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis;
-    color: #334155;
+    color: var(--color-text-primary);
   }
-  [data-theme-kind="dark"] .gis-legend__label { color: #cbd5e1; }
   .gis-legend__sliders {
     display: flex; align-items: center; gap: 4px;
     margin-left: auto; flex-shrink: 0;
   }
   .gis-legend__slider-label {
-    font-weight: 600; color: #64748b; font-size: 8px;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    font-size: 8px;
     text-transform: uppercase; letter-spacing: 0.03em;
     min-width: 10px; text-align: center;
   }
-  [data-theme-kind="dark"] .gis-legend__slider-label { color: #94a3b8; }
   .gis-legend__slider {
     -webkit-appearance: none; appearance: none;
     width: 52px; height: 3px; border-radius: 2px;
-    background: rgba(15,23,42,0.15); outline: none;
+    background: color-mix(in srgb, var(--color-text-primary) 15%, transparent);
+    outline: none;
     cursor: pointer; opacity: 0.5;
   }
   .gis-legend__slider:hover { opacity: 1; }
   .gis-legend__slider::-webkit-slider-thumb {
     -webkit-appearance: none; width: 8px; height: 8px;
-    border-radius: 50%; background: #475569; border: none; cursor: pointer;
+    border-radius: 50%;
+    background: var(--color-text-secondary);
+    border: none; cursor: pointer;
   }
   .gis-legend__slider::-moz-range-thumb {
     width: 8px; height: 8px; border-radius: 50%;
-    background: #475569; border: none; cursor: pointer;
+    background: var(--color-text-secondary);
+    border: none; cursor: pointer;
   }
-  [data-theme-kind="dark"] .gis-legend__slider { background: rgba(255,255,255,0.15); }
-  [data-theme-kind="dark"] .gis-legend__slider::-webkit-slider-thumb { background: #94a3b8; }
-  [data-theme-kind="dark"] .gis-legend__slider::-moz-range-thumb { background: #94a3b8; }
   .gis-legend__fill-cb {
-    width: 10px; height: 10px; accent-color: #3b82f6;
+    width: 10px; height: 10px; accent-color: var(--color-accent);
     cursor: pointer; margin: 0; flex-shrink: 0;
   }
   .gis-legend__vis-cb {
-    width: 11px; height: 11px; accent-color: #3b82f6;
+    width: 11px; height: 11px; accent-color: var(--color-accent);
     cursor: pointer; margin: 0; flex-shrink: 0;
   }
   .gis-legend__row--hidden .gis-legend__label { opacity: 0.45; }
@@ -258,27 +249,26 @@ const GIS_CSS = `
   }
   .gis-legend__sep {
     height: 1px; margin: 4px 10px;
-    background-color: rgba(15,23,42,0.08);
+    background-color: var(--color-border-subtle);
   }
-  [data-theme-kind="dark"] .gis-legend__sep { background-color: rgba(255,255,255,0.08); }
   .gis-legend__heading {
     display: flex; align-items: center; gap: 6px;
     padding: 6px 10px 2px;
     font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
-    text-transform: uppercase; color: #64748b;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
   }
   .gis-legend__heading::after {
     content: ""; flex: 1 1 auto; height: 1px;
-    background-color: rgba(15,23,42,0.08);
+    background-color: var(--color-border-subtle);
   }
-  [data-theme-kind="dark"] .gis-legend__heading { color: #94a3b8; }
-  [data-theme-kind="dark"] .gis-legend__heading::after { background-color: rgba(255,255,255,0.08); }
   .gis-legend__remove {
-    border: none; background: none; color: #94a3b8;
+    border: none; background: none;
+    color: var(--color-text-muted);
     cursor: pointer; font-size: 12px; line-height: 1; padding: 0 2px;
     flex-shrink: 0;
   }
-  .gis-legend__remove:hover { color: #ef4444; }
+  .gis-legend__remove:hover { color: var(--color-status-danger); }
 `;
 
 const CSS_ID = "gis-viewer-css";

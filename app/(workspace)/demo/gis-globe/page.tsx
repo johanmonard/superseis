@@ -1249,7 +1249,7 @@ export default function GisGlobePage() {
     >
       <div className="space-y-[var(--space-4)]">
         <Field label="GPKG Files">
-          <div className="flex max-h-[200px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] p-[var(--space-2)]">
+          <div className="flex max-h-[200px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] p-[var(--space-2)]">
             {files.filter((f) => !isEditFile(f)).length === 0 ? (
               <p className="text-xs text-[var(--color-text-muted)]">
                 No files
