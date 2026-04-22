@@ -33,6 +33,7 @@ import {
 
 const AMBIENT_SOUND_SRC = "/sound/ambient-drone.mp3";
 const AMBIENT_FADE_MS = 10_000;
+const AMBIENT_PEAK_VOLUME = 0.3;
 
 function useLandingAmbientSound(enabled: boolean) {
   const [blocked, setBlocked] = React.useState(false);
@@ -73,7 +74,7 @@ function useLandingAmbientSound(enabled: boolean) {
           isFinite(d) && d > 0 && t > d - fadeSec
             ? Math.max(0, (d - t) / fadeSec)
             : 1;
-        audio.volume = Math.min(1, Math.max(0, Math.min(fadeIn, fadeOut)));
+        audio.volume = Math.min(1, Math.max(0, Math.min(fadeIn, fadeOut))) * AMBIENT_PEAK_VOLUME;
       }
       raf = requestAnimationFrame(tick);
     };
@@ -154,100 +155,131 @@ function useIsDarkTheme() {
 
 
 const ABOUT_PARAGRAPHS = [
-  "Seiseye is a web app for 3D seismic acquisition simulation, built for seismic contractors, oil companies, and field managers.",
-  "Define your survey, resources, terrain, and strategy, then run the simulation, compare scenarios, optimize cost and timing, and export the analytics and visuals that support your decisions — all within a single, fully integrated platform.",
-  "Built on over 40 years of field and hands-on experience, it handles the most complex operations in a fraction of the time required by traditional methods.",
-  "What you get: reliable forecasts, defensible decisions, and full control over every project, end-to-end.",
+  "Seiseye is a unique simulation platform for 3D seismic acquisition, built for oil companies and seismic contractors.",
+  "Configure survey designs, resources, terrain, and operational strategy, then run scenarios to optimize cost and schedule before any crew mobilizes.",
+  "Outputs include field operation simulation videos, operational and financial analytics, and detailed costing with P&L and cash flow statements.",
+  "Backed by 40 years of field experience, Seiseye models any operational complexity and delivers reliable forecasts far faster than traditional methods.",
 ];
 
-const ABOUT_PARAGRAPH_INTERVAL_MS = 5000;
-const ABOUT_SLOT_H = 140;
-const ABOUT_ENTRY_OFFSET = 16;
+const ABOUT_STAGGER_MS = 4000;
+const ABOUT_FAST_STAGGER_MS = 900;
+const ABOUT_INITIAL_DELAY_MS = 200;
+const ABOUT_MAX_COL_W = 260;
+const ABOUT_COL_GAP = 24;
+const ABOUT_VIEWPORT_PAD = 64;
 
 function AboutHoverCard({ children }: { children: React.ReactNode }) {
   const [hovered, setHovered] = React.useState(false);
-  const [phase, setPhase] = React.useState(0);
-  const [entered, setEntered] = React.useState<Set<number>>(new Set());
+  const [revealed, setRevealed] = React.useState(0);
+  const [fastForward, setFastForward] = React.useState(false);
+  const [colW, setColW] = React.useState(ABOUT_MAX_COL_W);
+  const [topPx, setTopPx] = React.useState(0);
+  const cardRef = React.useRef<HTMLDivElement>(null);
+  const timerRef = React.useRef<{ startAt: number; stagger: number } | null>(null);
   const N = ABOUT_PARAGRAPHS.length;
-  const totalPhases = N + 2;
+
+  const measure = React.useCallback(() => {
+    if (typeof window === "undefined") return;
+    const available = window.innerWidth - ABOUT_VIEWPORT_PAD * 2 - ABOUT_COL_GAP * (N - 1);
+    const fit = Math.floor(available / N);
+    setColW(Math.max(140, Math.min(ABOUT_MAX_COL_W, fit)));
+    if (cardRef.current) {
+      const rect = cardRef.current.getBoundingClientRect();
+      setTopPx(rect.bottom + 16);
+    }
+  }, [N]);
+
+  React.useEffect(() => {
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [measure]);
 
   React.useEffect(() => {
     if (!hovered) {
-      setPhase(0);
-      setEntered(new Set());
+      setRevealed(0);
+      setFastForward(false);
+      timerRef.current = null;
       return;
     }
-    if (phase >= totalPhases) return;
-    const delay = phase === 0 ? 200 : ABOUT_PARAGRAPH_INTERVAL_MS;
-    const t = setTimeout(() => setPhase((p) => p + 1), delay);
-    return () => clearTimeout(t);
-  }, [hovered, phase, totalPhases]);
+    if (revealed >= N) {
+      timerRef.current = null;
+      return;
+    }
 
-  React.useEffect(() => {
-    const i = phase - 1;
-    if (i < 0 || i >= N || entered.has(i)) return;
-    let raf2 = 0;
-    const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => {
-        setEntered((prev) => {
-          if (prev.has(i)) return prev;
-          const next = new Set(prev);
-          next.add(i);
-          return next;
-        });
-      });
-    });
-    return () => {
-      cancelAnimationFrame(raf1);
-      cancelAnimationFrame(raf2);
-    };
-  }, [phase, entered, N]);
+    let delay: number;
+    if (!timerRef.current) {
+      const stagger =
+        revealed === 0 && !fastForward
+          ? ABOUT_INITIAL_DELAY_MS
+          : fastForward
+            ? ABOUT_FAST_STAGGER_MS
+            : ABOUT_STAGGER_MS;
+      timerRef.current = { startAt: performance.now(), stagger };
+      delay = stagger;
+    } else {
+      const { startAt, stagger } = timerRef.current;
+      const effective =
+        fastForward && stagger === ABOUT_STAGGER_MS
+          ? ABOUT_FAST_STAGGER_MS
+          : stagger;
+      delay = Math.max(0, effective - (performance.now() - startAt));
+    }
+
+    const t = setTimeout(() => {
+      timerRef.current = null;
+      setRevealed((r) => r + 1);
+    }, delay);
+    return () => clearTimeout(t);
+  }, [hovered, revealed, fastForward, N]);
+
+  const rowW = N * colW + (N - 1) * ABOUT_COL_GAP;
+
+  const handleEnter = () => {
+    measure();
+    setHovered(true);
+  };
 
   return (
     <div
+      ref={cardRef}
       className="relative"
-      onMouseEnter={() => setHovered(true)}
+      onMouseEnter={handleEnter}
       onMouseLeave={() => setHovered(false)}
     >
-      <WireframeCard label="About" onClick={() => {}}>
+      <WireframeCard label="About" onClick={() => setFastForward(true)}>
         {children}
       </WireframeCard>
 
       {hovered && (
         <div
-          className="pointer-events-none absolute left-1/2 top-full z-10 w-[360px] -translate-x-1/2 pt-[var(--space-3)]"
+          className="pointer-events-none fixed left-1/2 z-10 -translate-x-1/2"
           // eslint-disable-next-line template/no-jsx-style-prop
-          style={{ height: `${2 * ABOUT_SLOT_H}px` }}
+          style={{ top: topPx, width: rowW }}
         >
           {ABOUT_PARAGRAPHS.map((p, i) => {
-            if (i >= phase) return null;
-            const slot = i - Math.max(0, phase - 2);
-            const isEntered = entered.has(i);
-            const entrySlot = i === 0 ? 0 : 1;
-            const settledY = slot * ABOUT_SLOT_H;
-            const preEntryY = entrySlot * ABOUT_SLOT_H + ABOUT_ENTRY_OFFSET;
-            const y = isEntered ? settledY : preEntryY;
-            const settledOpacity = slot >= 0 && slot <= 1 ? 1 : 0;
-            const opacity = isEntered ? settledOpacity : 0;
+            const shown = i < revealed;
             return (
-              <div
+              <p
                 key={i}
                 // eslint-disable-next-line template/no-jsx-style-prop
                 style={{
                   position: "absolute",
+                  left: i * (colW + ABOUT_COL_GAP),
                   top: 0,
-                  left: 0,
-                  right: 0,
-                  transform: `translateY(${y}px)`,
-                  opacity,
+                  width: colW,
+                  opacity: shown ? 1 : 0,
+                  transform: shown
+                    ? "translate3d(0, 0, 0)"
+                    : "translate3d(0, 10px, 0)",
                   transition:
-                    "transform 1400ms cubic-bezier(0.22, 1, 0.36, 1), opacity 1400ms ease-out",
+                    "transform 700ms cubic-bezier(0.22, 1, 0.36, 1), opacity 700ms ease-out",
+                  hyphens: "auto",
                 }}
+                className="text-justify text-sm leading-relaxed text-[var(--color-text-secondary)]"
               >
-                <p className="text-center text-sm leading-relaxed text-[var(--color-text-secondary)]">
-                  {p}
-                </p>
-              </div>
+                {p}
+              </p>
             );
           })}
         </div>
@@ -259,7 +291,7 @@ function AboutHoverCard({ children }: { children: React.ReactNode }) {
 function ToolsHoverCard({ children }: { children: React.ReactNode }) {
   const [hovered, setHovered] = React.useState(false);
   const ITEM_H = 38;
-  const items = ["Design", "Converter", "Fold"];
+  const items = ["Design", "Converter", "Fold", "Costing", "Gis Studio"];
 
   return (
     <div
