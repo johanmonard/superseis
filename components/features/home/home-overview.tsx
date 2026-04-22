@@ -1,13 +1,30 @@
 "use client";
 
+/* eslint-disable template/no-jsx-style-prop -- landing screen relies on runtime motion and positioning values */
+
 import * as React from "react";
+import { createPortal } from "react-dom";
 import Image from "next/image";
 import { appIcons } from "@/components/ui/icon";
 
-const { chevronRight: ChevronRight, folderOpen: FolderOpen } = appIcons;
+const {
+  chevronRight: ChevronRight,
+  folderOpen: FolderOpen,
+  loader: Loader,
+  logIn: LogIn,
+  volume2: Volume2,
+  volumeX: VolumeX,
+} = appIcons;
 
 import { useActiveProject } from "@/lib/use-active-project";
+import {
+  useAuthSession,
+  useLoginMutation,
+  useLogoutMutation,
+} from "@/lib/use-auth-session";
+import { getApiErrorMessage } from "@/services/api/auth";
 import { useProjectList, useCreateProject } from "@/services/query/project";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,15 +33,25 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { ProjectSettingsWorkflow } from "./project-settings-workflow";
 import {
   AnimationLoop,
   SpinningCube,
   PendulumWave,
+  PendulumHighlightProvider,
   FractalTree,
+  TreeHighlightProvider,
   WaveMesh,
+  MeshHighlightProvider,
+  DnaHelix,
+  DnaHelixHighlightProvider,
+  DNA_HELIX_RUNG_COUNT,
 } from "./landing-wireframes";
 
 /* ------------------------------------------------------------------
@@ -155,28 +182,98 @@ function useIsDarkTheme() {
 
 
 const ABOUT_PARAGRAPHS = [
-  "Seiseye is a unique simulation platform for 3D seismic acquisition, built for oil companies and seismic contractors.",
+  "Seiseye is a browser-based simulation platform for 3D seismic acquisition, used by oil companies and seismic contractors across planning and field operations.",
   "Configure survey designs, resources, terrain, and operational strategy, then run scenarios to optimize cost and schedule before any crew mobilizes.",
   "Outputs include field operation simulation videos, operational and financial analytics, and detailed costing with P&L and cash flow statements.",
   "Backed by 40 years of field experience, Seiseye models any operational complexity and delivers reliable forecasts far faster than traditional methods.",
 ];
 
-const ABOUT_STAGGER_MS = 4000;
-const ABOUT_FAST_STAGGER_MS = 900;
-const ABOUT_INITIAL_DELAY_MS = 200;
-const ABOUT_MAX_COL_W = 260;
+// Phrases inside each paragraph that are permanently rendered in the accent
+// colour. They appear coloured the moment the paragraph enters — no delay.
+const ABOUT_HIGHLIGHTS: Record<number, string[]> = {
+  0: ["simulation platform for 3D seismic acquisition"],
+  1: ["optimize cost and schedule"],
+  2: ["videos, operational and financial analytics"],
+  3: ["any operational complexity", "reliable forecasts"],
+};
+
+function renderAboutParagraph(text: string, idx: number) {
+  const phrases = ABOUT_HIGHLIGHTS[idx];
+  if (!phrases || phrases.length === 0) return text;
+
+  const spans = phrases
+    .map((phrase) => ({ phrase, start: text.indexOf(phrase) }))
+    .filter((s) => s.start >= 0)
+    .sort((a, b) => a.start - b.start);
+
+  if (spans.length === 0) return text;
+
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  spans.forEach((s, i) => {
+    if (s.start > cursor) parts.push(text.slice(cursor, s.start));
+    parts.push(
+      <span
+        key={i}
+        // eslint-disable-next-line template/no-jsx-style-prop -- themed colour
+        style={{ color: "var(--color-accent)" }}
+      >
+        {s.phrase}
+      </span>,
+    );
+    cursor = s.start + s.phrase.length;
+  });
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return <>{parts}</>;
+}
+
+// Landing card-row layout constants. Cards are absolutely positioned inside
+// a `relative` container so we can drive the login → logged-in transition
+// with CSS transitions on each slot's translateX / opacity.
+const LANDING_CARD_UNIT = 208; // card width + inter-card gap, in px.
+const LANDING_OFFSCREEN_X = -520; // starting slot for NEW/OPEN/TOOLS pre-login.
+
+function cardSlotStyle(
+  x: number,
+  visible: boolean,
+  durationMs: number,
+  delayMs: number,
+): React.CSSProperties {
+  return {
+    position: "absolute",
+    left: "50%",
+    top: 0,
+    transform: `translate3d(calc(-50% + ${x}px), 0, 0)`,
+    opacity: visible ? 1 : 0,
+    pointerEvents: visible ? "auto" : "none",
+    transition: `transform ${durationMs}ms cubic-bezier(0.22, 1, 0.36, 1) ${delayMs}ms, opacity ${durationMs}ms ease-out ${delayMs}ms`,
+  };
+}
+
+const ABOUT_STAGGER_MS = 700;
+const ABOUT_INITIAL_DELAY_MS = 180;
+const ABOUT_MAX_COL_W = 208; // 20 % narrower than the previous 260 px cap.
 const ABOUT_COL_GAP = 24;
 const ABOUT_VIEWPORT_PAD = 64;
+const ABOUT_RISE_PX = 90;
+const ABOUT_WIRE_LEVELS = 2;
 
 function AboutHoverCard({ children }: { children: React.ReactNode }) {
   const [hovered, setHovered] = React.useState(false);
   const [revealed, setRevealed] = React.useState(0);
-  const [fastForward, setFastForward] = React.useState(false);
   const [colW, setColW] = React.useState(ABOUT_MAX_COL_W);
   const [topPx, setTopPx] = React.useState(0);
+  const [portalTarget, setPortalTarget] = React.useState<HTMLElement | null>(null);
   const cardRef = React.useRef<HTMLDivElement>(null);
-  const timerRef = React.useRef<{ startAt: number; stagger: number } | null>(null);
   const N = ABOUT_PARAGRAPHS.length;
+
+  // Ancestor transforms (the landing-card slot wrapper uses translate3d) turn
+  // `position: fixed` into a regular absolute-ancestor layout, so the
+  // paragraphs have to be rendered into `document.body` via a portal to stay
+  // truly viewport-positioned.
+  React.useEffect(() => {
+    setPortalTarget(document.body);
+  }, []);
 
   const measure = React.useCallback(() => {
     if (typeof window === "undefined") return;
@@ -198,40 +295,13 @@ function AboutHoverCard({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     if (!hovered) {
       setRevealed(0);
-      setFastForward(false);
-      timerRef.current = null;
       return;
     }
-    if (revealed >= N) {
-      timerRef.current = null;
-      return;
-    }
-
-    let delay: number;
-    if (!timerRef.current) {
-      const stagger =
-        revealed === 0 && !fastForward
-          ? ABOUT_INITIAL_DELAY_MS
-          : fastForward
-            ? ABOUT_FAST_STAGGER_MS
-            : ABOUT_STAGGER_MS;
-      timerRef.current = { startAt: performance.now(), stagger };
-      delay = stagger;
-    } else {
-      const { startAt, stagger } = timerRef.current;
-      const effective =
-        fastForward && stagger === ABOUT_STAGGER_MS
-          ? ABOUT_FAST_STAGGER_MS
-          : stagger;
-      delay = Math.max(0, effective - (performance.now() - startAt));
-    }
-
-    const t = setTimeout(() => {
-      timerRef.current = null;
-      setRevealed((r) => r + 1);
-    }, delay);
+    if (revealed >= N) return;
+    const delay = revealed === 0 ? ABOUT_INITIAL_DELAY_MS : ABOUT_STAGGER_MS;
+    const t = setTimeout(() => setRevealed((r) => r + 1), delay);
     return () => clearTimeout(t);
-  }, [hovered, revealed, fastForward, N]);
+  }, [hovered, revealed, N]);
 
   const rowW = N * colW + (N - 1) * ABOUT_COL_GAP;
 
@@ -241,109 +311,494 @@ function AboutHoverCard({ children }: { children: React.ReactNode }) {
   };
 
   return (
+    <MeshHighlightProvider revealed={hovered ? ABOUT_WIRE_LEVELS : 0}>
     <div
       ref={cardRef}
-      className="relative"
+      className="group relative"
       onMouseEnter={handleEnter}
       onMouseLeave={() => setHovered(false)}
     >
-      <WireframeCard label="About" onClick={() => setFastForward(true)}>
+      <WireframeCard label="About" onClick={() => setHovered((v) => !v)}>
         {children}
       </WireframeCard>
 
-      {hovered && (
-        <div
-          className="pointer-events-none fixed left-1/2 z-10 -translate-x-1/2"
-          // eslint-disable-next-line template/no-jsx-style-prop
-          style={{ top: topPx, width: rowW }}
-        >
-          {ABOUT_PARAGRAPHS.map((p, i) => {
-            const shown = i < revealed;
-            return (
-              <p
-                key={i}
-                // eslint-disable-next-line template/no-jsx-style-prop
-                style={{
-                  position: "absolute",
-                  left: i * (colW + ABOUT_COL_GAP),
-                  top: 0,
-                  width: colW,
-                  opacity: shown ? 1 : 0,
-                  transform: shown
-                    ? "translate3d(0, 0, 0)"
-                    : "translate3d(0, 10px, 0)",
-                  transition:
-                    "transform 700ms cubic-bezier(0.22, 1, 0.36, 1), opacity 700ms ease-out",
-                  hyphens: "auto",
-                }}
-                className="text-justify text-sm leading-relaxed text-[var(--color-text-secondary)]"
-              >
-                {p}
+      {portalTarget
+        ? createPortal(
+            <div
+              className="pointer-events-none fixed left-1/2 z-10 -translate-x-1/2"
+              // eslint-disable-next-line template/no-jsx-style-prop
+              style={{ top: topPx, width: rowW }}
+            >
+              {ABOUT_PARAGRAPHS.map((p, i) => {
+                const shown = hovered && i < revealed;
+                return (
+                  <p
+                    key={i}
+                    // eslint-disable-next-line template/no-jsx-style-prop
+                    style={{
+                      position: "absolute",
+                      left: i * (colW + ABOUT_COL_GAP),
+                      top: 0,
+                      width: colW,
+                      opacity: shown ? 1 : 0,
+                      transform: shown
+                        ? "translate3d(0, 0, 0)"
+                        : `translate3d(0, ${ABOUT_RISE_PX}px, 0)`,
+                      transition:
+                        "transform 1100ms cubic-bezier(0.16, 1, 0.3, 1), opacity 850ms ease-out",
+                      hyphens: "auto",
+                    }}
+                    className="text-justify text-sm leading-relaxed text-[var(--color-text-secondary)]"
+                  >
+                    {renderAboutParagraph(p, i)}
+                  </p>
+                );
+              })}
+            </div>,
+            portalTarget,
+          )
+        : null}
+    </div>
+    </MeshHighlightProvider>
+  );
+}
+
+function LandingUserMenu({
+  session,
+  soundOn,
+  onToggleSound,
+}: {
+  session: { email: string; is_admin: boolean };
+  soundOn: boolean;
+  onToggleSound: () => void;
+}) {
+  const logoutMutation = useLogoutMutation();
+
+  const initials = session.email.slice(0, 2).toUpperCase();
+
+  const handleLogout = React.useCallback(() => {
+    logoutMutation.mutate();
+  }, [logoutMutation]);
+
+  return (
+    <div className="flex items-center gap-[var(--space-2)]">
+      <button
+        type="button"
+        onClick={onToggleSound}
+        aria-label={soundOn ? "Mute ambient sound" : "Unmute ambient sound"}
+        className={cn(
+          "flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-text-muted)]",
+          "transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]",
+        )}
+      >
+        {soundOn ? (
+          <Volume2 size={16} strokeWidth={1.75} />
+        ) : (
+          <VolumeX size={16} strokeWidth={1.75} />
+        )}
+      </button>
+
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-[var(--space-2)]"
+            aria-label="Open session menu"
+          >
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-bg-elevated)] text-xs font-semibold text-[var(--color-text-primary)]">
+              {initials}
+            </span>
+            <span className="hidden max-w-28 truncate sm:inline">
+              {session.email}
+            </span>
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-72">
+          <div className="space-y-[var(--space-4)]">
+            <div className="space-y-[var(--space-2)]">
+              <div className="flex items-center gap-[var(--space-2)]">
+                <p className="text-sm font-medium text-[var(--color-text-primary)]">
+                  {session.email}
+                </p>
+                <Badge variant={session.is_admin ? "accent" : "outline"}>
+                  {session.is_admin ? "Admin" : "User"}
+                </Badge>
+              </div>
+            </div>
+            {logoutMutation.error ? (
+              <p className="text-xs text-[var(--color-status-danger)]">
+                {getApiErrorMessage(logoutMutation.error, "Sign-out failed.")}
               </p>
-            );
-          })}
-        </div>
-      )}
+            ) : null}
+            <div className="flex justify-end">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleLogout}
+                disabled={logoutMutation.isPending}
+              >
+                {logoutMutation.isPending ? "Signing out..." : "Sign out"}
+              </Button>
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
 
-function ToolsHoverCard({ children }: { children: React.ReactNode }) {
-  const [hovered, setHovered] = React.useState(false);
-  const ITEM_H = 38;
-  const items = ["Design", "Converter", "Fold", "Costing", "Gis Studio"];
+function LoginBracketInput({
+  value,
+  onChange,
+  onKeyDown,
+  placeholder,
+  type = "text",
+  autoComplete,
+  autoFocus,
+  registerInput,
+  onDomSync,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+  placeholder: string;
+  type?: "text" | "password";
+  autoComplete?: string;
+  autoFocus?: boolean;
+  registerInput?: (node: HTMLInputElement | null) => void;
+  onDomSync?: () => void;
+}) {
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const syncDomValue = React.useEffectEvent(() => {
+    const nextValue = inputRef.current?.value ?? "";
+    if (nextValue !== value) {
+      onChange(nextValue);
+    }
+  });
+
+  const setInputRef = React.useCallback(
+    (node: HTMLInputElement | null) => {
+      inputRef.current = node;
+      registerInput?.(node);
+    },
+    [registerInput],
+  );
+
+  React.useEffect(() => {
+    if (autoFocus) {
+      const t = setTimeout(() => inputRef.current?.focus(), 600);
+      return () => clearTimeout(t);
+    }
+  }, [autoFocus]);
+
+  // Browser autofill often writes the DOM value without firing a synthetic
+  // `change` React can observe, and can happen long after mount (e.g. when
+  // the input first becomes visible or focused). Poll the DOM value for the
+  // lifetime of the component so the state catches up — otherwise the
+  // measurement span stays at placeholder width (clipping the visible value)
+  // and the sign-in button stays disabled.
+  React.useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const interval = window.setInterval(() => {
+      syncDomValue();
+    }, 80);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  // One trailing nbsp of slack so the input never clips its last character:
+  // Chromium's autofill can render the value a sub-pixel wider than the
+  // measurement span and the native `<input>` silently hides the overflow.
+  const measureText =
+    (type === "password" ? "•".repeat(value.length) : value) || placeholder;
 
   return (
+    <div className="flex items-center justify-center font-mono text-sm font-normal">
+      <span className="select-none text-[var(--color-text-muted)]">[&nbsp;</span>
+      <span className="relative inline-block">
+        <span aria-hidden="true" className="invisible whitespace-pre font-normal">
+          {measureText}
+          {" "}
+        </span>
+        <input
+          ref={setInputRef}
+          type={type}
+          defaultValue=""
+          onInput={(e) => onChange(e.currentTarget.value)}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          onFocus={() => {
+            syncDomValue();
+            onDomSync?.();
+          }}
+          autoComplete={autoComplete}
+          spellCheck={false}
+          placeholder={placeholder}
+          className={cn(
+            "absolute inset-0 w-full border-none bg-transparent p-0 font-mono text-sm font-normal text-[var(--color-text-primary)] caret-[var(--color-accent)] outline-none focus:outline-none",
+            "placeholder:font-normal placeholder:text-[var(--color-text-muted)] placeholder:opacity-70",
+          )}
+        />
+      </span>
+      <span className="select-none text-[var(--color-text-muted)]">&nbsp;]</span>
+    </div>
+  );
+}
+
+function LoginHoverCard({ children }: { children: React.ReactNode }) {
+  const [hovered, setHovered] = React.useState(false);
+  const [rungsLit, setRungsLit] = React.useState(0);
+  const [username, setUsername] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [error, setError] = React.useState<string | null>(null);
+  const usernameInputRef = React.useRef<HTMLInputElement>(null);
+  const passwordInputRef = React.useRef<HTMLInputElement>(null);
+  const syncTimeoutsRef = React.useRef<number[]>([]);
+  const loginMutation = useLoginMutation();
+  const ITEM_H = 38;
+  const items = 3;
+
+  const clearScheduledCredentialSyncs = React.useCallback(() => {
+    syncTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
+    syncTimeoutsRef.current = [];
+  }, []);
+
+  const syncCredentialsFromDom = React.useCallback(() => {
+    const nextUsername = usernameInputRef.current?.value ?? "";
+    const nextPassword = passwordInputRef.current?.value ?? "";
+    setUsername((current) => (current === nextUsername ? current : nextUsername));
+    setPassword((current) => (current === nextPassword ? current : nextPassword));
+  }, []);
+
+  const scheduleCredentialSync = React.useCallback(() => {
+    clearScheduledCredentialSyncs();
+    syncCredentialsFromDom();
+    queueMicrotask(syncCredentialsFromDom);
+    syncTimeoutsRef.current = [
+      window.setTimeout(syncCredentialsFromDom, 0),
+      window.setTimeout(syncCredentialsFromDom, 120),
+    ];
+  }, [clearScheduledCredentialSyncs, syncCredentialsFromDom]);
+
+  React.useEffect(() => clearScheduledCredentialSyncs, [clearScheduledCredentialSyncs]);
+
+  React.useEffect(() => {
+    if (!hovered) {
+      clearScheduledCredentialSyncs();
+      return;
+    }
+    scheduleCredentialSync();
+  }, [hovered, clearScheduledCredentialSyncs, scheduleCredentialSync]);
+
+  // Bottom-to-top rung cascade on hover: one rung + its two extremities flip
+  // to the accent colour every 1 s until the ladder is fully lit. Leaving the
+  // card resets the cascade so the next hover starts from the bottom again.
+  React.useEffect(() => {
+    if (!hovered) {
+      setRungsLit(0);
+      return;
+    }
+    if (rungsLit >= DNA_HELIX_RUNG_COUNT) return;
+    const t = setTimeout(() => setRungsLit((n) => n + 1), 1000);
+    return () => clearTimeout(t);
+  }, [hovered, rungsLit]);
+
+  const canSubmit =
+    username.trim().length > 0 &&
+    password.length > 0 &&
+    !loginMutation.isPending;
+  const handleSubmit = async () => {
+    const nextUsername = usernameInputRef.current?.value ?? username;
+    const nextPassword = passwordInputRef.current?.value ?? password;
+    const trimmedUsername = nextUsername.trim();
+
+    if (nextUsername !== username) setUsername(nextUsername);
+    if (nextPassword !== password) setPassword(nextPassword);
+
+    if (!trimmedUsername.length || !nextPassword.length || loginMutation.isPending) {
+      return;
+    }
+    setError(null);
+    try {
+      await loginMutation.mutateAsync({
+        username: trimmedUsername,
+        password: nextPassword,
+      });
+    } catch (submitError) {
+      setError(
+        getApiErrorMessage(submitError, "Sign-in failed. Please try again."),
+      );
+    }
+  };
+  const handleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") void handleSubmit();
+  };
+
+  return (
+    <DnaHelixHighlightProvider rungsLit={rungsLit}>
     <div
-      className="relative"
+      className="group relative"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <WireframeCard label="Tools" onClick={() => {}}>
+      <WireframeCard label="Login" onClick={() => {}}>
         {children}
       </WireframeCard>
 
       <div
         className="absolute left-1/2 top-full z-10 w-[240px] -translate-x-1/2"
+        onPointerDownCapture={scheduleCredentialSync}
         // eslint-disable-next-line template/no-jsx-style-prop
         style={{
-          height: items.length * ITEM_H,
+          height: items * ITEM_H,
           pointerEvents: hovered ? "auto" : "none",
         }}
       >
-        {items.map((label, i) => (
-          <button
-            key={label}
-            type="button"
-            className="absolute left-0 right-0 flex cursor-pointer items-center justify-center text-sm font-medium tracking-tight text-[var(--color-text-primary)] transition-colors hover:text-[var(--color-accent)] focus-visible:text-[var(--color-accent)] focus-visible:outline-none"
+        {[
+          <LoginBracketInput
+            key="u"
+            value={username}
+            onChange={setUsername}
+            onKeyDown={handleKey}
+            placeholder="email"
+            autoComplete="username"
+            autoFocus={hovered}
+            registerInput={(node) => {
+              usernameInputRef.current = node;
+            }}
+            onDomSync={scheduleCredentialSync}
+          />,
+          <LoginBracketInput
+            key="p"
+            value={password}
+            onChange={setPassword}
+            onKeyDown={handleKey}
+            placeholder="password"
+            type="password"
+            autoComplete="current-password"
+            registerInput={(node) => {
+              passwordInputRef.current = node;
+            }}
+            onDomSync={scheduleCredentialSync}
+          />,
+          <div key="s" className="flex flex-col items-center gap-[var(--space-1)]">
+            <button
+              type="button"
+              onClick={() => void handleSubmit()}
+              disabled={loginMutation.isPending}
+              aria-disabled={!canSubmit && !loginMutation.isPending}
+              aria-label={loginMutation.isPending ? "Signing in" : "Sign in"}
+              className={cn(
+                "flex items-center justify-center transition-colors",
+                loginMutation.isPending
+                  ? "cursor-not-allowed text-[var(--color-text-muted)] opacity-40"
+                  : canSubmit
+                  ? "cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"
+                  : "cursor-pointer text-[var(--color-text-muted)] opacity-40 hover:text-[var(--color-accent)]",
+              )}
+            >
+              {loginMutation.isPending ? (
+                <Loader size={18} strokeWidth={1.75} className="animate-spin" />
+              ) : (
+                <LogIn size={18} strokeWidth={1.75} />
+              )}
+            </button>
+            {error ? (
+              <p
+                role="alert"
+                className="text-center font-mono text-[10px] text-[var(--color-status-danger)]"
+              >
+                {error}
+              </p>
+            ) : null}
+          </div>,
+        ].map((node, i) => (
+          <div
+            key={i}
+            className="absolute left-0 right-0 flex h-[38px] items-center justify-center"
             // eslint-disable-next-line template/no-jsx-style-prop
             style={{
               top: i * ITEM_H,
-              height: ITEM_H,
               opacity: hovered ? 1 : 0,
-              transform: hovered
-                ? "translateY(0)"
-                : `translateY(-${i * ITEM_H}px)`,
+              transform: hovered ? "translateY(0)" : `translateY(-${i * ITEM_H}px)`,
               transition:
-                "opacity 550ms ease-out, transform 650ms cubic-bezier(0.22, 1, 0.36, 1), color 200ms ease-out",
+                "opacity 550ms ease-out, transform 650ms cubic-bezier(0.22, 1, 0.36, 1)",
               transitionDelay: hovered ? `${i * 80}ms` : "0ms",
             }}
           >
-            {label}
-          </button>
+            {node}
+          </div>
         ))}
       </div>
     </div>
+    </DnaHelixHighlightProvider>
+  );
+}
+
+function ToolsHoverCard({ children }: { children: React.ReactNode }) {
+  const [hovered, setHovered] = React.useState(false);
+  const [hoveredToolIdx, setHoveredToolIdx] = React.useState<number | null>(null);
+  const ITEM_H = 38;
+  const items = ["Design", "Converter", "Fold", "Costing", "Gis Studio"];
+
+  return (
+    <TreeHighlightProvider index={hoveredToolIdx}>
+      <div
+        className="group relative"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => {
+          setHovered(false);
+          setHoveredToolIdx(null);
+        }}
+      >
+        <WireframeCard label="Tools" onClick={() => {}}>
+          {children}
+        </WireframeCard>
+
+        <div
+          className="absolute left-1/2 top-full z-10 w-[240px] -translate-x-1/2"
+          // eslint-disable-next-line template/no-jsx-style-prop
+          style={{
+            height: items.length * ITEM_H,
+            pointerEvents: hovered ? "auto" : "none",
+          }}
+        >
+          {items.map((label, i) => (
+            <button
+              key={label}
+              type="button"
+              onMouseEnter={() => setHoveredToolIdx(i)}
+              onMouseLeave={() => setHoveredToolIdx(null)}
+              className="absolute left-0 right-0 flex cursor-pointer items-center justify-center text-sm font-normal tracking-tight text-[var(--color-text-primary)] transition-colors hover:font-semibold hover:text-[var(--color-accent)] focus-visible:text-[var(--color-accent)] focus-visible:outline-none"
+              // eslint-disable-next-line template/no-jsx-style-prop
+              style={{
+                top: i * ITEM_H,
+                height: ITEM_H,
+                opacity: hovered ? 1 : 0,
+                transform: hovered
+                  ? "translateY(0)"
+                  : `translateY(-${i * ITEM_H}px)`,
+                transition:
+                  "opacity 550ms ease-out, transform 650ms cubic-bezier(0.22, 1, 0.36, 1), color 200ms ease-out",
+                transitionDelay: hovered ? `${i * 80}ms` : "0ms",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </TreeHighlightProvider>
   );
 }
 
 function NewProjectHoverCard({
   onCreate,
-  onClickCard,
   children,
 }: {
   onCreate: (name: string) => void;
-  onClickCard: () => void;
   children: React.ReactNode;
 }) {
   const [hovered, setHovered] = React.useState(false);
@@ -375,11 +830,11 @@ function NewProjectHoverCard({
 
   return (
     <div
-      className="relative"
+      className="group relative"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <WireframeCard label="New" onClick={onClickCard}>
+      <WireframeCard label="New" onClick={() => {}}>
         {children}
       </WireframeCard>
 
@@ -444,6 +899,7 @@ function OpenProjectHoverCard({
   children: React.ReactNode;
 }) {
   const [hovered, setHovered] = React.useState(false);
+  const [hoveredProjectIdx, setHoveredProjectIdx] = React.useState<number | null>(null);
   const N = projects.length;
   const VISIBLE = 5;
   const ITEM_H = 38;
@@ -469,7 +925,10 @@ function OpenProjectHoverCard({
   }, [ANCHOR, N]);
 
   React.useEffect(() => {
-    if (!hovered) setOffset(ANCHOR);
+    if (!hovered) {
+      setOffset(ANCHOR);
+      setHoveredProjectIdx(null);
+    }
   }, [hovered, ANCHOR]);
 
   // Snap back into the anchored window once a wrap-edge scroll has landed.
@@ -505,8 +964,9 @@ function OpenProjectHoverCard({
   const mostRecentId = projects[0]?.id;
 
   return (
+    <PendulumHighlightProvider index={hoveredProjectIdx}>
     <div
-      className="relative"
+      className="group relative"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
@@ -544,11 +1004,14 @@ function OpenProjectHoverCard({
               const inVisible = visRel >= 0 && visRel < VISIBLE;
               const entryTy = inVisible ? -visRel * ITEM_H : 0;
               const isRecent = p.id === mostRecentId;
+              const originalIdx = i % N;
               return (
                 <button
                   key={`${i}-${p.id}`}
                   type="button"
                   onClick={() => onSelect({ id: p.id, name: p.name })}
+                  onMouseEnter={() => setHoveredProjectIdx(originalIdx)}
+                  onMouseLeave={() => setHoveredProjectIdx(null)}
                   // eslint-disable-next-line template/no-jsx-style-prop
                   style={{
                     position: "absolute",
@@ -566,14 +1029,21 @@ function OpenProjectHoverCard({
                       ? `${Math.min(Math.max(0, Math.min(VISIBLE - 1, visRel)) * 80, 500)}ms`
                       : "0ms",
                   }}
-                  className={cn(
-                    "flex items-center justify-center text-sm tracking-tight transition-colors focus-visible:outline-none",
-                    isRecent
-                      ? "font-semibold text-[var(--color-accent)]"
-                      : "font-medium text-[var(--color-text-primary)] hover:text-[var(--color-accent)]"
-                  )}
+                  className="group/proj relative flex items-center justify-center text-sm font-normal tracking-tight text-[var(--color-text-primary)] transition-colors hover:font-semibold hover:text-[var(--color-accent)] focus-visible:outline-none"
                 >
-                  <span className="truncate px-[var(--space-2)]">{p.name}</span>
+                  {isRecent ? (
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute left-1/2 top-1/2 h-8 w-32 -translate-x-1/2 -translate-y-1/2 rounded-full"
+                      // eslint-disable-next-line template/no-jsx-style-prop -- themed blurred glow
+                      style={{
+                        background: "var(--color-accent)",
+                        filter: "blur(14px)",
+                        opacity: 0.35,
+                      }}
+                    />
+                  ) : null}
+                  <span className="relative truncate px-[var(--space-2)]">{p.name}</span>
                 </button>
               );
             })}
@@ -581,6 +1051,7 @@ function OpenProjectHoverCard({
         </div>
       )}
     </div>
+    </PendulumHighlightProvider>
   );
 }
 
@@ -600,10 +1071,9 @@ function WireframeCard({
       onClick={onClick}
       disabled={!interactive}
       className={cn(
-        "group flex flex-col items-center gap-[var(--space-3)] rounded-[var(--radius-lg)] p-[var(--space-4)] transition-all duration-200",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]",
+        "flex flex-col items-center gap-[var(--space-3)] rounded-[var(--radius-lg)] p-[var(--space-4)] transition-all duration-200 outline-none focus:outline-none focus-visible:outline-none",
         interactive
-          ? "cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+          ? "cursor-pointer text-[var(--color-text-muted)] group-hover:text-[var(--color-text-primary)]"
           : "cursor-default text-[var(--color-text-muted)] opacity-60"
       )}
     >
@@ -666,9 +1136,7 @@ export function HomeOverview() {
   const { data: projects, isLoading: isLoadingProjects } = useProjectList();
   const createMutation = useCreateProject();
 
-  const [showNewDialog, setShowNewDialog] = React.useState(false);
   const [showLoadDialog, setShowLoadDialog] = React.useState(false);
-  const [newProjectName, setNewProjectName] = React.useState("");
 
   const [landingMounted, setLandingMounted] = React.useState(false);
   React.useEffect(() => {
@@ -676,7 +1144,25 @@ export function HomeOverview() {
     return () => cancelAnimationFrame(id);
   }, []);
 
-  const { blocked: soundBlocked } = useLandingAmbientSound(!activeProject);
+  // Drive the card-row transition straight off the real auth session: the
+  // moment `useAuthSession` returns a session the landing flips from the
+  // 2-card (LOGIN + ABOUT) layout to the 4-card (NEW + OPEN + TOOLS + ABOUT)
+  // layout — no separate local flag to keep in sync.
+  const { data: session } = useAuthSession();
+  const loggedIn = !!session;
+
+  // Session dropped (sign-out, expired) — drop any remembered project so
+  // HomeOverview renders the landing shell instead of the last workflow.
+  React.useEffect(() => {
+    if (!session && activeProject) {
+      setActiveProject(null);
+    }
+  }, [session, activeProject, setActiveProject]);
+
+  const [soundOn, setSoundOn] = React.useState(true);
+  const { blocked: soundBlocked } = useLandingAmbientSound(
+    soundOn && !activeProject,
+  );
 
   const projectList = React.useMemo(
     () =>
@@ -690,21 +1176,6 @@ export function HomeOverview() {
         })),
     [projects]
   );
-
-  const handleCreateProject = () => {
-    const trimmed = newProjectName.trim();
-    if (!trimmed) return;
-    createMutation.mutate(
-      { name: trimmed },
-      {
-        onSuccess: (project) => {
-          setActiveProject({ id: project.id, name: project.name });
-          setNewProjectName("");
-          setShowNewDialog(false);
-        },
-      }
-    );
-  };
 
   const handleInlineCreateProject = (name: string) => {
     createMutation.mutate(
@@ -723,9 +1194,31 @@ export function HomeOverview() {
   };
 
   /* ---- Welcome view (no project loaded) ---- */
-  if (!activeProject) {
+  if (!activeProject || !session) {
     return (
       <>
+        {/* User menu — drops down from above once `loggedIn` flips true, a
+            touch after the card row starts cascading in. Renders an empty
+            slot when no session so the transform can animate from -200%. */}
+        <div
+          className="fixed right-[var(--space-4)] top-[var(--space-4)] z-20 transition-all duration-[900ms] ease-out"
+          // eslint-disable-next-line template/no-jsx-style-prop -- animated
+          style={{
+            transform: loggedIn ? "translateY(0)" : "translateY(-220%)",
+            opacity: loggedIn ? 1 : 0,
+            pointerEvents: loggedIn ? "auto" : "none",
+            transitionDelay: loggedIn ? "600ms" : "300ms",
+          }}
+        >
+          {session ? (
+            <LandingUserMenu
+              session={session}
+              soundOn={soundOn}
+              onToggleSound={() => setSoundOn((v) => !v)}
+            />
+          ) : null}
+        </div>
+
         <div className="flex h-full flex-col items-center justify-center gap-[var(--space-8)]">
           <div className="relative isolate">
             {landingMounted && (
@@ -758,26 +1251,82 @@ export function HomeOverview() {
           </div>
 
           <AnimationLoop>
-            <div className="flex flex-wrap justify-center gap-[var(--space-4)]">
-              <NewProjectHoverCard
-                onCreate={handleInlineCreateProject}
-                onClickCard={() => setShowNewDialog(true)}
+            <div className="relative h-[220px] w-full">
+              {/* LOGIN — centred-left of a 2-card layout when logged out; fades in place on login.
+                  Sign-in: fades out first (0ms). Sign-out: fades in last (1150ms). */}
+              <div
+                style={cardSlotStyle(
+                  -LANDING_CARD_UNIT / 2,
+                  !loggedIn,
+                  650,
+                  loggedIn ? 0 : 1150,
+                )}
               >
-                <SpinningCube />
-              </NewProjectHoverCard>
-              <OpenProjectHoverCard
-                projects={projectList}
-                onSelect={handleLoadProject}
-                onClickCard={() => setShowLoadDialog(true)}
+                <LoginHoverCard>
+                  <DnaHelix />
+                </LoginHoverCard>
+              </div>
+
+              {/* NEW / OPEN / TOOLS — start offscreen-left + invisible, slide into
+                  their 4-card positions once loggedIn flips true. Sign-in arrival
+                  order is TOOLS → OPEN → NEW (left-most NEW lands last). Sign-out
+                  departs in the reverse order: NEW → OPEN → TOOLS. */}
+              <div
+                style={cardSlotStyle(
+                  loggedIn ? -1.5 * LANDING_CARD_UNIT : LANDING_OFFSCREEN_X,
+                  loggedIn,
+                  800,
+                  loggedIn ? 1000 : 0,
+                )}
               >
-                <PendulumWave />
-              </OpenProjectHoverCard>
-              <ToolsHoverCard>
-                <FractalTree />
-              </ToolsHoverCard>
-              <AboutHoverCard>
-                <WaveMesh />
-              </AboutHoverCard>
+                <NewProjectHoverCard onCreate={handleInlineCreateProject}>
+                  <SpinningCube />
+                </NewProjectHoverCard>
+              </div>
+              <div
+                style={cardSlotStyle(
+                  loggedIn ? -0.5 * LANDING_CARD_UNIT : LANDING_OFFSCREEN_X,
+                  loggedIn,
+                  800,
+                  loggedIn ? 700 : 300,
+                )}
+              >
+                <OpenProjectHoverCard
+                  projects={projectList}
+                  onSelect={handleLoadProject}
+                  onClickCard={() => setShowLoadDialog(true)}
+                >
+                  <PendulumWave />
+                </OpenProjectHoverCard>
+              </div>
+              <div
+                style={cardSlotStyle(
+                  loggedIn ? 0.5 * LANDING_CARD_UNIT : LANDING_OFFSCREEN_X,
+                  loggedIn,
+                  800,
+                  loggedIn ? 400 : 600,
+                )}
+              >
+                <ToolsHoverCard>
+                  <FractalTree />
+                </ToolsHoverCard>
+              </div>
+
+              {/* ABOUT — shifts from the right slot of the 2-card layout to the
+                  rightmost slot of the 4-card layout. Sign-in: shifts early (200ms).
+                  Sign-out: shifts back late (500ms) so it is one of the last to move. */}
+              <div
+                style={cardSlotStyle(
+                  loggedIn ? 1.5 * LANDING_CARD_UNIT : LANDING_CARD_UNIT / 2,
+                  true,
+                  1100,
+                  loggedIn ? 200 : 500,
+                )}
+              >
+                <AboutHoverCard>
+                  <WaveMesh />
+                </AboutHoverCard>
+              </div>
             </div>
           </AnimationLoop>
         </div>
@@ -792,13 +1341,6 @@ export function HomeOverview() {
           click anywhere to enable sound
         </div>
 
-        <NewProjectDialog
-          open={showNewDialog}
-          onOpenChange={setShowNewDialog}
-          value={newProjectName}
-          onChange={setNewProjectName}
-          onSubmit={handleCreateProject}
-        />
         <LoadProjectDialog
           open={showLoadDialog}
           onOpenChange={setShowLoadDialog}
@@ -817,18 +1359,11 @@ export function HomeOverview() {
         <ProjectSettingsWorkflow />
       </div>
 
-      <NewProjectDialog
-        open={showNewDialog}
-        onOpenChange={setShowNewDialog}
-        value={newProjectName}
-        onChange={setNewProjectName}
-        onSubmit={handleCreateProject}
-      />
       <LoadProjectDialog
         open={showLoadDialog}
         onOpenChange={setShowLoadDialog}
         projects={projectList}
-          isLoading={isLoadingProjects}
+        isLoading={isLoadingProjects}
         onSelect={handleLoadProject}
       />
     </>
@@ -838,62 +1373,6 @@ export function HomeOverview() {
 /* ------------------------------------------------------------------
    Dialogs
    ------------------------------------------------------------------ */
-
-function NewProjectDialog({
-  open,
-  onOpenChange,
-  value,
-  onChange,
-  onSubmit,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  value: string;
-  onChange: (v: string) => void;
-  onSubmit: () => void;
-}) {
-  const inputRef = React.useRef<HTMLInputElement>(null);
-
-  React.useEffect(() => {
-    if (open) {
-      // Small delay so the dialog is rendered before focus
-      const t = setTimeout(() => inputRef.current?.focus(), 50);
-      return () => clearTimeout(t);
-    }
-  }, [open]);
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogHeader>
-        <DialogTitle>New Project</DialogTitle>
-      </DialogHeader>
-      <DialogBody>
-        <label className="flex flex-col gap-[var(--space-2)]">
-          <span className="text-sm font-medium text-[var(--color-text-secondary)]">
-            Project name
-          </span>
-          <Input
-            ref={inputRef}
-            placeholder="e.g. Groningen 2025"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") onSubmit();
-            }}
-          />
-        </label>
-      </DialogBody>
-      <DialogFooter>
-        <Button variant="secondary" size="sm" onClick={() => onOpenChange(false)}>
-          Cancel
-        </Button>
-        <Button size="sm" disabled={!value.trim()} onClick={onSubmit}>
-          Create
-        </Button>
-      </DialogFooter>
-    </Dialog>
-  );
-}
 
 function LoadProjectDialog({
   open,
