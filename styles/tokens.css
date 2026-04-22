@@ -46,6 +46,11 @@
   --indigo-400: #818cf8;
   --indigo-500: #6366f1;
   --indigo-600: #4f46e5;
+
+  /* Accent — orange — used by "test-1" theme */
+  --orange-400: #fb923c;
+  --orange-500: #f97316;
+  --orange-600: #ea580c;
 }
 
 /* ----------------------------------------------------------
@@ -67,6 +72,68 @@
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
+}
+
+/* ----------------------------------------------------------
+   2b. Shape tokens (theme-overridable)
+   ----------------------------------------------------------
+   These are bound to Tailwind utilities via @theme inline in
+   globals.css, so overriding them in a [data-theme="..."]
+   block changes shadow-*, tracking-*, and font-weight-heading
+   usages at runtime.
+   ---------------------------------------------------------- */
+
+:root {
+  /* Shadow scale — baseline (slate-ish, moderate) */
+  --app-shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --app-shadow-sm:
+    0 1px 3px rgba(15, 23, 42, 0.08),
+    0 1px 2px -1px rgba(15, 23, 42, 0.04);
+  --app-shadow-md:
+    0 4px 6px -1px rgba(15, 23, 42, 0.1),
+    0 2px 4px -2px rgba(15, 23, 42, 0.06);
+  --app-shadow-lg:
+    0 10px 15px -3px rgba(15, 23, 42, 0.1),
+    0 4px 6px -4px rgba(15, 23, 42, 0.05);
+
+  /* Letter spacing — baseline */
+  --app-tracking-tighter: -0.025em;
+  --app-tracking-tight: -0.015em;
+  --app-tracking-wide: 0.025em;
+  --app-tracking-wider: 0.05em;
+
+  /* Heading weight — baseline */
+  --app-font-weight-heading: 600;
+
+  /* Layout frame — outer padding, inter-pane gap, hairline divider */
+  --layout-frame-padding: 1rem;
+  --layout-gap: 1rem;
+  --color-layout-divider: transparent;
+
+  /* Panel separators — resizable-pane gap + panel edge border */
+  --panel-gap: 0.5rem;
+  --color-panel-edge: var(--color-border-subtle);
+
+  /* Page header — internal horizontal padding (0 by default since main's
+     frame padding provides it; themes with 0 frame padding set this) */
+  --header-padding-x: 0;
+
+  /* Top bar height — also applied to sidebar logo header so they align */
+  --topbar-height: 3.25rem;
+
+  /* Menu-item borders (sidebar nav + similar) — active + hover colors */
+  --color-menu-item-edge: color-mix(in srgb, var(--color-accent) 24%, var(--color-border-strong));
+  --color-menu-item-hover-edge: var(--color-border-subtle);
+
+  /* Sidebar structural dividers (header, footer, group separators) */
+  --color-sidebar-divider: var(--color-border-subtle);
+}
+
+@media (min-width: 1024px) {
+  :root {
+    --layout-frame-padding: 1.5rem;
+    --layout-gap: 1.5rem;
+  }
 }
 
 /* ----------------------------------------------------------

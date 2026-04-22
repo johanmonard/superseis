@@ -15,6 +15,7 @@ import { useSectionData } from "@/lib/use-autosave";
 import { usePipelineReport } from "@/lib/use-pipeline-report";
 import { useProjectSection } from "@/services/query/project-sections";
 import { buildStandardPreset, type DesignAttrs, type Side } from "@/lib/offset-presets";
+import { PanelHeaderSlot } from "@/components/features/project/project-settings-page";
 
 const {
   check: Check,
@@ -372,7 +373,7 @@ function SideLayerRules({
                 <Switch
                   checked={rule.offset}
                   onCheckedChange={(v) => updateAt(i, { offset: v === true })}
-                  className="!h-4 !w-7 [&>span]:!h-3 [&>span]:!w-3 [&>span]:data-[state=checked]:!translate-x-3"
+                  className="!h-3 !w-6 [&>span]:!h-2 [&>span]:!w-2 [&>span]:data-[state=checked]:!translate-x-3"
                 />
               </div>
               <div className="flex w-9 justify-center">
@@ -380,7 +381,7 @@ function SideLayerRules({
                   checked={rule.skip}
                   disabled={!rule.offset}
                   onCheckedChange={(v) => updateAt(i, { skip: v === true })}
-                  className="!h-4 !w-7 [&>span]:!h-3 [&>span]:!w-3 [&>span]:data-[state=checked]:!translate-x-3"
+                  className="!h-3 !w-6 [&>span]:!h-2 [&>span]:!w-2 [&>span]:data-[state=checked]:!translate-x-3"
                 />
               </div>
             </div>
@@ -1128,15 +1129,10 @@ export function ProjectOffsets() {
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Offsets</h2>
-      </div>
-
-      {/* Pipeline trigger — runs the offsets step (+ all dirty upstream) so
-          the viewport can show the offset stations for the active config.
-          Progress surfaces in the bottom drawer. Mirrors "Show grid" on the
-          Design Options page. */}
-      <div className="flex items-center justify-end">
+      {/* Pipeline trigger — rendered into the panel header slot (left of
+          the collapse chevron) via portal. Mirrors "Show grid" on the
+          Design Options page; progress surfaces in the bottom drawer. */}
+      <PanelHeaderSlot>
         <Button
           variant="secondary"
           size="sm"
@@ -1151,7 +1147,7 @@ export function ProjectOffsets() {
           )}
           Show grid
         </Button>
-      </div>
+      </PanelHeaderSlot>
 
       {/* Config selector */}
       <GroupSelector

@@ -459,7 +459,7 @@ export function WorkspaceSidebarNav({
             sideOffset={12}
             className="w-64 p-[var(--space-2)]"
           >
-            <div className="border-b border-[var(--color-border-subtle)] px-[var(--space-2)] pb-[var(--space-2)] text-xs font-medium text-[var(--color-text-muted)]">
+            <div className="border-b border-[var(--color-sidebar-divider)] px-[var(--space-2)] pb-[var(--space-2)] text-xs font-medium text-[var(--color-text-muted)]">
               {item.label}
             </div>
             <div className="space-y-1 pt-[var(--space-2)]">
@@ -569,8 +569,8 @@ export function WorkspaceSidebarNav({
       <>
         <SidebarHeader
           className={cn(
-            "transition-[padding] duration-200 ease-out",
-            isCollapsed ? "p-[var(--space-2)]" : "p-[var(--space-3)]"
+            "flex h-[var(--topbar-height)] items-center transition-[padding] duration-200 ease-out",
+            isCollapsed ? "px-[var(--space-2)] py-0" : "px-[var(--space-3)] py-0"
           )}
         >
           <button

@@ -1,5 +1,22 @@
 @import "tailwindcss";
 
+/* ============================================================
+   Bind Tailwind utilities to app shape tokens so shadow-*,
+   tracking-*, and font weights respond to runtime theme swaps.
+   Keep `inline` so the var reference stays live in compiled CSS.
+   ============================================================ */
+@theme inline {
+  --shadow-xs: var(--app-shadow-xs);
+  --shadow-sm: var(--app-shadow-sm);
+  --shadow-md: var(--app-shadow-md);
+  --shadow-lg: var(--app-shadow-lg);
+
+  --tracking-tighter: var(--app-tracking-tighter);
+  --tracking-tight: var(--app-tracking-tight);
+  --tracking-wide: var(--app-tracking-wide);
+  --tracking-wider: var(--app-tracking-wider);
+}
+
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
 input:-webkit-autofill:focus,
@@ -126,10 +143,12 @@ input:-webkit-autofill:active {
 }
 
 /* ============================================================
-   Test 1 — modern minimalist (light)
-   Palette: zinc neutrals + indigo accent
+   Test 1 — flat-pane IDE with zinc + indigo palette
+   Same layout/structure as Test 2 (edge-to-edge panels, 0 radius,
+   hairline dividers, no menu borders) with Test 1 colors applied.
    ============================================================ */
 [data-theme="test-1-light"] {
+  /* Palette — zinc neutrals + indigo accent */
   --color-bg-canvas: var(--zinc-50);
   --color-bg-surface: #ffffff;
   --color-bg-elevated: var(--zinc-100);
@@ -141,9 +160,9 @@ input:-webkit-autofill:active {
   --color-text-secondary: var(--zinc-600);
   --color-text-muted: var(--zinc-400);
 
-  --color-accent: var(--indigo-500);
-  --color-accent-foreground: var(--zinc-50);
-  --color-focus-ring: var(--indigo-500);
+  --color-accent: var(--orange-500);
+  --color-accent-foreground: #ffffff;
+  --color-focus-ring: var(--orange-500);
   --color-overlay: rgba(24, 24, 27, 0.45);
 
   --color-border-table: var(--zinc-200);
@@ -156,15 +175,37 @@ input:-webkit-autofill:active {
 
   --color-border-modal: var(--zinc-300);
   --color-bg-modal: #ffffff;
-  --color-shadow-alpha: rgba(24, 24, 27, 0.06);
+
+  /* Layout — mirrors Test 2 */
+  --layout-frame-padding: 0;
+  --layout-gap: 0;
+  --color-layout-divider: var(--color-border-subtle);
+
+  --panel-gap: 1px;
+  --color-panel-edge: transparent;
+
+  --header-padding-x: var(--space-4);
+
+  --color-menu-item-edge: transparent;
+  --color-menu-item-hover-edge: transparent;
+  --color-sidebar-divider: transparent;
+
+  /* Shape — flat corners, hairline outlines, minimal shadow */
+  --radius-sm: 0;
+  --radius-md: 0;
+
+  --color-shadow-alpha: rgba(24, 24, 27, 0.015);
+  --app-shadow-xs: 0 0 0 1px rgba(24, 24, 27, 0.05);
+  --app-shadow-sm: 0 0 0 1px rgba(24, 24, 27, 0.06);
+  --app-shadow-md: 0 0 0 1px rgba(24, 24, 27, 0.08);
+  --app-shadow-lg: 0 1px 2px rgba(24, 24, 27, 0.06);
 }
 
 /* ============================================================
-   Test 1 — modern minimalist (dark)
-   Inherits baseline dark tokens from [data-theme-kind="dark"];
-   only overrides the surface/text/accent palette.
+   Test 1 — flat-pane IDE (dark) with zinc + indigo palette
    ============================================================ */
 [data-theme="test-1-dark"] {
+  /* Palette — zinc dark + indigo-400 accent */
   --color-bg-canvas: var(--zinc-950);
   --color-bg-surface: var(--zinc-900);
   --color-bg-elevated: var(--zinc-800);
@@ -176,9 +217,9 @@ input:-webkit-autofill:active {
   --color-text-secondary: var(--zinc-400);
   --color-text-muted: var(--zinc-500);
 
-  --color-accent: var(--indigo-400);
+  --color-accent: var(--orange-400);
   --color-accent-foreground: var(--zinc-950);
-  --color-focus-ring: var(--indigo-400);
+  --color-focus-ring: var(--orange-400);
 
   --color-data-neutral: var(--zinc-500);
 
@@ -189,10 +230,113 @@ input:-webkit-autofill:active {
 
   --color-border-modal: var(--zinc-700);
   --color-bg-modal: var(--zinc-900);
+
+  /* Layout — mirrors Test 2 */
+  --layout-frame-padding: 0;
+  --layout-gap: 0;
+  --color-layout-divider: var(--color-border-subtle);
+
+  --panel-gap: 1px;
+  --color-panel-edge: transparent;
+
+  --header-padding-x: var(--space-4);
+
+  --color-menu-item-edge: transparent;
+  --color-menu-item-hover-edge: transparent;
+  --color-sidebar-divider: transparent;
+
+  /* Shape — flat corners, hairline outlines (white on dark) */
+  --radius-sm: 0;
+  --radius-md: 0;
+
+  --color-shadow-alpha: rgba(0, 0, 0, 0.18);
+  --app-shadow-xs: 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --app-shadow-sm: 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --app-shadow-md: 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --app-shadow-lg: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
-* {
-  border-color: var(--color-border-subtle);
+/* ============================================================
+   Test 2 — flat-pane IDE (light)
+   Edge-to-edge panels, 0 radius, hairline dividers between
+   layout frames. Inherits baseline slate palette.
+   ============================================================ */
+[data-theme="test-2-light"] {
+  /* Layout — no frame padding, no gap, hairline dividers */
+  --layout-frame-padding: 0;
+  --layout-gap: 0;
+  --color-layout-divider: var(--color-border-subtle);
+
+  /* Panel separators — 1px hairline instead of 8px gap, borderless panels */
+  --panel-gap: 1px;
+  --color-panel-edge: transparent;
+
+  /* Header self-padding (main provides no frame padding) */
+  --header-padding-x: var(--space-4);
+
+  /* Menu items — no borders, indication via background/accent only */
+  --color-menu-item-edge: transparent;
+  --color-menu-item-hover-edge: transparent;
+
+  /* Sidebar structural dividers — hidden in flat-pane aesthetic */
+  --color-sidebar-divider: transparent;
+
+  /* Shape — flat corners everywhere */
+  --radius-sm: 0;
+  --radius-md: 0;
+
+  /* Shape — no shadow; replace with hairline outline */
+  --color-shadow-alpha: rgba(15, 23, 42, 0.015);
+  --app-shadow-xs: 0 0 0 1px rgba(15, 23, 42, 0.05);
+  --app-shadow-sm: 0 0 0 1px rgba(15, 23, 42, 0.06);
+  --app-shadow-md: 0 0 0 1px rgba(15, 23, 42, 0.08);
+  --app-shadow-lg: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+/* ============================================================
+   Test 2 — flat-pane IDE (dark)
+   ============================================================ */
+[data-theme="test-2-dark"] {
+  --layout-frame-padding: 0;
+  --layout-gap: 0;
+  --color-layout-divider: var(--color-border-subtle);
+
+  /* Panel separators — 1px hairline, borderless panels */
+  --panel-gap: 1px;
+  --color-panel-edge: transparent;
+
+  /* Header self-padding (main provides no frame padding) */
+  --header-padding-x: var(--space-4);
+
+  /* Menu items — no borders, indication via background/accent only */
+  --color-menu-item-edge: transparent;
+  --color-menu-item-hover-edge: transparent;
+
+  /* Sidebar structural dividers — hidden in flat-pane aesthetic */
+  --color-sidebar-divider: transparent;
+
+  --radius-sm: 0;
+  --radius-md: 0;
+
+  --color-shadow-alpha: rgba(0, 0, 0, 0.05);
+  --app-shadow-xs: 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --app-shadow-sm: 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --app-shadow-md: 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --app-shadow-lg: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+@media (min-width: 1024px) {
+  [data-theme="test-2-light"],
+  [data-theme="test-2-dark"] {
+    --layout-frame-padding: 0;
+    --layout-gap: 0;
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border-subtle);
+  }
 }
 
 html,

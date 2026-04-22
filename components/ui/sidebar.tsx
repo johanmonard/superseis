@@ -38,7 +38,7 @@ export const SidebarHeader = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "border-b border-[var(--color-border-subtle)] p-[var(--space-3)]",
+      "border-b border-[var(--color-sidebar-divider)] p-[var(--space-3)]",
       className
     )}
     {...props}
@@ -67,7 +67,7 @@ export const SidebarFooter = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "border-t border-[var(--color-border-subtle)] p-[var(--space-2)]",
+      "border-t border-[var(--color-sidebar-divider)] p-[var(--space-2)]",
       className
     )}
     {...props}
@@ -95,8 +95,8 @@ export const SidebarItem = React.forwardRef<HTMLButtonElement, SidebarItemProps>
           ? "justify-center px-0"
           : "justify-start gap-[var(--space-2)] px-[var(--space-4)]",
         active
-          ? "border-[color-mix(in_srgb,var(--color-accent)_24%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_12%,var(--color-bg-elevated))] text-[var(--color-text-primary)] shadow-[0_1px_2px_var(--color-shadow-alpha)] hover:bg-[color-mix(in_srgb,var(--color-accent)_12%,var(--color-bg-elevated))]"
-          : "border-transparent text-[var(--color-text-secondary)] hover:border-[var(--color-border-subtle)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]",
+          ? "border-[var(--color-menu-item-edge)] bg-[color-mix(in_srgb,var(--color-accent)_12%,var(--color-bg-elevated))] text-[var(--color-text-primary)] shadow-[0_1px_2px_var(--color-shadow-alpha)] hover:bg-[color-mix(in_srgb,var(--color-accent)_12%,var(--color-bg-elevated))]"
+          : "border-transparent text-[var(--color-text-secondary)] hover:border-[var(--color-menu-item-hover-edge)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]",
         className
       )}
       {...props}

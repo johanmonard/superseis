@@ -31,7 +31,7 @@ export function WorkspaceLayout({
       )}
       <main
         className={cn(
-          "min-w-0 flex-1 overflow-auto p-4 text-[var(--color-text-primary)] lg:p-6",
+          "min-w-0 flex-1 overflow-auto p-[var(--layout-frame-padding)] text-[var(--color-text-primary)]",
           mainClassName
         )}
       >

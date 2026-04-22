@@ -227,7 +227,7 @@ function FileUpload({
 
 const MIN_LEFT_FRACTION = 0.15;
 const MAX_LEFT_FRACTION = 0.85;
-const DEFAULT_LEFT_FRACTION = 1 / 3;
+const DEFAULT_LEFT_FRACTION = 1 / 4;
 const COLLAPSED_WIDTH = 36;
 
 /* ------------------------------------------------------------------
@@ -401,7 +401,7 @@ export function ProjectDefinition() {
       {/* Parameters panel */}
       <div
         className={cn(
-          "overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]",
+          "overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-panel-edge)] bg-[var(--color-bg-surface)]",
           !isResizing && "transition-all duration-300 ease-in-out",
           !collapsed && "overflow-auto"
         )}
@@ -411,32 +411,23 @@ export function ProjectDefinition() {
         {collapsed ? (
           <button
             type="button"
+            aria-label="Expand panel"
             onClick={() => setCollapsed(false)}
-            className="flex h-full w-full flex-col items-center justify-between py-[var(--space-3)] text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-primary)]"
+            className="flex h-full w-full items-start justify-center py-[var(--space-3)] text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-primary)]"
           >
             <ChevronRight size={14} />
-            {/* eslint-disable-next-line template/no-jsx-style-prop -- vertical text */}
-            <span className="text-xs font-semibold tracking-wide" style={{ writingMode: "vertical-lr", textOrientation: "mixed" }}>
-              Parameters
-            </span>
-            <div />
           </button>
         ) : (
         <div className="p-[var(--space-4)]">
-          <div className="mb-[var(--space-4)] flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
-              Parameters
-            </h2>
-            <div className="flex items-center gap-[var(--space-2)]">
-              <button
-                type="button"
-                onClick={() => setCollapsed(true)}
-                className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
-                aria-label="Collapse panel"
-              >
-                <ChevronLeft size={14} />
-              </button>
-            </div>
+          <div className="mb-[var(--space-4)] flex items-center justify-end">
+            <button
+              type="button"
+              onClick={() => setCollapsed(true)}
+              className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+              aria-label="Collapse panel"
+            >
+              <ChevronLeft size={14} />
+            </button>
           </div>
 
           <div className="flex flex-col gap-[var(--space-4)]">
@@ -626,7 +617,7 @@ export function ProjectDefinition() {
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           className={cn(
-            "z-10 flex w-2 shrink-0 cursor-col-resize items-center justify-center",
+            "z-10 flex w-[var(--panel-gap)] shrink-0 cursor-col-resize items-center justify-center overflow-hidden bg-[var(--color-layout-divider)]",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]"
           )}
         >
@@ -638,7 +629,7 @@ export function ProjectDefinition() {
       {showCrsPanel && crsPanelState && (
         <>
           <div
-            className="min-w-0 flex-shrink-0 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]"
+            className="min-w-0 flex-shrink-0 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-panel-edge)] bg-[var(--color-bg-surface)]"
             // eslint-disable-next-line template/no-jsx-style-prop -- runtime sizing
             style={{ width: "clamp(300px, 28%, 460px)" }}
           >
@@ -647,12 +638,12 @@ export function ProjectDefinition() {
               onClose={() => setShowCrsPanel(false)}
             />
           </div>
-          <div className="w-2 shrink-0" />
+          <div className="w-[var(--panel-gap)] shrink-0 bg-[var(--color-layout-divider)]" />
         </>
       )}
 
       {/* Viewport panel */}
-      <div className="relative min-w-0 flex-1 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
+      <div className="relative min-w-0 flex-1 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-panel-edge)] bg-[var(--color-bg-surface)]">
         <div className="flex h-full flex-col items-center justify-center">
           {data.country ? (
             <CountryMap country={data.country} crsBounds={crsAreaBounds} />

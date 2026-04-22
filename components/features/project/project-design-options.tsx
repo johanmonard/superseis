@@ -15,6 +15,7 @@ import { useSectionData } from "@/lib/use-autosave";
 import { usePipelineReport } from "@/lib/use-pipeline-report";
 import { cn } from "@/lib/utils";
 import { useProjectSection } from "@/services/query/project-sections";
+import { PanelHeaderSlot } from "@/components/features/project/project-settings-page";
 
 /* ------------------------------------------------------------------
    Types
@@ -356,10 +357,11 @@ export function ProjectDesignOptions() {
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      {/* Grid trigger — runs the grid step (+ all dirty upstream) so the
-          viewport can show the theoretical stations produced by the active
-          option. Progress surfaces in the bottom drawer. */}
-      <div className="flex items-center justify-end">
+      {/* Grid trigger — portaled into the panel header slot (left of the
+          collapse chevron). Runs the grid step (+ all dirty upstream) so
+          the viewport can show the theoretical stations produced by the
+          active option. Progress surfaces in the bottom drawer. */}
+      <PanelHeaderSlot>
         <Button
           variant="secondary"
           size="sm"
@@ -373,7 +375,7 @@ export function ProjectDesignOptions() {
           )}
           Show grid
         </Button>
-      </div>
+      </PanelHeaderSlot>
       {/* Option tabs */}
       <div className="flex flex-col gap-[var(--space-2)]">
         <div className="flex flex-wrap items-center gap-[var(--space-1)]">

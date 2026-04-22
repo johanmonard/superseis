@@ -10,8 +10,10 @@ export const THEME_REGISTRY: readonly ThemeDefinition[] = [
   { id: "default", label: "Default", kind: "light", counterpart: "dark", description: "Baseline light appearance" },
   { id: "light", label: "Light", kind: "light", counterpart: "dark", description: "Editable light variant" },
   { id: "dark", label: "Dark", kind: "dark", counterpart: "default", description: "Dark surfaces and elevated contrast" },
-  { id: "test-1-light", label: "Test 1 — Light", kind: "light", counterpart: "test-1-dark", description: "Modern minimalist, zinc + indigo" },
-  { id: "test-1-dark", label: "Test 1 — Dark", kind: "dark", counterpart: "test-1-light", description: "Modern minimalist, zinc + indigo" },
+  { id: "test-1-light", label: "Test 1 — Light", kind: "light", counterpart: "test-1-dark", description: "Flat-pane IDE, zinc + orange" },
+  { id: "test-1-dark", label: "Test 1 — Dark", kind: "dark", counterpart: "test-1-light", description: "Flat-pane IDE, zinc + orange" },
+  { id: "test-2-light", label: "Test 2 — Light", kind: "light", counterpart: "test-2-dark", description: "Flat-pane IDE, hairline separators" },
+  { id: "test-2-dark", label: "Test 2 — Dark", kind: "dark", counterpart: "test-2-light", description: "Flat-pane IDE, hairline separators" },
 ] as const;
 
 export type ThemeMode = (typeof THEME_REGISTRY)[number]["id"];

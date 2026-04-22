@@ -96,7 +96,7 @@ function StepNode({ id, data, selected }: NodeProps<Node<StepData>>) {
         "w-52 h-[72px] cursor-pointer rounded-[var(--radius-md)] border bg-[var(--color-bg-surface)] p-[var(--space-3)] shadow-[0_1px_2px_var(--color-shadow-alpha)] transition-colors hover:border-[var(--color-accent)] " +
         (selected
           ? "border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]"
-          : "border-[var(--color-border-subtle)]")
+          : "border-[var(--color-menu-item-hover-edge)]")
       }
     >
       <Handle type="target" position={Position.Top} className={data.showHandles ? "!bg-[var(--color-border-strong)]" : "!opacity-0"} />

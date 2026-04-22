@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { appIcons } from "@/components/ui/icon";
 
 import { cn } from "@/lib/utils";
@@ -8,9 +9,21 @@ import { cn } from "@/lib/utils";
 const { chevronLeft: ChevronLeft, chevronRight: ChevronRight } = appIcons;
 import { ViewportPlaceholder } from "./viewport-placeholder";
 
+/** Slot exposed to `ProjectSettingsPage` children so they can inject
+ *  actions into the panel's header row (left-aligned, next to the
+ *  collapse chevron). Rendered via portal; returns null when the
+ *  panel is collapsed and the slot DOM node doesn't exist. */
+const PanelHeaderSlotContext = React.createContext<HTMLElement | null>(null);
+
+export function PanelHeaderSlot({ children }: { children: React.ReactNode }) {
+  const target = React.useContext(PanelHeaderSlotContext);
+  if (!target) return null;
+  return createPortal(children, target);
+}
+
 const MIN_LEFT_FRACTION = 0.15;
 const MAX_LEFT_FRACTION = 0.85;
-const DEFAULT_LEFT_FRACTION = 1 / 3;
+const DEFAULT_LEFT_FRACTION = 1 / 4;
 const COLLAPSED_WIDTH = 36; // px — just enough for the rotated title + chevron
 
 export function ProjectSettingsPage({
@@ -19,18 +32,23 @@ export function ProjectSettingsPage({
   children,
   viewport,
   middlePanel,
+  defaultLeftFraction = DEFAULT_LEFT_FRACTION,
 }: {
   title: string;
   panelTitle?: string;
   children?: React.ReactNode;
   viewport?: React.ReactNode;
   middlePanel?: React.ReactNode;
+  defaultLeftFraction?: number;
 }) {
   const containerRef = React.useRef<HTMLDivElement>(null);
-  const [leftFraction, setLeftFraction] = React.useState(DEFAULT_LEFT_FRACTION);
+  const [leftFraction, setLeftFraction] = React.useState(defaultLeftFraction);
   const [collapsed, setCollapsed] = React.useState(false);
   const isDragging = React.useRef(false);
   const [isResizing, setIsResizing] = React.useState(false);
+  const [headerSlot, setHeaderSlot] = React.useState<HTMLDivElement | null>(
+    null,
+  );
 
   const handlePointerDown = React.useCallback((e: React.PointerEvent) => {
     isDragging.current = true;
@@ -56,7 +74,7 @@ export function ProjectSettingsPage({
       {/* Parameters panel */}
       <div
         className={cn(
-          "border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]",
+          "border rounded-[var(--radius-md)] border-[var(--color-panel-edge)] bg-[var(--color-bg-surface)]",
           !isResizing && "transition-all duration-300 ease-in-out",
           collapsed ? "min-w-0 overflow-hidden" : "min-w-0 overflow-y-auto"
         )}
@@ -68,43 +86,36 @@ export function ProjectSettingsPage({
         }
       >
         {collapsed ? (
-          /* Collapsed: vertical title + expand chevron */
+          /* Collapsed: just the expand chevron */
           <button
             type="button"
+            aria-label="Expand panel"
             onClick={() => setCollapsed(false)}
-            className="flex h-full w-full flex-col items-center justify-between py-[var(--space-3)] text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-primary)]"
+            className="flex h-full w-full items-start justify-center py-[var(--space-3)] text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-primary)]"
           >
             <ChevronRight size={14} />
-            <span
-              className="text-xs font-semibold tracking-wide"
-              // eslint-disable-next-line template/no-jsx-style-prop -- vertical text
-              style={{ writingMode: "vertical-lr", textOrientation: "mixed" }}
-            >
-              {panelTitle}
-            </span>
-            <div />
           </button>
         ) : (
           /* Expanded: full panel */
           <div className="p-[var(--space-4)]">
-            <div className="mb-[var(--space-4)] flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
-                {panelTitle}
-              </h2>
+            <div className="mb-[var(--space-4)] flex items-center justify-between gap-[var(--space-2)]">
+              <div ref={setHeaderSlot} className="flex items-center gap-[var(--space-2)]" />
               <button
                 type="button"
                 onClick={() => setCollapsed(true)}
-                className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
                 aria-label="Collapse panel"
               >
                 <ChevronLeft size={14} />
               </button>
             </div>
-            {children ?? (
-              <p className="text-sm text-[var(--color-text-muted)]">
-                {title} parameters will be configured here.
-              </p>
-            )}
+            <PanelHeaderSlotContext.Provider value={headerSlot}>
+              {children ?? (
+                <p className="text-sm text-[var(--color-text-muted)]">
+                  {title} parameters will be configured here.
+                </p>
+              )}
+            </PanelHeaderSlotContext.Provider>
           </div>
         )}
       </div>
@@ -120,7 +131,7 @@ export function ProjectSettingsPage({
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           className={cn(
-            "z-10 flex w-2 shrink-0 cursor-col-resize items-center justify-center",
+            "z-10 flex w-[var(--panel-gap)] shrink-0 cursor-col-resize items-center justify-center overflow-hidden bg-[var(--color-layout-divider)]",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]"
           )}
         >
@@ -131,18 +142,18 @@ export function ProjectSettingsPage({
       {/* Middle panel (optional) */}
       {middlePanel && (
         <>
-          <div className="min-w-0 flex-shrink-0 overflow-y-auto border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]"
+          <div className="min-w-0 flex-shrink-0 overflow-y-auto border rounded-[var(--radius-md)] border-[var(--color-panel-edge)] bg-[var(--color-bg-surface)]"
             // eslint-disable-next-line template/no-jsx-style-prop -- runtime sizing
-            style={{ width: "clamp(300px, 28%, 460px)" }}
+            style={{ width: "25%" }}
           >
             {middlePanel}
           </div>
-          <div className="w-2 shrink-0" />
+          <div className="w-[var(--panel-gap)] shrink-0 bg-[var(--color-layout-divider)]" />
         </>
       )}
 
       {/* Viewport panel */}
-      <div className="relative min-w-0 flex-1 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
+      <div className="relative min-w-0 flex-1 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-panel-edge)] bg-[var(--color-bg-surface)]">
         {viewport ?? (
           <div className="flex h-full flex-col items-center justify-center p-[var(--space-4)]">
             <ViewportPlaceholder />
