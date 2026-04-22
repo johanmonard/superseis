@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { useAuthSession } from "@/lib/use-auth-session";
 import {
   createProject,
   deleteProject,
@@ -13,9 +14,12 @@ export const projectKeys = {
 };
 
 export function useProjectList() {
+  const { data: session, isLoading: isAuthLoading } = useAuthSession();
+
   return useQuery({
     queryKey: projectKeys.list(),
     queryFn: ({ signal }) => fetchProjectList(signal),
+    enabled: !isAuthLoading && !!session,
   });
 }
 

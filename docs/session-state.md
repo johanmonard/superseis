@@ -6,20 +6,24 @@
 -->
 
 ```yaml
-active_work: harden project-section autosave reliability
-stage: project-section persistence in progress
-updated: 2026-04-06
+active_work: landing auth flow fixes verified; project list now waits for session before fetching
+stage: sign-in and project-list loading fixes complete; broader worktree still mixed
+updated: 2026-04-22
 
 recent_decisions:
-  - Leave-page autosave now keeps a server-confirmed baseline and retries after failures
-  - Project-section save requests use fetch keepalive during unload/pagehide
+  - Landing login now syncs autofilled DOM credentials immediately on reveal/focus so one-click sign-in works
+  - Added a frontend regression test covering autofilled credentials on the landing login hover card
+  - The first sign-in click now re-reads live input DOM values so browser-restored credentials work without clicking the username first
+  - Project list queries now stay disabled until auth session resolution/login completes, preventing stale empty state after sign-in
 
 open_constraints:
+  - Wider landing/auth rewrite is still in progress in the worktree (`home-overview`, auth route deletions, layout updates)
   - Wider project-section persistence work is still in progress in the worktree
   - Auth flow is a local-development stub — replace before deploying
   - Database is SQLite — swap DATABASE_URL for production
 
 next_action: >
-  Verify autosave behavior manually across project subpages, then
-  finish staging the broader persistence feature when it is ready.
+  Decide whether to isolate and commit the remaining landing/auth rewrite or split
+  it into smaller commits; unrelated full frontend tests still fail in
+  `tests/lib/use-autosave.test.tsx`.
 ```
