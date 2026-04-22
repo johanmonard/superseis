@@ -133,11 +133,11 @@ export function PipelineReportDrawer() {
   const { state, expanded, setExpanded, dismiss } = usePipelineReport();
   const header = headerStatus(state);
 
-  const hidden = state.kind === "idle";
+  const isIdle = state.kind === "idle";
 
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (hidden) return;
+      if (isIdle) return;
       if ((e.ctrlKey || e.metaKey) && e.key === TOGGLE_KEY) {
         e.preventDefault();
         setExpanded(!expanded);
@@ -145,38 +145,15 @@ export function PipelineReportDrawer() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [hidden, expanded, setExpanded]);
+  }, [isIdle, expanded, setExpanded]);
 
-  if (hidden) return null;
+  const isExpanded = expanded && !isIdle;
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] shadow-[0_-4px_16px_var(--color-shadow-alpha)]">
-      {/* Status strip — always visible when the drawer is mounted */}
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-[var(--space-2)] px-[var(--space-4)] py-[var(--space-2)] text-xs"
-        title={expanded ? "Collapse pipeline panel" : "Expand pipeline panel"}
-      >
-        {state.kind === "running" ? (
-          <Loader size={12} className="animate-spin text-[var(--color-accent)]" />
-        ) : header.tone === "error" ? (
-          <AlertTriangle size={12} className="text-[var(--color-status-danger)]" />
-        ) : header.tone === "success" ? (
-          <CircleCheck size={12} className="text-[var(--color-status-success)]" />
-        ) : (
-          <span className="inline-block h-3 w-3 rounded-full bg-[var(--color-bg-elevated)]" />
-        )}
-        <span className={cn("truncate text-left", toneClass(header.tone))}>
-          {header.label}
-        </span>
-        <span className="ml-auto flex items-center gap-[var(--space-1)] text-[var(--color-text-muted)]">
-          {expanded ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
-        </span>
-      </button>
-
-      {expanded && (
-        <div className="max-h-[40vh] overflow-y-auto border-t border-[var(--color-border-subtle)] bg-[var(--color-bg-canvas)] p-[var(--space-4)]">
+    <div className="relative shrink-0 border-t border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
+      {/* Expanded body — opens upward, overlaying content above the strip */}
+      {isExpanded && (
+        <div className="absolute bottom-full left-0 right-0 z-20 max-h-[40vh] overflow-y-auto border-t border-[var(--color-border-subtle)] bg-[var(--color-bg-canvas)] p-[var(--space-4)] shadow-[0_-4px_16px_var(--color-shadow-alpha)]">
           <div className="mb-[var(--space-3)] flex items-center justify-between">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
               Pipeline — {state.target}
@@ -200,6 +177,33 @@ export function PipelineReportDrawer() {
           </div>
         </div>
       )}
+
+      {/* Status strip — always visible, anchored to the bottom of the layout */}
+      <button
+        type="button"
+        onClick={() => !isIdle && setExpanded(!expanded)}
+        disabled={isIdle}
+        className="flex w-full items-center gap-[var(--space-2)] px-[var(--space-4)] py-[var(--space-2)] text-xs disabled:cursor-default"
+        title={isIdle ? undefined : isExpanded ? "Collapse pipeline panel" : "Expand pipeline panel"}
+      >
+        {state.kind === "running" ? (
+          <Loader size={12} className="animate-spin text-[var(--color-accent)]" />
+        ) : header.tone === "error" ? (
+          <AlertTriangle size={12} className="text-[var(--color-status-danger)]" />
+        ) : header.tone === "success" ? (
+          <CircleCheck size={12} className="text-[var(--color-status-success)]" />
+        ) : (
+          <span className="inline-block h-3 w-3 rounded-full bg-[var(--color-bg-elevated)]" />
+        )}
+        <span className={cn("truncate text-left", toneClass(header.tone))}>
+          {header.label}
+        </span>
+        {!isIdle && (
+          <span className="ml-auto flex items-center gap-[var(--space-1)] text-[var(--color-text-muted)]">
+            {isExpanded ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+          </span>
+        )}
+      </button>
     </div>
   );
 }

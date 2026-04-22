@@ -120,35 +120,34 @@ export default function WorkspaceRouteLayout({
   return (
     <PipelineReportProvider>
       <WorkspaceLayout
-        sidebarWidth={isSidebarCollapsed ? "collapsed" : "default"}
-        mainClassName="grid h-screen grid-rows-[minmax(0,1fr)]"
-        hideSidebar={isLandingShell}
-        sidebar={
-          <WorkspaceSidebarNav
-            navigation={visibleNavigation}
-            isCollapsed={isSidebarCollapsed}
-            onToggleCollapsed={setIsSidebarCollapsed}
-            brandInitials={appConfig.initials}
-            brandName={appConfig.name}
-            brandTagline={appConfig.tagline}
-            showAuthStubBanner={isAuthStub}
-          />
-        }
-      >
-        <div className="flex h-full min-h-0 flex-col gap-4 lg:gap-6">
-          {!isLandingShell && (
-            <WorkspacePageHeader
-              session={session}
-              pageTitle={pageIdentity?.title}
-              pageSubtitle={pageIdentity?.subtitle}
+          sidebarWidth={isSidebarCollapsed ? "collapsed" : "default"}
+          mainClassName="grid h-screen grid-rows-[minmax(0,1fr)]"
+          hideSidebar={isLandingShell}
+          sidebar={
+            <WorkspaceSidebarNav
+              navigation={visibleNavigation}
+              isCollapsed={isSidebarCollapsed}
+              onToggleCollapsed={setIsSidebarCollapsed}
+              brandInitials={appConfig.initials}
+              brandName={appConfig.name}
+              brandTagline={appConfig.tagline}
+              showAuthStubBanner={isAuthStub}
             />
-          )}
-          <ErrorBoundary>
-            <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
-          </ErrorBoundary>
-        </div>
-      </WorkspaceLayout>
-      <PipelineReportDrawer />
+          }
+        >
+          <div className="flex h-full min-h-0 flex-col gap-[var(--layout-gap)] divide-y divide-[var(--color-layout-divider)]">
+            {!isLandingShell && (
+              <WorkspacePageHeader
+                session={session}
+                pageTitle={pageIdentity?.title}
+              />
+            )}
+            <ErrorBoundary>
+              <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
+            </ErrorBoundary>
+            {!isLandingShell && <PipelineReportDrawer />}
+          </div>
+        </WorkspaceLayout>
     </PipelineReportProvider>
   );
 }

@@ -39,6 +39,7 @@ import {
   type ThemeMode,
 } from "../../lib/theme";
 import { getApiErrorMessage } from "../../services/api/auth";
+import { getNavigationIconForPathname } from "../../config/navigation.config";
 
 const {
   braces: Braces,
@@ -54,7 +55,6 @@ const {
 export interface WorkspacePageHeaderProps {
   session: { email: string; is_admin: boolean };
   pageTitle?: string;
-  pageSubtitle?: string;
 }
 
 const densityOptions: { value: ThemeDensity; label: string }[] = [
@@ -66,7 +66,6 @@ const densityOptions: { value: ThemeDensity; label: string }[] = [
 export function WorkspacePageHeader({
   session,
   pageTitle,
-  pageSubtitle,
 }: WorkspacePageHeaderProps) {
   const router = useRouter();
   const logoutMutation = useLogoutMutation();
@@ -131,21 +130,28 @@ export function WorkspacePageHeader({
 
   return (
     <>
-      <div className="relative flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0 space-y-1">
+      <div className="relative flex min-h-[var(--topbar-height)] flex-col gap-3 px-[var(--header-padding-x)] py-[var(--space-3)] sm:h-[var(--topbar-height)] sm:min-h-0 sm:flex-row sm:items-center sm:justify-between sm:py-0">
+        <div className="min-w-0">
           {pageTitle ? (
-            <>
-              <h1 className="text-xl font-semibold">{pageTitle}</h1>
-              {pageSubtitle ? (
-                <p className="max-w-3xl text-sm text-[var(--color-text-secondary)]">
-                  {pageSubtitle}
-                </p>
-              ) : null}
-            </>
+            <h1 className="flex items-center gap-[var(--space-2)] text-xl font-semibold">
+              {(() => {
+                const iconKey = getNavigationIconForPathname(pathname);
+                const IconComponent = iconKey ? appIcons[iconKey] : null;
+                return IconComponent ? (
+                  <IconComponent
+                    size={20}
+                    strokeWidth={1.75}
+                    className="shrink-0 text-[var(--color-text-secondary)]"
+                    aria-hidden="true"
+                  />
+                ) : null;
+              })()}
+              <span className="truncate">{pageTitle}</span>
+            </h1>
           ) : null}
         </div>
         {/* Center: project toolbar or badge — absolutely centered on the bar */}
-        <div className="pointer-events-none absolute inset-0 hidden items-start justify-center sm:flex">
+        <div className="pointer-events-none absolute inset-0 hidden items-center justify-center sm:flex">
           {activeProject && isProjectPage ? (
             <TooltipProvider delayDuration={200}>
               <div className="pointer-events-auto flex items-center gap-[var(--space-1)] rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] px-[var(--space-3)] py-[var(--space-1)] shadow-[0_1px_2px_var(--color-shadow-alpha)]">
