@@ -25,6 +25,42 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Extract the best available user-facing message from an API error.
+ * FastAPI puts string HTTPException details under ``details.detail``; Pydantic
+ * validation errors put a list of ``{loc, msg, type}`` there instead. Falls
+ * back to the generic HTTP status message for other shapes.
+ */
+export function formatApiError(error: unknown): string {
+  if (error instanceof ApiError) {
+    const d = error.details as { detail?: unknown } | null | undefined
+    if (d && typeof d === 'object') {
+      const detail = d.detail
+      if (typeof detail === 'string' && detail.trim()) {
+        return detail
+      }
+      if (Array.isArray(detail)) {
+        const parts = detail
+          .map((entry) => {
+            if (entry && typeof entry === 'object') {
+              const loc = Array.isArray((entry as { loc?: unknown[] }).loc)
+                ? ((entry as { loc: unknown[] }).loc.filter((v) => v !== 'body').join('.'))
+                : ''
+              const msg = (entry as { msg?: string }).msg ?? ''
+              return loc ? `${loc}: ${msg}` : msg
+            }
+            return String(entry)
+          })
+          .filter(Boolean)
+        if (parts.length > 0) return parts.join('; ')
+      }
+    }
+    return error.message
+  }
+  if (error instanceof Error) return error.message
+  return String(error)
+}
+
 function buildUrl(path: string, query: QueryParams | undefined): string {
   const { apiBaseUrl } = getRuntimeConfig()
   const url = new URL(path.startsWith('/') ? path : `/${path}`, apiBaseUrl)

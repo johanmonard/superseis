@@ -6,11 +6,19 @@ import { appIcons } from "@/components/ui/icon";
 import { AngleInput } from "@/components/ui/angle-input";
 import { Field } from "@/components/ui/field";
 
-const { check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
+const {
+  barChart3: BarChart3,
+  check: Check,
+  pencil: Pencil,
+  plus: Plus,
+  trash: Trash2,
+  x: X,
+} = appIcons;
 import { SliderInput } from "@/components/ui/slider-input";
 import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
+import { PanelHeaderSlot } from "@/components/features/project/project-settings-page";
 
 /* ------------------------------------------------------------------
    Types
@@ -204,8 +212,14 @@ export type { DesignGroup };
 
 export function ProjectDesign({
   onActiveChange,
+  onGroupsChange,
+  onAnalyzeToggle,
+  analysisOpen = false,
 }: {
   onActiveChange?: (group: DesignGroup) => void;
+  onGroupsChange?: (groups: DesignGroup[]) => void;
+  onAnalyzeToggle?: () => void;
+  analysisOpen?: boolean;
 } = {}) {
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
@@ -220,6 +234,10 @@ export function ProjectDesign({
   React.useEffect(() => {
     onActiveChange?.(activeGroup);
   }, [activeGroup, onActiveChange]);
+
+  React.useEffect(() => {
+    onGroupsChange?.(groups);
+  }, [groups, onGroupsChange]);
 
   const updateGroup = React.useCallback(
     (id: string, patch: Partial<DesignGroup>) => {
@@ -244,6 +262,24 @@ export function ProjectDesign({
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
+      {onAnalyzeToggle && (
+        <PanelHeaderSlot>
+          <button
+            type="button"
+            onClick={onAnalyzeToggle}
+            aria-pressed={analysisOpen}
+            className={cn(
+              "flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] px-[var(--space-2)] py-[var(--space-1)] text-xs font-medium transition-colors",
+              analysisOpen
+                ? "bg-[var(--color-accent)] text-[var(--color-accent-foreground)]"
+                : "bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
+            )}
+          >
+            <BarChart3 size={12} /> Analysis
+          </button>
+        </PanelHeaderSlot>
+      )}
+
       <GroupSelector
         groups={groups}
         activeId={activeId}

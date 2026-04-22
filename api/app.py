@@ -96,6 +96,7 @@ from api.routes.project_offset_artifacts import router as project_offset_artifac
 from api.routes.project_pipeline import router as project_pipeline_router
 from api.routes.project_rasters import router as project_rasters_router
 from api.routes.project_sections import router as project_sections_router
+from api.routes.project_design_analyze import router as project_design_analyze_router
 
 
 # [new-module:import-router]
@@ -114,6 +115,7 @@ app.include_router(project_offset_artifacts_router)
 app.include_router(project_pipeline_router)
 app.include_router(project_rasters_router)
 app.include_router(project_sections_router)
+app.include_router(project_design_analyze_router)
 
 
 # [new-module:register-router]
