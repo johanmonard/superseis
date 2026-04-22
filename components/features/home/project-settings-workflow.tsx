@@ -153,12 +153,13 @@ const nodeTypes = { step: StepNode, title: TitleNode };
 
 const STEPS = [
   { id: "definition", number: 1, label: "Definition", description: "Project base information.", href: "/project/definition" },
-  { id: "partitioning", number: 2, label: "Partitioning", description: "Partition the project area in regions.", href: "/project/partitioning" },
-  { id: "grid", number: 3, label: "Grid", description: "Survey design parameters & region assignment.", href: "/project/grid" },
-  { id: "survey", number: 4, label: "Survey", description: "Define survey extents and boundaries.", href: "/project/survey" },
-  { id: "layers", number: 5, label: "Layers", description: "Layer management and configuration.", href: "/project/layers" },
-  { id: "maps", number: 6, label: "Maps", description: "Map layer composition and sorting.", href: "/project/maps" },
-  { id: "offsetters", number: 7, label: "Offsetters", description: "Offset relocation parameters.", href: "/project/offsetters" },
+  { id: "partitions", number: 2, label: "Partitions", description: "Partition the project area in regions.", href: "/project/partitions" },
+  { id: "design", number: 3, label: "Design", description: "Survey patch design parameters.", href: "/project/design" },
+  { id: "grid", number: 4, label: "Grid", description: "Region assignments.", href: "/project/grid" },
+  { id: "survey", number: 5, label: "Survey", description: "Define survey extents and boundaries.", href: "/project/survey" },
+  { id: "layers", number: 6, label: "Layers", description: "Layer management and configuration.", href: "/project/layers" },
+  { id: "maps", number: 7, label: "Maps", description: "Map layer composition and sorting.", href: "/project/maps" },
+  { id: "offsets", number: 8, label: "Offsets", description: "Offset relocation parameters.", href: "/project/offsets" },
 ] as const;
 
 // ---------------------------------------------------------------------------

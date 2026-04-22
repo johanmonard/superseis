@@ -14,7 +14,7 @@ import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
 import { usePipelineReport } from "@/lib/use-pipeline-report";
 import { useProjectSection } from "@/services/query/project-sections";
-import { buildStandardPreset, type DesignAttrs, type Side } from "@/lib/offsetter-presets";
+import { buildStandardPreset, type DesignAttrs, type Side } from "@/lib/offset-presets";
 
 const {
   check: Check,
@@ -73,7 +73,7 @@ interface PointTypeConfig {
   activeParamRegion: string; // region name of the active param tab
 }
 
-interface OffsetterConfig {
+interface OffsetConfig {
   id: string;
   name: string;
   designOption: string;
@@ -117,7 +117,7 @@ function createParamSetForRegion(region: string): ParamSet {
 
 let configCounter = 0;
 
-function createConfig(): OffsetterConfig {
+function createConfig(): OffsetConfig {
   configCounter++;
   return {
     id: crypto.randomUUID(),
@@ -187,7 +187,7 @@ function normalizeSide(
   return { map, snapperMaxDist, partitioning, layerRules, params, activeParamRegion };
 }
 
-function normalizeConfig(raw: AnyRecord): OffsetterConfig {
+function normalizeConfig(raw: AnyRecord): OffsetConfig {
   // Older shape stored map + snapperMaxDist at the config level; keep them as
   // per-side fallbacks so pre-existing configs still show a sensible value.
   const legacyMap = typeof raw.map === "string" ? raw.map : "";
@@ -734,7 +734,7 @@ function PointTypePanel({
     if (!row || !row.design) {
       setPresetNotice({
         kind: "error",
-        text: `The active Design Option has no row for region "${param.region}".`,
+        text: `The active Grid Option has no row for region "${param.region}".`,
       });
       return;
     }
@@ -795,7 +795,7 @@ function PointTypePanel({
       </Field>
 
       {/* Partitioning is dictated by the active Design Option and shown read-only. */}
-      <Field label="Partitioning" layout="horizontal" labelWidth="5.5rem">
+      <Field label="Partitions" layout="horizontal" labelWidth="5.5rem">
         <Select value={config.partitioning} disabled onChange={() => undefined}>
           <option value="">—</option>
           {partitioningNames.map((n) => (
@@ -841,7 +841,7 @@ function PointTypePanel({
         </div>
       ) : (
         <div className="rounded-[var(--radius-sm)] border border-dashed border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)] px-[var(--space-3)] py-[var(--space-3)] text-center text-xs text-[var(--color-text-muted)]">
-          Pick a Design Option and Partitioning to configure region parameters.
+          Pick a Grid Option and Partitioning to configure region parameters.
         </div>
       )}
 
@@ -971,11 +971,11 @@ function PointTypePanel({
    Section data
    ------------------------------------------------------------------ */
 
-interface OffsettersData {
-  configs: OffsetterConfig[];
+interface OffsetsData {
+  configs: OffsetConfig[];
   activeId: string;
 }
-const DEFAULT_OFFSETTERS: OffsettersData = {
+const DEFAULT_OFFSETS: OffsetsData = {
   configs: [createConfig()],
   activeId: "",
 };
@@ -984,20 +984,20 @@ const DEFAULT_OFFSETTERS: OffsettersData = {
    Main component
    ------------------------------------------------------------------ */
 
-export function ProjectOffsetters() {
+export function ProjectOffsets() {
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
   const [activeSide, setActiveSide] = React.useState<"sources" | "receivers">("sources");
 
-  const { data, update, flush } = useSectionData<OffsettersData>(
+  const { data, update, flush } = useSectionData<OffsetsData>(
     projectId,
     "offsetters",
-    DEFAULT_OFFSETTERS,
+    DEFAULT_OFFSETS,
   );
 
   // Normalize on read — handles the older per-param partitioning/layerRules
   // shape without crashing. Memoized so we don't rebuild every render.
-  const normalized = React.useMemo<OffsettersData>(() => {
+  const normalized = React.useMemo<OffsetsData>(() => {
     const rawConfigs = Array.isArray(data.configs) ? (data.configs as unknown as AnyRecord[]) : [];
     const configs =
       rawConfigs.length > 0 ? rawConfigs.map(normalizeConfig) : [createConfig()];
@@ -1064,7 +1064,7 @@ export function ProjectOffsetters() {
   const active = configs.find((c) => c.id === activeId) ?? configs[0];
 
   const updateConfig = React.useCallback(
-    (id: string, patch: Partial<OffsetterConfig>) => {
+    (id: string, patch: Partial<OffsetConfig>) => {
       const newConfigs = normalized.configs.map((c) =>
         c.id === id ? { ...c, ...patch } : c,
       );
@@ -1115,7 +1115,7 @@ export function ProjectOffsetters() {
     : offsetsRunning
       ? null
       : !active?.designOption
-        ? "Pick a Design Option first"
+        ? "Pick a Grid Option first"
         : !active.sources.map || !active.receivers.map
           ? "Configure Map on both sides"
           : !active.sources.partitioning || !active.receivers.partitioning
@@ -1129,7 +1129,7 @@ export function ProjectOffsetters() {
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Offsetters</h2>
+        <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Offsets</h2>
       </div>
 
       {/* Pipeline trigger — runs the offsets step (+ all dirty upstream) so
@@ -1174,7 +1174,7 @@ export function ProjectOffsetters() {
       <div className="h-px bg-[var(--color-border-subtle)]" />
 
       {/* Fixed config */}
-      <Field label="Design Option" layout="horizontal">
+      <Field label="Grid Option" layout="horizontal">
         <Select
           value={active.designOption}
           onChange={(e) => {

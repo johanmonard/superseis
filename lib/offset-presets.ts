@@ -1,10 +1,10 @@
 /**
- * Offsetter rule presets.
+ * Offset rule presets.
  *
  * Pure functions that derive a list of offset rules from project context
  * (active design attributes + side + region). The frontend calls these from
- * the Offsetters UI; the shape they return matches the `OffsetRule` model in
- * `components/features/project/project-offsetters.tsx` (minus the `id`,
+ * the Offsets UI; the shape they return matches the `OffsetRule` model in
+ * `components/features/project/project-offsets.tsx` (minus the `id`,
  * which the caller assigns).
  *
  * Rule-type → saisai mapping (see `docs` / chat history for the full table):
@@ -36,7 +36,7 @@ export type PresetResult =
   | { ok: false; errors: string[] };
 
 /**
- * "Standard" offsetter rules preset.
+ * "Standard" offset rules preset.
  *
  * Validation requirements:
  *   - `sli > 0` and `rli > 0` always

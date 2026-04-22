@@ -131,7 +131,7 @@ const OPTION_LABELS: {
 }[] = [
   { key: "survey", activeKey: "survey", label: "Survey" },
   { key: "grid", activeKey: "grid", label: "Grid" },
-  { key: "offsetters", activeKey: "offsetter", label: "Offsetters" },
+  { key: "offsetters", activeKey: "offsetter", label: "Offsets" },
   { key: "crew", activeKey: "crew", label: "Crew" },
 ];
 

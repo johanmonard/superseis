@@ -56,14 +56,19 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
     subtitle: "Upload and visualize project GIS files (polygons, POI, layers).",
   },
   {
-    href: "/project/partitioning",
-    title: "Partitioning",
+    href: "/project/partitions",
+    title: "Partitions",
     subtitle: "Partition the project area in regions.",
+  },
+  {
+    href: "/project/design",
+    title: "Design",
+    subtitle: "Survey patch design parameters.",
   },
   {
     href: "/project/grid",
     title: "Grid",
-    subtitle: "Survey design parameters & region assignment.",
+    subtitle: "Region assignments.",
   },
   {
     href: "/project/survey",
@@ -81,8 +86,8 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
     subtitle: "Map layer composition and sorting.",
   },
   {
-    href: "/project/offsetters",
-    title: "Offsetters",
+    href: "/project/offsets",
+    title: "Offsets",
     subtitle: "Offset relocation parameters.",
   },
   {

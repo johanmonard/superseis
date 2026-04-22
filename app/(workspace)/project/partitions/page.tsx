@@ -3,7 +3,7 @@
 import * as React from "react";
 import dynamic from "next/dynamic";
 import { ProjectSettingsPage } from "@/components/features/project/project-settings-page";
-import { ProjectPartitioning } from "@/components/features/project/project-partitioning";
+import { ProjectPartitions } from "@/components/features/project/project-partitions";
 import { ViewportPlaceholder } from "@/components/features/project/viewport-placeholder";
 import type { VisibleFile, GisLayerStyle } from "@/components/features/project/project-gis-viewer";
 import { useSectionData } from "@/lib/use-autosave";
@@ -27,7 +27,7 @@ type PersistedStyles = Record<
   { color: string; width: number; opacity: number; filled?: boolean }
 >;
 
-export default function PartitioningPage() {
+export default function PartitionsPage() {
   const [projectId, setProjectId] = React.useState<number | null>(null);
   const [polygonNames, setPolygonNames] = React.useState<string[]>([]);
 
@@ -125,7 +125,7 @@ export default function PartitioningPage() {
 
   return (
     <ProjectSettingsPage
-      title="Partitioning"
+      title="Partitions"
       viewport={
         polygonNames.length > 0 ? (
           <GisViewerViewport
@@ -140,7 +140,7 @@ export default function PartitioningPage() {
         )
       }
     >
-      <ProjectPartitioning onActivePolygonsChange={handlePolygonsChange} />
+      <ProjectPartitions onActivePolygonsChange={handlePolygonsChange} />
     </ProjectSettingsPage>
   );
 }

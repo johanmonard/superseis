@@ -272,7 +272,7 @@ export function OffsetsGridViewport({
           message={
             loadState === "missing"
               ? "Click 'Show grid' to compute offsets"
-              : "Configure the offsetter and click 'Show grid'"
+              : "Configure the offsets and click 'Show grid'"
           }
         />
       </div>

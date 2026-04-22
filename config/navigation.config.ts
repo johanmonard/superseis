@@ -20,6 +20,27 @@ export type NavigationItem = {
   children?: NavigationChildItem[];
 };
 
+export function getNavigationIconForPathname(pathname: string): AppIconKey | null {
+  let bestIcon: AppIconKey | null = null;
+  let bestHrefLength = -1;
+  const walk = (items: (NavigationItem | NavigationChildItem)[]) => {
+    for (const item of items) {
+      if (item.icon && item.href) {
+        const matches =
+          item.href === pathname ||
+          (item.href !== "/" && pathname.startsWith(`${item.href}/`));
+        if (matches && item.href.length > bestHrefLength) {
+          bestIcon = item.icon;
+          bestHrefLength = item.href.length;
+        }
+      }
+      if (item.children) walk(item.children);
+    }
+  };
+  walk(navigation);
+  return bestIcon;
+}
+
 export const navigation: NavigationItem[] = [
   { label: "Home", href: "/", module: "home", icon: "home", section: "main" },
   {
@@ -56,12 +77,13 @@ export const navigation: NavigationItem[] = [
         children: [
           { label: "Definition", href: "/project/definition", icon: "dashboards" },
           { label: "Files", href: "/project/files", icon: "folderOpen" },
-          { label: "Partitioning", href: "/project/partitioning", icon: "grid" },
-          { label: "Grid", href: "/project/grid", icon: "compass" },
+          { label: "Partitions", href: "/project/partitions", icon: "grid" },
+          { label: "Design", href: "/project/design", icon: "compass" },
+          { label: "Grid", href: "/project/grid", icon: "grid" },
           { label: "Survey", href: "/project/survey", icon: "mountain" },
           { label: "Layers", href: "/project/layers", icon: "layers" },
           { label: "Maps", href: "/project/maps", icon: "mapPin" },
-          { label: "Offsetters", href: "/project/offsetters", icon: "sliders" },
+          { label: "Offsets", href: "/project/offsets", icon: "sliders" },
         ],
       },
       {

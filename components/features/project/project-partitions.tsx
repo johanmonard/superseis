@@ -289,7 +289,7 @@ const DEFAULT_PARTITIONING: PartitioningData = {
    Main form
    ------------------------------------------------------------------ */
 
-export function ProjectPartitioning({
+export function ProjectPartitions({
   onActivePolygonsChange,
 }: {
   onActivePolygonsChange?: (projectId: number | null, polygons: string[]) => void;

@@ -4,7 +4,7 @@ import * as React from "react";
 import dynamic from "next/dynamic";
 import { useQueryClient } from "@tanstack/react-query";
 import { ProjectSettingsPage } from "@/components/features/project/project-settings-page";
-import { ProjectOffsetters } from "@/components/features/project/project-offsetters";
+import { ProjectOffsets } from "@/components/features/project/project-offsets";
 import { useActiveProject } from "@/lib/use-active-project";
 import { usePipelineReport } from "@/lib/use-pipeline-report";
 import {
@@ -21,7 +21,7 @@ const OffsetsGridViewport = dynamic(
   { ssr: false },
 );
 
-export default function OffsettersPage() {
+export default function OffsetsPage() {
   const { activeProject } = useActiveProject();
   const projectId = activeProject?.id ?? null;
   const { state: pipelineState } = usePipelineReport();
@@ -64,8 +64,8 @@ export default function OffsettersPage() {
   );
 
   return (
-    <ProjectSettingsPage title="Offsetters" viewport={viewport}>
-      <ProjectOffsetters />
+    <ProjectSettingsPage title="Offsets" viewport={viewport} defaultLeftFraction={(1 / 3) * 0.8}>
+      <ProjectOffsets />
     </ProjectSettingsPage>
   );
 }
