@@ -66,13 +66,16 @@ export default function WorkspaceRouteLayout({
   } = useWorkspaceSidebar();
   const { activeProject } = useActiveProject();
   const isAdminRoute = pathname === "/admin" || pathname.startsWith("/admin/");
-  const isLandingShell = pathname === "/" && !activeProject;
+  const atLanding = pathname === "/";
+  const isLandingShell = atLanding && !activeProject;
 
+  // Landing shell (`/`) hosts the login card directly; all other routes
+  // bounce back to it until a session exists.
   React.useEffect(() => {
-    if (!isLoading && !session) {
-      router.replace("/login");
+    if (!isLoading && !session && !atLanding) {
+      router.replace("/");
     }
-  }, [isLoading, router, session]);
+  }, [isLoading, router, session, atLanding]);
 
   React.useEffect(() => {
     if (!isLoading && session && isAdminRoute && !session.is_admin) {
@@ -113,7 +116,12 @@ export default function WorkspaceRouteLayout({
     );
   }
 
-  if (!session || (isAdminRoute && !session.is_admin)) {
+  // Without a session, only the landing shell renders; everything else is
+  // in-flight to `/`.
+  if (!session && !atLanding) {
+    return null;
+  }
+  if (session && isAdminRoute && !session.is_admin) {
     return null;
   }
 
@@ -136,7 +144,7 @@ export default function WorkspaceRouteLayout({
           }
         >
           <div className="flex h-full min-h-0 flex-col gap-[var(--layout-gap)] divide-y divide-[var(--color-layout-divider)]">
-            {!isLandingShell && (
+            {!isLandingShell && session && (
               <WorkspacePageHeader
                 session={session}
                 pageTitle={pageIdentity?.title}
@@ -145,7 +153,7 @@ export default function WorkspaceRouteLayout({
             <ErrorBoundary>
               <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
             </ErrorBoundary>
-            {!isLandingShell && <PipelineReportDrawer />}
+            {!isLandingShell && session && <PipelineReportDrawer />}
           </div>
         </WorkspaceLayout>
     </PipelineReportProvider>

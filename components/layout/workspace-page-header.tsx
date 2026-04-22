@@ -101,7 +101,7 @@ export function WorkspacePageHeader({
 
   const handleLogout = React.useCallback(async () => {
     await logoutMutation.mutateAsync();
-    router.replace("/login");
+    router.replace("/");
   }, [logoutMutation, router]);
 
   const pathname = usePathname();
