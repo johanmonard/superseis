@@ -27,6 +27,7 @@ from api.seismic_gpkg import (
     write_offset_grid_gpkg,
     write_theoretical_grid_gpkg,
 )
+from api.seismic_sps import write_theoretical_sps_files
 
 from dojo.v3.adapters.v3_runner import V3Runner
 from dojo.v3.domain.pipeline import STEP_ORDER, Step, StepStatus, steps_in_closure
@@ -75,6 +76,7 @@ def _post_step_seismic_artifacts(
         if step == Step.GRID:
             write_theoretical_grid_gpkg(project_dir, epsg, option_name)
             _write_option_grid_mesh(cfg, project_dir, epsg, option_name)
+            write_theoretical_sps_files(project_dir)
         elif step == Step.OFFSETS:
             write_offset_grid_gpkg(project_dir, epsg, option_name)
     except Exception:
