@@ -11,7 +11,7 @@ const {
   search: Search,
   upload: Upload,
   x: X,
-  info: Info,
+  play: Play,
   alertTriangle: AlertTriangle,
   loader: Loader,
 } = appIcons;
@@ -517,20 +517,16 @@ export function ProjectDefinition() {
                     className="shrink-0 text-[var(--color-status-danger)]"
                   />
                 ) : null}
-                <button
-                  type="button"
-                  aria-label="Show CRS details"
+                <Button
+                  variant="secondary"
+                  size="md"
                   onClick={() => setShowCrsPanel((v) => !v)}
                   disabled={committedEpsg == null}
-                  className={cn(
-                    "flex h-[var(--control-height-sm)] w-[var(--control-height-sm)] shrink-0 items-center justify-center rounded-[var(--radius-sm)]",
-                    "text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]",
-                    "disabled:pointer-events-none disabled:opacity-40",
-                    showCrsPanel && "bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]",
-                  )}
+                  aria-label="Show CRS details"
                 >
-                  <Info size={14} />
-                </button>
+                  <Play size={12} className="mr-[var(--space-1)]" />
+                  Show
+                </Button>
               </div>
             </Field>
 

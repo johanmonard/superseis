@@ -15,7 +15,6 @@ import { useSectionData } from "@/lib/use-autosave";
 import { usePipelineReport } from "@/lib/use-pipeline-report";
 import { useProjectSection } from "@/services/query/project-sections";
 import { buildStandardPreset, type DesignAttrs, type Side } from "@/lib/offset-presets";
-import { PanelHeaderSlot } from "@/components/features/project/project-settings-page";
 
 const {
   check: Check,
@@ -1129,26 +1128,6 @@ export function ProjectOffsets() {
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      {/* Pipeline trigger — rendered into the panel header slot (left of
-          the collapse chevron) via portal. Mirrors "Show grid" on the
-          Design Options page; progress surfaces in the bottom drawer. */}
-      <PanelHeaderSlot>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={handleShowGrid}
-          disabled={!canShowGrid}
-          title={disabledReason ?? undefined}
-        >
-          {offsetsRunning ? (
-            <Icon icon={appIcons.loader} size={12} className="mr-[var(--space-1)] animate-spin" />
-          ) : (
-            <Play size={12} className="mr-[var(--space-1)]" />
-          )}
-          Show grid
-        </Button>
-      </PanelHeaderSlot>
-
       {/* Config selector */}
       <GroupSelector
         items={configs}
@@ -1247,6 +1226,23 @@ export function ProjectOffsets() {
           mapsList={mapsList}
         />
       )}
+
+      <div className="flex justify-end">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={handleShowGrid}
+          disabled={!canShowGrid}
+          title={disabledReason ?? undefined}
+        >
+          {offsetsRunning ? (
+            <Icon icon={appIcons.loader} size={12} className="mr-[var(--space-1)] animate-spin" />
+          ) : (
+            <Play size={12} className="mr-[var(--space-1)]" />
+          )}
+          Process offsets
+        </Button>
+      </div>
     </div>
   );
 }

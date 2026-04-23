@@ -49,6 +49,21 @@ export function ProjectSettingsPage({
   const [headerSlot, setHeaderSlot] = React.useState<HTMLDivElement | null>(
     null,
   );
+  const [hasHeaderContent, setHasHeaderContent] = React.useState(false);
+
+  // Track whether anything has been portaled into the header slot, so we
+  // can render a separator below the chevron row when actions are present.
+  React.useEffect(() => {
+    if (!headerSlot) {
+      setHasHeaderContent(false);
+      return;
+    }
+    const update = () => setHasHeaderContent(headerSlot.childNodes.length > 0);
+    update();
+    const observer = new MutationObserver(update);
+    observer.observe(headerSlot, { childList: true });
+    return () => observer.disconnect();
+  }, [headerSlot]);
 
   const handlePointerDown = React.useCallback((e: React.PointerEvent) => {
     isDragging.current = true;
@@ -98,16 +113,21 @@ export function ProjectSettingsPage({
         ) : (
           /* Expanded: full panel */
           <div className="p-[var(--space-4)]">
-            <div className="mb-[var(--space-4)] flex items-center justify-between gap-[var(--space-2)]">
-              <div ref={setHeaderSlot} className="flex items-center gap-[var(--space-2)]" />
-              <button
-                type="button"
-                onClick={() => setCollapsed(true)}
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
-                aria-label="Collapse panel"
-              >
-                <ChevronLeft size={14} />
-              </button>
+            <div className="mb-[var(--space-4)]">
+              <div className="flex items-center justify-between gap-[var(--space-2)]">
+                <div ref={setHeaderSlot} className="flex items-center gap-[var(--space-2)]" />
+                <button
+                  type="button"
+                  onClick={() => setCollapsed(true)}
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+                  aria-label="Collapse panel"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+              </div>
+              {hasHeaderContent && (
+                <div className="mt-[var(--space-3)] h-px bg-[var(--color-border-subtle)]" />
+              )}
             </div>
             <PanelHeaderSlotContext.Provider value={headerSlot}>
               {children ?? (
