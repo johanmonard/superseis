@@ -15,7 +15,7 @@ import {
 import { fileGeoJsonKey, fileRawKey, useProjectFiles } from "@/services/query/project-files";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
-const PRELOAD_CATEGORIES: FileCategory[] = ["gis_layers"];
+const PRELOAD_CATEGORIES: FileCategory[] = ["gis_layers", "seismic"];
 const CONCURRENCY = 3;
 
 interface GisPreloadState {
