@@ -12,18 +12,20 @@ remains authoritative; these are convenience derivatives.
 
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from shapely.geometry import Point
+from shapely.geometry import MultiLineString, Point
 
 
 SEISMIC_DIR_NAME = "seismic"
 THEORETICAL_GRID_STEM = "theoretical_grid"
 OFFSET_GRID_STEM = "offset_grid"
+GRID_MESH_STEM = "grid_mesh"
 
 
 def _slug(name: str) -> str:
@@ -42,6 +44,10 @@ def theoretical_grid_fname(option_name: str) -> str:
 
 def offset_grid_fname(option_name: str) -> str:
     return f"{OFFSET_GRID_STEM}__{_slug(option_name)}.gpkg"
+
+
+def grid_mesh_fname(option_name: str) -> str:
+    return f"{GRID_MESH_STEM}__{_slug(option_name)}.gpkg"
 
 
 def ensure_seismic_dir(project_dir: Path) -> Path:
@@ -65,7 +71,7 @@ def prune_option_seismic_files(project_dir: Path, keep_option_names: list[str]) 
         if not path.is_file() or path.suffix != ".gpkg":
             continue
         stem = path.stem
-        for prefix in (THEORETICAL_GRID_STEM, OFFSET_GRID_STEM):
+        for prefix in (THEORETICAL_GRID_STEM, OFFSET_GRID_STEM, GRID_MESH_STEM):
             marker = f"{prefix}__"
             if stem.startswith(marker):
                 slug = stem[len(marker):]
@@ -219,4 +225,191 @@ def write_offset_grid_gpkg(
     seismic = ensure_seismic_dir(project_dir)
     out = seismic / offset_grid_fname(option_name)
     combined.to_file(out, driver="GPKG")
+    return out
+
+
+def write_grid_mesh_gpkg(
+    project_dir: Path,
+    epsg: int,
+    option_name: str,
+    min_rpi: float,
+    min_spi: float,
+    rl_angle_deg: float,
+) -> Path | None:
+    """Write a thin-line control mesh aligned with the theoretical grid.
+
+    Anchored on an **actual theoretical station** read from
+    ``work/artifacts/grid/{r,s}.parquet`` rather than the rotated
+    bounding-rect corner. That's important: ``saisai.generate_grid``
+    applies a continuous optimizer shift (``res.x`` in
+    ``saisai/utils/spatial.py``) that the bounding-rect anchor doesn't
+    know about — anchoring on the rect corner leaves the mesh
+    translated by an arbitrary sub-cell amount relative to the
+    theoretical stations. Anchoring on a real station guarantees at
+    least that station sits at a cell centre, with the rest of the
+    min-RPI design following at integer cell addresses.
+
+    Emits a **single ``MultiLineString`` feature** containing every
+    vertical + horizontal grid edge over the bounding extent of all
+    theoretical stations (plus 1-cell padding). Pitch =
+    ``(min_rpi/2, min_spi/2)`` meters, cells rotated by ``rl_angle_deg``.
+
+    Per-cell polygons are **not** emitted (a 20×20 km survey at 50 m
+    station spacing would be ~640 000 polygons / ~400 MB and crash the
+    browser). Instead the feature carries enough metadata for the
+    frontend to synthesize any cell's polygon on demand:
+
+    - ``anchor_x``, ``anchor_y`` (float64): world coords of cell (0, 0)
+      centre — the station the mesh is anchored on.
+    - ``ei_x``, ``ei_y`` (float64): world vector for a +1 step in the
+      ``i`` (inline) direction. Length = ``min_rpi/2``.
+    - ``ej_x``, ``ej_y`` (float64): world vector for a +1 step in the
+      ``j`` (crossline) direction. Length = ``min_spi/2``.
+    - ``i_lo``, ``i_hi``, ``j_lo``, ``j_hi`` (int32): cell-index extent.
+    - ``rl_angle_deg``, ``min_rpi``, ``min_spi`` (float64): kept for
+      inspection / debugging.
+
+    Cell (I, J) centre in world coords:
+        ``(anchor_x + I*ei_x + J*ej_x, anchor_y + I*ei_y + J*ej_y)``
+    and cell corners are ``centre ± ei/2 ± ej/2``.
+
+    Returns the written path, or ``None`` if any required input is missing.
+    """
+    if not option_name or min_rpi <= 0 or min_spi <= 0:
+        return None
+
+    # Pull station positions from the parquets the GRID step just wrote.
+    # The r/s parquets share the same frame; either is fine, but we merge
+    # them so the mesh extent covers both sides.
+    grid_dir = project_dir / "work" / "artifacts" / "grid"
+    station_xy_parts: list[np.ndarray] = []
+    for ptype in ("r", "s"):
+        p = grid_dir / f"{ptype}.parquet"
+        if not p.exists():
+            continue
+        df = pd.read_parquet(p, columns=["x", "y"])
+        if df.empty:
+            continue
+        station_xy_parts.append(df[["x", "y"]].to_numpy(dtype=np.float64))
+    if not station_xy_parts:
+        return None
+    station_xy = np.concatenate(station_xy_parts, axis=0)
+
+    # Anchor on the first station. Any station works — cell (0, 0) will
+    # sit on whichever station we pick, and every other station of a
+    # design whose RPI/SPI is a multiple of ``min_rpi``/``min_spi`` lands
+    # on an integer cell centre. Using row 0 of the R parquet keeps the
+    # choice deterministic across runs.
+    anchor_wx, anchor_wy = float(station_xy[0, 0]), float(station_xy[0, 1])
+
+    # Rotation: rotated frame is world rotated CW by rl_angle (R lines
+    # horizontal). rot_fwd below takes world-minus-anchor → rotated.
+    rl_rad = math.radians(rl_angle_deg)
+    cos_r, sin_r = math.cos(rl_rad), math.sin(rl_rad)
+    dx = float(min_rpi) / 2.0
+    dy = float(min_spi) / 2.0
+
+    # Compute each station's rotated-frame coords relative to the anchor,
+    # then to its cell address. min/max over those gives the iteration
+    # range (+1 cell of padding so boundary stations aren't on the edge).
+    sx = station_xy[:, 0] - anchor_wx
+    sy = station_xy[:, 1] - anchor_wy
+    lx = cos_r * sx + sin_r * sy
+    ly = -sin_r * sx + cos_r * sy
+    cell_i = np.round(lx / dx).astype(np.int64)
+    cell_j = np.round(ly / dy).astype(np.int64)
+    i_lo = int(cell_i.min()) - 1
+    i_hi = int(cell_i.max()) + 1
+    j_lo = int(cell_j.min()) - 1
+    j_hi = int(cell_j.max()) + 1
+
+    n_i = i_hi - i_lo + 1
+    n_j = j_hi - j_lo + 1
+    if n_i <= 0 or n_j <= 0 or n_i > 20_000 or n_j > 20_000:
+        return None
+
+    # rot_back (CCW by rl_angle) sends rotated-frame coords → world,
+    # translated back to the anchor.
+    def _rot_to_world(x_rot: float, y_rot: float) -> tuple[float, float]:
+        return (
+            anchor_wx + cos_r * x_rot - sin_r * y_rot,
+            anchor_wy + sin_r * x_rot + cos_r * y_rot,
+        )
+
+    # Cell-edge coordinates in rotated frame. Vertical edges sit at
+    # (I*dx + dx/2) for I in [i_lo-1 .. i_hi]; horizontal edges at
+    # (J*dy + dy/2) for J in [j_lo-1 .. j_hi]. Anchor lives at rotated
+    # (0, 0) so cell (0, 0) spans [-dx/2, +dx/2] × [-dy/2, +dy/2].
+    half_dx, half_dy = dx / 2.0, dy / 2.0
+    vx_rot = np.arange(i_lo - 1, i_hi + 1, dtype=np.float64) * dx + half_dx
+    hy_rot = np.arange(j_lo - 1, j_hi + 1, dtype=np.float64) * dy + half_dy
+
+    # Densify each grid line, but only every ~100 m (snapped to the
+    # nearest cell intersection) rather than at every intersection.
+    # This keeps the rendered polyline close enough to the curved
+    # Mercator path that the stations trace, while cutting the vertex
+    # count (and the client-side load time) by ~4× for 25 m cells.
+    # First and last intersections are always included so each line
+    # spans the full grid extent.
+    VERTEX_STRIDE_M = 100.0
+    stride_i = max(1, int(round(VERTEX_STRIDE_M / dx)))
+    stride_j = max(1, int(round(VERTEX_STRIDE_M / dy)))
+
+    def _strided(total: int, stride: int) -> list[int]:
+        if total <= 0:
+            return []
+        idx = list(range(0, total, stride))
+        if idx[-1] != total - 1:
+            idx.append(total - 1)
+        return idx
+
+    vx_sub = _strided(len(vx_rot), stride_i)
+    hy_sub = _strided(len(hy_rot), stride_j)
+
+    segments: list[list[tuple[float, float]]] = []
+    # Vertical lines: constant x_rot, vertices strided along y.
+    for x_rot in vx_rot:
+        line: list[tuple[float, float]] = [
+            _rot_to_world(float(x_rot), float(hy_rot[k])) for k in hy_sub
+        ]
+        segments.append(line)
+    # Horizontal lines: constant y_rot, vertices strided along x.
+    for y_rot in hy_rot:
+        line = [
+            _rot_to_world(float(vx_rot[k]), float(y_rot)) for k in vx_sub
+        ]
+        segments.append(line)
+
+    mesh_mls = MultiLineString(segments)
+
+    # Basis vectors for cell-polygon reconstruction on the client.
+    # ei = rot_back(dx, 0) - anchor; ej = rot_back(0, dy) - anchor.
+    ei_x = cos_r * dx
+    ei_y = sin_r * dx
+    ej_x = -sin_r * dy
+    ej_y = cos_r * dy
+
+    gdf = gpd.GeoDataFrame(
+        {
+            "anchor_x": [anchor_wx],
+            "anchor_y": [anchor_wy],
+            "ei_x": [ei_x],
+            "ei_y": [ei_y],
+            "ej_x": [ej_x],
+            "ej_y": [ej_y],
+            "i_lo": [np.int32(i_lo)],
+            "i_hi": [np.int32(i_hi)],
+            "j_lo": [np.int32(j_lo)],
+            "j_hi": [np.int32(j_hi)],
+            "rl_angle_deg": [float(rl_angle_deg)],
+            "min_rpi": [float(min_rpi)],
+            "min_spi": [float(min_spi)],
+        },
+        geometry=[mesh_mls],
+        crs=f"EPSG:{epsg}",
+    )
+
+    seismic = ensure_seismic_dir(project_dir)
+    out = seismic / grid_mesh_fname(option_name)
+    gdf.to_file(out, driver="GPKG")
     return out

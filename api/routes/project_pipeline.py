@@ -23,6 +23,7 @@ from api.routes.project_sections import (
 )
 from api.seismic_gpkg import (
     ensure_seismic_dir,
+    write_grid_mesh_gpkg,
     write_offset_grid_gpkg,
     write_theoretical_grid_gpkg,
 )
@@ -73,12 +74,59 @@ def _post_step_seismic_artifacts(
         ensure_seismic_dir(project_dir)
         if step == Step.GRID:
             write_theoretical_grid_gpkg(project_dir, epsg, option_name)
+            _write_option_grid_mesh(cfg, project_dir, epsg, option_name)
         elif step == Step.OFFSETS:
             write_offset_grid_gpkg(project_dir, epsg, option_name)
     except Exception:
         # Deliberately silent — the Files page will simply lack this
         # convenience layer until the next successful run.
         pass
+
+
+def _write_option_grid_mesh(
+    cfg: Any,
+    project_dir: Any,
+    epsg: int,
+    option_name: str,
+) -> None:
+    """Produce the thin-line control mesh alongside the theoretical grid.
+
+    Pulls ``min(RPI)``/``min(SPI)`` across the option's design_def and
+    the active survey's ``rl_angle``. The writer reads the theoretical-
+    grid parquet the GRID step just wrote to pick an anchor station —
+    that keeps the mesh aligned with the actual stations (which carry
+    saisai's optimizer shift) instead of a computed rect-corner anchor.
+    Any missing input aborts silently — the mesh is a convenience
+    layer, never load-bearing.
+    """
+    grid_opt = (cfg.grid or {}).get(option_name)
+    if grid_opt is None or not grid_opt.design_def:
+        return
+    rpis = [int(d.rpi) for d in grid_opt.design_def.values() if int(d.rpi or 0) > 0]
+    spis = [int(d.spi) for d in grid_opt.design_def.values() if int(d.spi or 0) > 0]
+    if not rpis or not spis:
+        return
+    min_rpi, min_spi = float(min(rpis)), float(min(spis))
+
+    active_survey_name = cfg.active_options.survey or ""
+    if not active_survey_name:
+        return
+    survey_opt = (cfg.survey or {}).get(active_survey_name)
+    if survey_opt is None:
+        return
+    extent = (survey_opt.extents or {}).get("simulation")
+    if extent is None:
+        return
+    rl_angle = float(getattr(extent, "rl_angle", 0.0) or 0.0)
+
+    write_grid_mesh_gpkg(
+        project_dir=project_dir,
+        epsg=epsg,
+        option_name=option_name,
+        min_rpi=min_rpi,
+        min_spi=min_spi,
+        rl_angle_deg=rl_angle,
+    )
 
 
 async def _get_project_for_user(
