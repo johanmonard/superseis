@@ -257,6 +257,85 @@ const GRID_MESH_FILTER: maplibregl.ExpressionSpecification = [
   ["coalesce", ["get", "__layer"], ""],
 ] as unknown as maplibregl.ExpressionSpecification;
 
+// Points belonging to a seismic layer (key prefix "seismic/") are rendered
+// at a fixed real-world size so the pattern reads like actual shot/receiver
+// positions on the ground rather than dots that grow/shrink with zoom.
+const SEISMIC_POINT_RADIUS_M = 5;
+// Floor so points stay visible when zoomed out (below the zoom where 5 m
+// in the real world drops under this pixel count).
+const SEISMIC_POINT_MIN_PX = 2;
+// "seismic/" layer prefix check — reused across circle radius/colour.
+const SEISMIC_LAYER_CHECK: maplibregl.ExpressionSpecification = [
+  "==",
+  ["slice", ["coalesce", ["get", "__layer"], ""], 0, 8],
+  "seismic/",
+] as unknown as maplibregl.ExpressionSpecification;
+// Receivers are always rendered blue; sources take the active theme accent.
+const SEISMIC_RECEIVER_COLOR = "#3b82f6";
+
+// Converts a real-world radius (metres) into a MapLibre circle-radius
+// expression. circle-radius is always pixels, so we expand to the
+// canonical Web Mercator meters-per-pixel formula and use an exponential
+// base-2 zoom interpolation (which doubles the output per zoom step —
+// matching how mpp halves). `centerLat` fixes the cos(latitude) correction
+// for the current dataset; accurate for the small spans of a seismic
+// survey even though features at different lats share the same factor.
+// A 3-stop curve clamps to SEISMIC_POINT_MIN_PX below the crossover zoom
+// (where 5 m drops under the floor) and scales exponentially above it.
+function buildFeaturesCircleRadiusExpr(
+  centerLat: number
+): maplibregl.ExpressionSpecification {
+  const cosLat = Math.max(Math.cos((centerLat * Math.PI) / 180), 1e-6);
+  const metersPerPxAtZ0 = (40075016.686 * cosLat) / 256;
+  const pxAtZ0 = SEISMIC_POINT_RADIUS_M / metersPerPxAtZ0;
+  const pxAtZ22 = pxAtZ0 * Math.pow(2, 22);
+
+  // Zoom at which the true meter-scaled radius equals the floor. Clamp to
+  // the valid interpolate range so stops stay strictly increasing even
+  // for exotic latitudes / floor settings.
+  const crossoverZoom = Math.min(
+    21.9,
+    Math.max(0.1, Math.log2(SEISMIC_POINT_MIN_PX / pxAtZ0))
+  );
+
+  const defaultPixelRadius: maplibregl.ExpressionSpecification = [
+    "case",
+    ["==", ["coalesce", ["get", "__dirty"], 0], 1],
+    6,
+    5,
+  ] as unknown as maplibregl.ExpressionSpecification;
+
+  return [
+    "interpolate",
+    ["exponential", 2],
+    ["zoom"],
+    0,
+    ["case", SEISMIC_LAYER_CHECK, SEISMIC_POINT_MIN_PX, defaultPixelRadius],
+    crossoverZoom,
+    ["case", SEISMIC_LAYER_CHECK, SEISMIC_POINT_MIN_PX, defaultPixelRadius],
+    22,
+    ["case", SEISMIC_LAYER_CHECK, pxAtZ22, defaultPixelRadius],
+  ] as unknown as maplibregl.ExpressionSpecification;
+}
+
+// Resolve a CSS custom property (e.g. "--color-accent") to a concrete
+// color string MapLibre can parse. `getPropertyValue` may return a chain
+// like `var(--teal-700)`, so we force evaluation via a throw-away element
+// whose `color` is set to `var(<name>)` — `getComputedStyle` then hands
+// back the resolved `rgb(...)`.
+function resolveThemeColor(varName: string, fallback: string): string {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return fallback;
+  }
+  const probe = document.createElement("span");
+  probe.style.color = `var(${varName})`;
+  probe.style.display = "none";
+  document.body.appendChild(probe);
+  const computed = getComputedStyle(probe).color;
+  document.body.removeChild(probe);
+  return computed || fallback;
+}
+
 const DRAFT_SOURCE_ID = "draft-source";
 const DRAFT_FILL_LAYER = "draft-fill";
 const DRAFT_LINE_LAYER = "draft-line";
@@ -440,11 +519,35 @@ function buildLayerColorExpression(
         ] as unknown as maplibregl.ExpressionSpecification)
       : byLayer;
 
+  // Seismic point categories: sources take the live theme accent, receivers
+  // a fixed blue. Applies to any fclass starting with "sources"/"receivers"
+  // (theoretical grid + offset variants like "sources_snapped"), but only
+  // when the feature lives in a "seismic/..." layer so other datasets
+  // with the same fclass names keep their palette assignment.
+  const accent = resolveThemeColor("--color-accent", "#E4CD1D");
+  const fclass = ["to-string", ["coalesce", ["get", "fclass"], ""]];
+  const seismicColored: maplibregl.ExpressionSpecification = [
+    "case",
+    [
+      "all",
+      SEISMIC_LAYER_CHECK,
+      ["==", ["slice", fclass, 0, 7], "sources"],
+    ],
+    accent,
+    [
+      "all",
+      SEISMIC_LAYER_CHECK,
+      ["==", ["slice", fclass, 0, 9], "receivers"],
+    ],
+    SEISMIC_RECEIVER_COLOR,
+    byFclass,
+  ] as unknown as maplibregl.ExpressionSpecification;
+
   return [
     "case",
     ["==", ["coalesce", ["get", "__dirty"], 0], 1],
     DIRTY_COLOR,
-    byFclass,
+    seismicColored,
   ] as unknown as maplibregl.ExpressionSpecification;
 }
 
@@ -4402,18 +4505,17 @@ export function GisGlobeViewport({
           ],
         },
       });
+      const initialBounds = data ? geojsonBounds(data) : null;
+      const initialCenterLat = initialBounds
+        ? (initialBounds[0][1] + initialBounds[1][1]) / 2
+        : 0;
       map.addLayer({
         id: FEATURES_CIRCLE_LAYER,
         type: "circle",
         source: FEATURES_SOURCE_ID,
         filter: ["==", ["geometry-type"], "Point"],
         paint: {
-          "circle-radius": [
-            "case",
-            ["==", ["coalesce", ["get", "__dirty"], 0], 1],
-            6,
-            5,
-          ],
+          "circle-radius": buildFeaturesCircleRadiusExpr(initialCenterLat),
           "circle-color": dirtyExpr,
           "circle-opacity": [
             "case",
@@ -4430,6 +4532,8 @@ export function GisGlobeViewport({
           "circle-stroke-width": [
             "case",
             ["boolean", ["feature-state", "editing"], false],
+            0,
+            ["==", ["slice", ["coalesce", ["get", "__layer"], ""], 0, 8], "seismic/"],
             0,
             ["==", ["coalesce", ["get", "__dirty"], 0], 1],
             2,
@@ -4472,6 +4576,17 @@ export function GisGlobeViewport({
     map.setPaintProperty(FEATURES_FILL_LAYER, "fill-color", colorExpr);
     map.setPaintProperty(FEATURES_LINE_LAYER, "line-color", colorExpr);
     map.setPaintProperty(FEATURES_CIRCLE_LAYER, "circle-color", colorExpr);
+
+    // Re-derive the cos(lat) factor from the current dataset so seismic
+    // point circles keep their real-world size when the user loads a
+    // project at a different latitude.
+    const bounds = data ? geojsonBounds(data) : null;
+    const centerLat = bounds ? (bounds[0][1] + bounds[1][1]) / 2 : 0;
+    map.setPaintProperty(
+      FEATURES_CIRCLE_LAYER,
+      "circle-radius",
+      buildFeaturesCircleRadiusExpr(centerLat)
+    );
 
     const hasLayers = layers && layers.length > 0;
     const visibleIds = hasLayers
