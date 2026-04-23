@@ -7,6 +7,7 @@ import type { Database } from "sql.js";
 import { useQueryClient } from "@tanstack/react-query";
 import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
+import { useProjectSection } from "@/services/query/project-sections";
 import { ensureProjectFileRaw, useProjectFiles, projectFileKeys } from "@/services/query/project-files";
 import {
   fetchFileGeoJson,
@@ -23,7 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { appIcons } from "@/components/ui/icon";
 
-const { pencil: Pencil, plus: Plus, download: Download, loader: Loader, circleCheck: CircleCheck, alertTriangle: AlertTriangle } = appIcons;
+const { pencil: Pencil, play: Play, plus: Plus, download: Download, loader: Loader, circleCheck: CircleCheck, alertTriangle: AlertTriangle } = appIcons;
 import { AngleInput } from "@/components/ui/angle-input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
@@ -2110,6 +2111,46 @@ export function ProjectGisGlobe() {
   const osmEditFiles = fileList?.osm_edits ?? [];
   const seismicFiles = fileList?.seismic ?? [];
 
+  // Group seismic gpkgs by the grid option they were produced for. The
+  // backend names files as ``{theoretical_grid|offset_grid}__{slug}.gpkg``
+  // where slug = non-alphanumerics → ``_``. We look up design_options to
+  // recover the canonical display name; unmatched slugs (stale/orphan
+  // files) fall through under the raw slug so nothing silently vanishes.
+  const { data: designOptionsSection } = useProjectSection(
+    projectId,
+    "design_options",
+  );
+  const seismicGroups = React.useMemo(() => {
+    const slugify = (s: string) => s.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    const options = ((designOptionsSection?.data as {
+      options?: { name?: string }[];
+    } | undefined)?.options ?? [])
+      .map((o) => (typeof o?.name === "string" ? o.name : ""))
+      .filter((n) => n.length > 0);
+    const slugToName = new Map(options.map((n) => [slugify(n), n]));
+    const order = new Map<string, number>(options.map((n, i) => [n, i]));
+
+    const groups = new Map<string, string[]>();
+    for (const f of seismicFiles) {
+      const m = /^(theoretical_grid|offset_grid)__(.+)\.gpkg$/.exec(f);
+      const slug = m?.[2] ?? "";
+      const display = (slug && slugToName.get(slug)) || slug || "Unknown";
+      const bucket = groups.get(display) ?? [];
+      bucket.push(f);
+      groups.set(display, bucket);
+    }
+    return Array.from(groups.entries())
+      .map(([name, files]) => ({ name, files: files.sort() }))
+      .sort((a, b) => {
+        const ai = order.get(a.name);
+        const bi = order.get(b.name);
+        if (ai !== undefined && bi !== undefined) return ai - bi;
+        if (ai !== undefined) return -1;
+        if (bi !== undefined) return 1;
+        return a.name.localeCompare(b.name);
+      });
+  }, [seismicFiles, designOptionsSection]);
+
   return (
     <ProjectSettingsPage
       title="Files"
@@ -2373,40 +2414,52 @@ export function ProjectGisGlobe() {
           </div>
         </div>
 
-        {/* Seismic section — pipeline-generated .gpkg (read-only). */}
+        {/* Seismic section — pipeline-generated .gpkg (read-only).
+            Files are grouped by the grid option that produced them so
+            multiple options can coexist without ambiguity. */}
         <div className="flex flex-col gap-[var(--space-2)]">
           <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
             Seismic
           </span>
-          <div className="flex max-h-[200px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] p-[var(--space-2)]">
-            {seismicFiles.length === 0 ? (
+          <div className="flex max-h-[200px] flex-col gap-[var(--space-2)] overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] p-[var(--space-2)]">
+            {seismicGroups.length === 0 ? (
               <p className="text-xs text-[var(--color-text-muted)]">
                 No files
               </p>
             ) : (
-              seismicFiles.map((f) => {
-                const fileKey = `seismic/${f}`;
-                const checked = selectedFiles.includes(fileKey);
-                return (
-                  <div
-                    key={f}
-                    className="flex min-w-0 items-center gap-2 text-xs leading-tight"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleFileSelected(fileKey)}
-                      className="shrink-0 cursor-pointer"
-                    />
-                    <span
-                      className={`block size-3 shrink-0 rounded-[3px] border border-[var(--color-border-strong)] ${checked ? "opacity-100" : "opacity-35"}`}
-                      // eslint-disable-next-line template/no-jsx-style-prop
-                      style={{ backgroundColor: colorFor(fileKey) }}
-                    />
-                    <span className="min-w-0 flex-1 truncate">{f}</span>
-                  </div>
-                );
-              })
+              seismicGroups.map((group) => (
+                <div key={group.name} className="flex flex-col gap-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+                    {group.name}
+                  </span>
+                  {group.files.map((f) => {
+                    const fileKey = `seismic/${f}`;
+                    const checked = selectedFiles.includes(fileKey);
+                    // Strip the "__slug" suffix from the label — the
+                    // group heading already names the option.
+                    const shortLabel = f.replace(/__[^.]+(?=\.gpkg$)/, "");
+                    return (
+                      <div
+                        key={f}
+                        className="flex min-w-0 items-center gap-2 pl-[var(--space-2)] text-xs leading-tight"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleFileSelected(fileKey)}
+                          className="shrink-0 cursor-pointer"
+                        />
+                        <span
+                          className={`block size-3 shrink-0 rounded-[3px] border border-[var(--color-border-strong)] ${checked ? "opacity-100" : "opacity-35"}`}
+                          // eslint-disable-next-line template/no-jsx-style-prop
+                          style={{ backgroundColor: colorFor(fileKey) }}
+                        />
+                        <span className="min-w-0 flex-1 truncate">{shortLabel}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))
             )}
           </div>
         </div>
@@ -2474,12 +2527,9 @@ export function ProjectGisGlobe() {
               className="font-mono text-xs"
             />
           </Field>
-          {/* Align the button with Field's input column (6rem label + space-3 gap) */}
-          <div className="flex items-start gap-[var(--space-3)]">
-            {/* eslint-disable-next-line template/no-jsx-style-prop -- mirrors Field's labelWidth */}
-            <div className="shrink-0" style={{ width: "6rem" }} aria-hidden />
+          <div className="flex justify-end">
             <Button
-              variant="primary"
+              variant="secondary"
               size="sm"
               disabled={!projectId || !terrainPolygon}
               onClick={() => {
@@ -2487,6 +2537,7 @@ export function ProjectGisGlobe() {
                 setTerrainAnalysisToken(Date.now());
               }}
             >
+              <Play size={12} className="mr-[var(--space-1)]" />
               Process
             </Button>
           </div>

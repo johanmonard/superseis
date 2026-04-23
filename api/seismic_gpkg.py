@@ -12,6 +12,7 @@ remains authoritative; these are convenience derivatives.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import geopandas as gpd
@@ -21,8 +22,26 @@ from shapely.geometry import Point
 
 
 SEISMIC_DIR_NAME = "seismic"
-THEORETICAL_GRID_FNAME = "theoretical_grid.gpkg"
-OFFSET_GRID_FNAME = "offset_grid.gpkg"
+THEORETICAL_GRID_STEM = "theoretical_grid"
+OFFSET_GRID_STEM = "offset_grid"
+
+
+def _slug(name: str) -> str:
+    """Filesystem-safe slug derived from an option name.
+
+    Collapses any run of non-alphanumeric characters to a single underscore
+    and strips leading/trailing underscores so ``"Option 1"`` → ``"Option_1"``
+    and ``"A/B C"`` → ``"A_B_C"``.
+    """
+    return re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")
+
+
+def theoretical_grid_fname(option_name: str) -> str:
+    return f"{THEORETICAL_GRID_STEM}__{_slug(option_name)}.gpkg"
+
+
+def offset_grid_fname(option_name: str) -> str:
+    return f"{OFFSET_GRID_STEM}__{_slug(option_name)}.gpkg"
 
 
 def ensure_seismic_dir(project_dir: Path) -> Path:
@@ -32,18 +51,50 @@ def ensure_seismic_dir(project_dir: Path) -> Path:
     return seismic
 
 
+def prune_option_seismic_files(project_dir: Path, keep_option_names: list[str]) -> None:
+    """Delete per-option grid .gpkg files whose option is not in ``keep``.
+
+    Called from the ``design_options`` save path so renamed or deleted
+    options don't leave orphan layers lingering in the Files panel.
+    """
+    seismic = project_dir / "inputs" / "gis" / SEISMIC_DIR_NAME
+    if not seismic.is_dir():
+        return
+    keep_slugs = {_slug(n) for n in keep_option_names if n}
+    for path in seismic.iterdir():
+        if not path.is_file() or path.suffix != ".gpkg":
+            continue
+        stem = path.stem
+        for prefix in (THEORETICAL_GRID_STEM, OFFSET_GRID_STEM):
+            marker = f"{prefix}__"
+            if stem.startswith(marker):
+                slug = stem[len(marker):]
+                if slug not in keep_slugs:
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+                break
+
+
 def _points_from_xy(x: np.ndarray, y: np.ndarray) -> list[Point]:
     # shapely vectorised constructors avoid the per-row Python overhead.
     return [Point(float(xi), float(yi)) for xi, yi in zip(x, y)]
 
 
-def write_theoretical_grid_gpkg(project_dir: Path, epsg: int) -> Path | None:
+def write_theoretical_grid_gpkg(
+    project_dir: Path, epsg: int, option_name: str
+) -> Path | None:
     """Combine r + s theoretical-grid parquets into one .gpkg.
 
     Each row keeps its (x, y) and gets an ``fclass`` column equal to
-    ``"sources"`` or ``"receivers"``. Returns the written path, or None
-    when the source parquets are missing (first run / skipped step).
+    ``"sources"`` or ``"receivers"``. The output filename is namespaced
+    by ``option_name`` so distinct grid options accumulate side-by-side.
+    Returns the written path, or None when the source parquets are
+    missing (first run / skipped step) or the option name is empty.
     """
+    if not option_name:
+        return None
     grid_dir = project_dir / "work" / "artifacts" / "grid"
     parts: list[gpd.GeoDataFrame] = []
     for ptype, fclass in (("r", "receivers"), ("s", "sources")):
@@ -72,12 +123,14 @@ def write_theoretical_grid_gpkg(project_dir: Path, epsg: int) -> Path | None:
         crs=f"EPSG:{epsg}",
     )
     seismic = ensure_seismic_dir(project_dir)
-    out = seismic / THEORETICAL_GRID_FNAME
+    out = seismic / theoretical_grid_fname(option_name)
     combined.to_file(out, driver="GPKG")
     return out
 
 
-def write_offset_grid_gpkg(project_dir: Path, epsg: int) -> Path | None:
+def write_offset_grid_gpkg(
+    project_dir: Path, epsg: int, option_name: str
+) -> Path | None:
     """Combine r + s offsets parquets into one .gpkg with per-row fclass.
 
     fclass values: ``{sources,receivers}_{inplace,offset,snapped,skipped}``.
@@ -91,9 +144,12 @@ def write_offset_grid_gpkg(project_dir: Path, epsg: int) -> Path | None:
     - ``inplace``  → (x, y) — no offset was needed.
 
     Categorisation priority (so the fclass labels partition the set):
-    snapped > offset > skipped > inplace. Returns the written path, or
-    None when parquets are missing.
+    snapped > offset > skipped > inplace. The output filename is
+    namespaced by ``option_name``. Returns the written path, or None
+    when parquets are missing or the option name is empty.
     """
+    if not option_name:
+        return None
     offs_dir = project_dir / "work" / "artifacts" / "offsets"
     parts: list[gpd.GeoDataFrame] = []
 
@@ -161,6 +217,6 @@ def write_offset_grid_gpkg(project_dir: Path, epsg: int) -> Path | None:
         crs=f"EPSG:{epsg}",
     )
     seismic = ensure_seismic_dir(project_dir)
-    out = seismic / OFFSET_GRID_FNAME
+    out = seismic / offset_grid_fname(option_name)
     combined.to_file(out, driver="GPKG")
     return out
