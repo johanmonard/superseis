@@ -235,6 +235,7 @@ def write_grid_mesh_gpkg(
     min_rpi: float,
     min_spi: float,
     rl_angle_deg: float,
+    station_at_cell_centre: bool = False,
 ) -> Path | None:
     """Write a thin-line control mesh aligned with the theoretical grid.
 
@@ -248,6 +249,18 @@ def write_grid_mesh_gpkg(
     theoretical stations. Anchoring on a real station guarantees at
     least that station sits at a cell centre, with the rest of the
     min-RPI design following at integer cell addresses.
+
+    ``station_at_cell_centre`` toggles a half-cell shift:
+
+    - ``True`` — stations sit at **cell centres**; grid lines are
+      offset by ``(min_rpi/4, min_spi/4)`` in the rotated frame and
+      each station is boxed by its own cell.
+    - ``False`` (default) — stations sit on grid **intersections**;
+      no shift is applied and cell corners coincide with stations.
+
+    The cell-polygon basis (ei/ej) stays the same in both modes; only
+    the line offsets differ. Flip this on when the downstream consumer
+    expects per-station cells (e.g. shot/receiver patch visualisation).
 
     Emits a **single ``MultiLineString`` feature** containing every
     vertical + horizontal grid edge over the bounding extent of all
@@ -336,13 +349,15 @@ def write_grid_mesh_gpkg(
             anchor_wy + sin_r * x_rot + cos_r * y_rot,
         )
 
-    # Cell-edge coordinates in rotated frame. Vertical edges sit at
-    # (I*dx + dx/2) for I in [i_lo-1 .. i_hi]; horizontal edges at
-    # (J*dy + dy/2) for J in [j_lo-1 .. j_hi]. Anchor lives at rotated
-    # (0, 0) so cell (0, 0) spans [-dx/2, +dx/2] × [-dy/2, +dy/2].
-    half_dx, half_dy = dx / 2.0, dy / 2.0
-    vx_rot = np.arange(i_lo - 1, i_hi + 1, dtype=np.float64) * dx + half_dx
-    hy_rot = np.arange(j_lo - 1, j_hi + 1, dtype=np.float64) * dy + half_dy
+    # Cell-edge coordinates in rotated frame. When station_at_cell_centre,
+    # vertical edges sit at (I*dx + dx/2) and horizontal at (J*dy + dy/2),
+    # so cell (0, 0) spans [-dx/2, +dx/2] × [-dy/2, +dy/2] around the
+    # anchor. Otherwise edges sit at (I*dx, J*dy) and the anchor falls on
+    # a grid intersection.
+    edge_shift_x = dx / 2.0 if station_at_cell_centre else 0.0
+    edge_shift_y = dy / 2.0 if station_at_cell_centre else 0.0
+    vx_rot = np.arange(i_lo - 1, i_hi + 1, dtype=np.float64) * dx + edge_shift_x
+    hy_rot = np.arange(j_lo - 1, j_hi + 1, dtype=np.float64) * dy + edge_shift_y
 
     # Densify each grid line, but only every ~100 m (snapped to the
     # nearest cell intersection) rather than at every intersection.
