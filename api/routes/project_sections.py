@@ -16,6 +16,7 @@ from api.auth import AuthPrincipal, get_current_user
 from api.db.engine import get_db
 from api.db.models import Project
 from api.dojo import get_dojo_project_service
+from api.seismic_gpkg import prune_option_seismic_files
 
 from dojo.v3.domain.config import (
     DesignDef,
@@ -91,27 +92,6 @@ class SectionResponse(BaseModel):
 # Section ↔ config.json mapping
 # ---------------------------------------------------------------------------
 
-def _migrate_rl_angle_to_azimuth(data: Any) -> Any:
-    """Rename legacy ``rlAngle`` → ``rlAzimuth`` in-place.
-
-    Stored values were always azimuth (the field was just misnamed), so the
-    rename is lossless. Applied on read for survey and osm UI payloads so
-    the frontend sees the canonical key regardless of when the project was
-    last saved.
-    """
-    if not isinstance(data, dict):
-        return data
-    if "rlAngle" in data and "rlAzimuth" not in data:
-        data["rlAzimuth"] = data.pop("rlAngle")
-    for v in data.values():
-        if isinstance(v, dict):
-            _migrate_rl_angle_to_azimuth(v)
-        elif isinstance(v, list):
-            for item in v:
-                _migrate_rl_angle_to_azimuth(item)
-    return data
-
-
 def _read_section(section: str, dojo_svc: ProjectService, project_id: int) -> dict[str, Any]:
     """Extract a section slice from the dojo ProjectConfig."""
     try:
@@ -155,10 +135,6 @@ def _read_section(section: str, dojo_svc: ProjectService, project_id: int) -> di
     attr = _ui_section_map.get(section)
     if attr:
         data = getattr(cfg, attr, {})
-        if section in ("survey", "osm"):
-            _migrate_rl_angle_to_azimuth(data)
-        if section == "survey":
-            _heal_survey_rl_angle(cfg, data, dojo_svc, project_id)
         if section == "layers":
             _heal_typed_layers(cfg, data, dojo_svc, project_id)
         if section == "maps":
@@ -348,40 +324,6 @@ def _heal_typed_mappers(
     if not ui or not (ui.get("maps") or []):
         return
     if _rebuild_typed_mappers(cfg, ui):
-        project_dir = dojo_svc.get_project_dir(project_id)
-        cfg.save(str(project_dir / "config.json"))
-
-
-def _heal_survey_rl_angle(
-    cfg: Any,
-    ui: dict[str, Any],
-    dojo_svc: ProjectService,
-    project_id: int,
-) -> None:
-    """Rebuild cfg.survey[*].rl_angle from the UI's rlAzimuth if it diverges.
-
-    Projects saved before the azimuth→angle conversion landed still carry
-    rl_angle = rlAzimuth (off by 90°) in the typed dojo survey map. Any
-    consumer reading cfg.survey (e.g. demo/workflow, batch jobs) would see
-    the wrong value until the user saved the Survey page again. This
-    one-shot reconciliation fixes that on the first GET.
-    """
-    groups = ui.get("groups") or []
-    changed = False
-    for group in groups:
-        name = group.get("name") or ""
-        if not name or name not in cfg.survey:
-            continue
-        sim = group.get("simulation") or {}
-        rl_azimuth = float(sim.get("rlAzimuth") or 0)
-        expected = rl_azimuth - 90.0
-        extent = cfg.survey[name].extents.get("simulation") if cfg.survey[name].extents else None
-        if extent is None:
-            continue
-        if abs(extent.rl_angle - expected) > 1e-6:
-            extent.rl_angle = expected
-            changed = True
-    if changed:
         project_dir = dojo_svc.get_project_dir(project_id)
         cfg.save(str(project_dir / "config.json"))
 
@@ -705,9 +647,6 @@ def _write_section(section: str, data: dict[str, Any], dojo_svc: ProjectService,
         return
 
     if section == "survey":
-        # Normalize legacy rlAngle key before persisting so config.json only
-        # carries the canonical rlAzimuth going forward.
-        _migrate_rl_angle_to_azimuth(data)
         cfg.survey_ui = data
         # Bridge: populate typed cfg.survey from UI groups.
         # The UI collects RL azimuth (compass convention); dojo expects
@@ -723,9 +662,7 @@ def _write_section(section: str, data: dict[str, Any], dojo_svc: ProjectService,
             if group.get("id") == active_group_id:
                 active_group_name = name
             sim = group.get("simulation") or {}
-            rl_azimuth = float(
-                sim.get("rlAzimuth") if sim.get("rlAzimuth") is not None else sim.get("rlAngle") or 0
-            )
+            rl_azimuth = float(sim.get("rlAzimuth") or 0)
             simulation_extent = SurveyExtent(
                 name="Simulation",
                 margins=Margins(
@@ -767,10 +704,12 @@ def _write_section(section: str, data: dict[str, Any], dojo_svc: ProjectService,
         options = data.get("options", [])
         active_id = data.get("activeId", "")
         active_name = ""
+        option_names: list[str] = []
         for opt in options:
             name = opt.get("name", "")
             if not name:
                 continue
+            option_names.append(name)
             if opt.get("id") == active_id:
                 active_name = name
             resolution = float(opt.get("resolution") or 1) or 1.0
@@ -780,6 +719,7 @@ def _write_section(section: str, data: dict[str, Any], dojo_svc: ProjectService,
                 cfg.grid[name] = GridOption()
             cfg.grid[name].resolution = resolution
             cfg.grid[name].origin = (origin_x, origin_y)
+            cfg.grid[name].survey_key = str(opt.get("surveyKey") or "")
         if active_name:
             cfg.active_options.grid = active_name
         # Build cfg.grid[*].design_def from the rows' referenced design names
@@ -787,6 +727,9 @@ def _write_section(section: str, data: dict[str, Any], dojo_svc: ProjectService,
         # runner's design_def loop is empty and produces 0 stations.
         _rebuild_typed_grid_design_def(cfg)
         cfg.save(str(project_dir / "config.json"))
+        # Drop per-option seismic gpkgs whose option was renamed or deleted
+        # so the Files panel doesn't keep showing stale layers.
+        prune_option_seismic_files(project_dir, option_names)
         return
 
     # Remaining UI sections
@@ -797,8 +740,6 @@ def _write_section(section: str, data: dict[str, Any], dojo_svc: ProjectService,
     }
     attr = _ui_section_map.get(section)
     if attr:
-        if section == "osm":
-            _migrate_rl_angle_to_azimuth(data)
         setattr(cfg, attr, data)
         cfg.save(str(project_dir / "config.json"))
         return

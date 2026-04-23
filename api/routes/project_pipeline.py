@@ -63,14 +63,18 @@ def _post_step_seismic_artifacts(
         project_dir = dojo_svc.get_project_dir(project_id)
         cfg = dojo_svc.get_config(project_id)
         epsg = int(cfg.metadata.epsg) if cfg.metadata.epsg else 4326
+        option_name = cfg.active_options.grid or ""
     except (ProjectNotFoundError, ValueError, TypeError):
+        return
+    if not option_name:
+        # No active grid option → nothing to namespace the file under.
         return
     try:
         ensure_seismic_dir(project_dir)
         if step == Step.GRID:
-            write_theoretical_grid_gpkg(project_dir, epsg)
+            write_theoretical_grid_gpkg(project_dir, epsg, option_name)
         elif step == Step.OFFSETS:
-            write_offset_grid_gpkg(project_dir, epsg)
+            write_offset_grid_gpkg(project_dir, epsg, option_name)
     except Exception:
         # Deliberately silent — the Files page will simply lack this
         # convenience layer until the next successful run.
@@ -280,7 +284,17 @@ async def run_step_closure(
         _heal_typed_layers(cfg, cfg.layers_ui or {}, dojo_svc, project_id)
         _heal_typed_mappers(cfg, cfg.maps_ui or {}, dojo_svc, project_id)
         _heal_typed_offsetters(cfg, cfg.offsetters_ui or {}, dojo_svc, project_id)
-        if _rebuild_typed_grid_design_def(cfg):
+        config_dirty = _rebuild_typed_grid_design_def(cfg)
+        # Each grid option declares its linked survey via survey_key. Set
+        # active.survey from the active grid so referentials/layers/mappers
+        # and grid all compute against the same SurveyOption.
+        active_grid_key = cfg.active_options.grid
+        if active_grid_key and active_grid_key in cfg.grid:
+            linked = cfg.grid[active_grid_key].survey_key
+            if linked and linked in cfg.survey and cfg.active_options.survey != linked:
+                cfg.active_options.survey = linked
+                config_dirty = True
+        if config_dirty:
             cfg.save(str(dojo_svc.get_project_dir(project_id) / "config.json"))
     except ProjectNotFoundError:
         pass

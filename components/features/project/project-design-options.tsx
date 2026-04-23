@@ -5,7 +5,7 @@ import { appIcons } from "@/components/ui/icon";
 
 import { Button } from "@/components/ui/button";
 
-const { alertTriangle: AlertTriangle, check: Check, pencil: Pencil, play: Play, plus: Plus, trash: Trash2, x: X } = appIcons;
+const { check: Check, pencil: Pencil, play: Play, plus: Plus, trash: Trash2, x: X } = appIcons;
 import { CoordinateInput } from "@/components/ui/coordinate-input";
 import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
@@ -15,7 +15,6 @@ import { useSectionData } from "@/lib/use-autosave";
 import { usePipelineReport } from "@/lib/use-pipeline-report";
 import { cn } from "@/lib/utils";
 import { useProjectSection } from "@/services/query/project-sections";
-import { PanelHeaderSlot } from "@/components/features/project/project-settings-page";
 
 /* ------------------------------------------------------------------
    Types
@@ -110,6 +109,7 @@ interface DesignOption {
   resolution: string;
   gridOriginX: string;
   gridOriginY: string;
+  surveyKey: string;
 }
 
 function createRow(region = ""): OptionRow {
@@ -133,6 +133,7 @@ function createOption(name: string): DesignOption {
     resolution: "",
     gridOriginX: "0",
     gridOriginY: "0",
+    surveyKey: "",
   };
 }
 
@@ -160,7 +161,6 @@ export function ProjectDesignOptions() {
     const groups = (designSection?.data as {
       groups?: {
         name: string;
-        rlAzimuth?: string;
         rpi?: string;
         spi?: string;
         rli?: string;
@@ -173,13 +173,14 @@ export function ProjectDesignOptions() {
     () => designGroups.map((g) => g.name),
     [designGroups],
   );
-  const designAzimuths = React.useMemo(() => {
-    const map: Record<string, string> = {};
-    for (const g of designGroups) {
-      map[g.name] = g.rlAzimuth ?? "0";
-    }
-    return map;
-  }, [designGroups]);
+
+  // Read survey groups for the Linked Survey dropdown — the Grid needs
+  // rl_angle, margins, and acq polygon from a specific survey option.
+  const { data: surveySection } = useProjectSection(projectId, "survey");
+  const surveyNames = React.useMemo(() => {
+    const groups = (surveySection?.data as { groups?: { name: string }[] } | undefined)?.groups;
+    return (groups ?? []).map((g) => g.name).filter(Boolean);
+  }, [surveySection]);
 
   // Read partitioning groups for the Partitioning dropdown and region (polygon) lists
   const { data: partitioningSection } = useProjectSection(projectId, "partitioning");
@@ -296,16 +297,6 @@ export function ProjectDesignOptions() {
     return result;
   }, [activeOption.rows, designGroups]);
 
-  const mismatchedAzimuths = React.useMemo(() => {
-    const unique = new Set<string>();
-    for (const row of activeOption.rows) {
-      if (!row.design) continue;
-      const az = designAzimuths[row.design];
-      if (az !== undefined) unique.add(Number(az).toString());
-    }
-    return unique.size > 1 ? Array.from(unique) : null;
-  }, [activeOption.rows, designAzimuths]);
-
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [editValue, setEditValue] = React.useState("");
   const editRef = React.useRef<HTMLInputElement>(null);
@@ -357,25 +348,6 @@ export function ProjectDesignOptions() {
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      {/* Grid trigger — portaled into the panel header slot (left of the
-          collapse chevron). Runs the grid step (+ all dirty upstream) so
-          the viewport can show the theoretical stations produced by the
-          active option. Progress surfaces in the bottom drawer. */}
-      <PanelHeaderSlot>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={handleShowGrid}
-          disabled={!projectId || gridRunning}
-        >
-          {gridRunning ? (
-            <Icon icon={appIcons.loader} size={12} className="mr-[var(--space-1)] animate-spin" />
-          ) : (
-            <Play size={12} className="mr-[var(--space-1)]" />
-          )}
-          Show grid
-        </Button>
-      </PanelHeaderSlot>
       {/* Option tabs */}
       <div className="flex flex-col gap-[var(--space-2)]">
         <div className="flex flex-wrap items-center gap-[var(--space-1)]">
@@ -467,8 +439,8 @@ export function ProjectDesignOptions() {
 
       <div className="h-px bg-[var(--color-border-subtle)]" />
 
-      {/* Partitioning selector */}
-      <Field label="Partitioning" layout="horizontal">
+      {/* Partition selector */}
+      <Field label="Partition">
         <Select
           value={activeOption.partitioning}
           onChange={(e) => {
@@ -502,33 +474,34 @@ export function ProjectDesignOptions() {
         </Select>
       </Field>
 
-      {/* Rows: Design + Region + SP Shift + RP Shift */}
+      {/* Rows: Region + Design + SP Shift + RP Shift — spread across the
+          container width. */}
       {activeOption.partitioning && (
         <div className="flex flex-col gap-[var(--space-2)]">
           {/* Header */}
-          <div className="flex items-center gap-[var(--space-2)]">
-            <span className="w-[110px] shrink-0 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+          <div className="flex min-w-0 items-center gap-[var(--space-2)]">
+            <span className="min-w-0 flex-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
               Region
             </span>
-            <span className="w-[110px] shrink-0 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+            <span className="min-w-0 flex-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
               Design
             </span>
-            <span className="flex-1 text-right text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+            <span className="min-w-0 flex-1 text-right text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
               SP Shift
             </span>
-            <span className="flex-1 text-right text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+            <span className="min-w-0 flex-1 text-right text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
               RP Shift
             </span>
-            <div className="w-7" />
+            <div className="w-7 shrink-0" />
           </div>
 
           {/* Rows */}
           {activeOption.rows.map((row) => (
             <div
               key={row.id}
-              className="flex items-center gap-[var(--space-2)]"
+              className="flex min-w-0 items-center gap-[var(--space-2)]"
             >
-              <div className="w-[110px] shrink-0">
+              <div className="min-w-0 flex-1">
                 <Select
                   value={row.region}
                   onChange={(e) => updateRow(row.id, { region: e.target.value })}
@@ -539,7 +512,7 @@ export function ProjectDesignOptions() {
                   ))}
                 </Select>
               </div>
-              <div className="w-[110px] shrink-0">
+              <div className="min-w-0 flex-1">
                 <Select
                   value={row.design}
                   onChange={(e) => updateRow(row.id, { design: e.target.value })}
@@ -550,7 +523,7 @@ export function ProjectDesignOptions() {
                   ))}
                 </Select>
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <CoordinateInput
                   x={row.spShiftX}
                   y={row.spShiftY}
@@ -558,7 +531,7 @@ export function ProjectDesignOptions() {
                   onYChange={(v) => updateRow(row.id, { spShiftY: v })}
                 />
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <CoordinateInput
                   x={row.rpShiftX}
                   y={row.rpShiftY}
@@ -605,19 +578,40 @@ export function ProjectDesignOptions() {
         />
       </Field>
 
-      {mismatchedAzimuths && (
-        <div
-          role="alert"
-          className="flex items-start gap-[var(--space-2)] rounded-[var(--radius-sm)] border border-[var(--color-status-warning)] bg-[var(--color-status-warning-bg)] px-[var(--space-3)] py-[var(--space-2)] text-xs text-[var(--color-status-warning-text)]"
+      <Field label="Linked Survey" layout="horizontal">
+        <Select
+          value={activeOption.surveyKey}
+          onChange={(e) => updateOption(activeId, { surveyKey: e.target.value })}
         >
-          <AlertTriangle size={14} className="mt-[1px] shrink-0" />
-          <span>
-            Selected designs have different RL Azimuths (
-            {mismatchedAzimuths.map((a) => `${a}°`).join(", ")}). Consider aligning
-            them before computing the grid.
-          </span>
-        </div>
-      )}
+          <option value="">Select…</option>
+          {surveyNames.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </Select>
+      </Field>
+
+      <div className="h-px bg-[var(--color-border-subtle)]" />
+
+      {/* Runs the grid step (+ all dirty upstream) for the active option
+          so the viewport can show the theoretical stations. Progress
+          surfaces in the bottom drawer. */}
+      <div className="flex justify-end">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={handleShowGrid}
+          disabled={!projectId || gridRunning}
+        >
+          {gridRunning ? (
+            <Icon icon={appIcons.loader} size={12} className="mr-[var(--space-1)] animate-spin" />
+          ) : (
+            <Play size={12} className="mr-[var(--space-1)]" />
+          )}
+          Process grid
+        </Button>
+      </div>
     </div>
   );
 }

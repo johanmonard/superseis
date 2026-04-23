@@ -3,7 +3,7 @@
 import * as React from "react";
 import { appIcons } from "@/components/ui/icon";
 
-const { alertTriangle: AlertTriangle, check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
+const { check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
 
 import { AngleInput } from "@/components/ui/angle-input";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,6 @@ import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
 import { useProjectFiles } from "@/services/query/project-files";
-import { useProjectSection } from "@/services/query/project-sections";
 
 /* ------------------------------------------------------------------
    Types
@@ -30,7 +29,6 @@ interface SimulationExtent {
 interface SurveyGroup {
   id: string;
   name: string;
-  designOption: string;
   acquisitionPolygon: string;
   pois: string[];
   simulation: SimulationExtent;
@@ -48,7 +46,6 @@ function createGroup(name: string): SurveyGroup {
   return {
     id: crypto.randomUUID(),
     name,
-    designOption: "",
     acquisitionPolygon: "",
     pois: [],
     simulation: { ...DEFAULT_SIMULATION },
@@ -303,7 +300,6 @@ function MarginAzimuthBox({
   azimuth,
   onAzimuthChange,
   azimuthTone = "default",
-  azimuthDisabled = false,
 }: {
   top: string; left: string; right: string; bottom: string;
   onTopChange: (v: string) => void;
@@ -313,7 +309,6 @@ function MarginAzimuthBox({
   azimuth: number;
   onAzimuthChange: (v: number) => void;
   azimuthTone?: "default" | "warning";
-  azimuthDisabled?: boolean;
 }) {
   return (
     <div className="flex flex-col items-center gap-[var(--space-2)]">
@@ -335,7 +330,6 @@ function MarginAzimuthBox({
             max={360}
             step={0.01}
             tone={azimuthTone}
-            disabled={azimuthDisabled}
           />
         </div>
 
@@ -381,30 +375,6 @@ export function ProjectSurvey({
     () => (projectFiles?.poi ?? []).map((f) => f.replace(/\.gpkg$/, "")),
     [projectFiles?.poi],
   );
-
-  const { data: designOptionsSection } = useProjectSection(projectId, "design_options");
-  const designOptionsList = React.useMemo(() => {
-    const options = (designOptionsSection?.data as {
-      options?: { name: string; rows?: { design: string }[] }[];
-    } | undefined)?.options;
-    return options ?? [];
-  }, [designOptionsSection]);
-  const availableDesignOptions = React.useMemo(
-    () => designOptionsList.map((o) => o.name).filter(Boolean),
-    [designOptionsList],
-  );
-
-  const { data: designSection } = useProjectSection(projectId, "design");
-  const designAzimuths = React.useMemo(() => {
-    const groups = (designSection?.data as {
-      groups?: { name: string; rlAzimuth?: string }[];
-    } | undefined)?.groups;
-    const map: Record<string, string> = {};
-    for (const g of groups ?? []) {
-      map[g.name] = g.rlAzimuth ?? "0";
-    }
-    return map;
-  }, [designSection]);
 
   const { data, update } = useSectionData<SurveyData>(projectId, "survey", DEFAULT_SURVEY);
   const groups = data.groups;
@@ -470,36 +440,6 @@ export function ProjectSurvey({
     [data, activeGroupId, update]
   );
 
-  // Azimuths referenced by the designs of the selected option
-  const optionAzimuths = React.useMemo(() => {
-    const selected = designOptionsList.find((o) => o.name === activeGroup.designOption);
-    if (!selected) return [] as string[];
-    const seen = new Set<string>();
-    const ordered: string[] = [];
-    for (const row of selected.rows ?? []) {
-      if (!row.design) continue;
-      const raw = designAzimuths[row.design];
-      if (raw === undefined) continue;
-      const key = Number(raw).toString();
-      if (!seen.has(key)) {
-        seen.add(key);
-        ordered.push(key);
-      }
-    }
-    return ordered;
-  }, [designOptionsList, designAzimuths, activeGroup.designOption]);
-
-  const azimuthMismatch = optionAzimuths.length > 1;
-  const firstOptionAzimuth = optionAzimuths[0];
-  const hasLinkedAzimuth = firstOptionAzimuth !== undefined;
-
-  // When an option is selected, derive the simulation angle from its first design
-  React.useEffect(() => {
-    if (firstOptionAzimuth === undefined) return;
-    if (simulation.rlAzimuth === firstOptionAzimuth) return;
-    updateSimulation({ rlAzimuth: firstOptionAzimuth });
-  }, [firstOptionAzimuth, simulation.rlAzimuth, updateSimulation]);
-
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
       {/* Group selector */}
@@ -513,21 +453,6 @@ export function ProjectSurvey({
       />
 
       <div className="h-px bg-[var(--color-border-subtle)]" />
-
-      <Field label="Design option" layout="horizontal">
-        <Select
-          value={activeGroup.designOption ?? ""}
-          onChange={(e) => updateGroup(activeGroupId, { designOption: e.target.value })}
-          disabled={availableDesignOptions.length === 0}
-        >
-          <option value="">
-            {availableDesignOptions.length === 0 ? "No design options" : "None"}
-          </option>
-          {availableDesignOptions.map((o) => (
-            <option key={o} value={o}>{o}</option>
-          ))}
-        </Select>
-      </Field>
 
       <Field label="Acq. Polygon" layout="horizontal">
         <Select
@@ -554,7 +479,7 @@ export function ProjectSurvey({
         />
       </Field>
 
-      <Field label="Simulation extent">
+      <Field label="Simulation extent & RL azimuth">
         <div className="pt-[var(--space-4)]">
           <MarginAzimuthBox
             top={simulation.marginTop}
@@ -567,25 +492,9 @@ export function ProjectSurvey({
             onBottomChange={(v) => updateSimulation({ marginBottom: v })}
             azimuth={Number(simulation.rlAzimuth) || 0}
             onAzimuthChange={(v) => updateSimulation({ rlAzimuth: String(v) })}
-            azimuthTone={azimuthMismatch ? "warning" : "default"}
-            azimuthDisabled={hasLinkedAzimuth}
           />
         </div>
       </Field>
-
-      {azimuthMismatch && (
-        <div
-          role="alert"
-          className="flex items-start gap-[var(--space-2)] rounded-[var(--radius-sm)] border border-[var(--color-status-warning)] bg-[var(--color-status-warning-bg)] px-[var(--space-3)] py-[var(--space-2)] text-xs text-[var(--color-status-warning-text)]"
-        >
-          <AlertTriangle size={14} className="mt-[1px] shrink-0" />
-          <span>
-            Selected designs have different RL Azimuths (
-            {optionAzimuths.map((a) => `${a}°`).join(", ")}). Consider aligning
-            them before computing the simulation extent.
-          </span>
-        </div>
-      )}
     </div>
   );
 }
