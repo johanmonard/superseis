@@ -295,6 +295,7 @@ export default function SurveyPage() {
             onStyleChange={handleStyleChange}
             extraLayers={extraLayers}
             legendExtra={extentLegend}
+            viewStateKey={projectId != null ? `survey:${projectId}` : undefined}
           />
         ) : (
           <div className="flex h-full flex-col items-center justify-center p-[var(--space-4)]">

@@ -20,6 +20,12 @@ import {
   loadFclassInfo,
   themeFromLayerId,
 } from "@/lib/osm/fclass-info";
+import {
+  getMapSessionState,
+  getMapViewState,
+  setMapViewState,
+  updateMapSessionState,
+} from "@/lib/map-view-state";
 
 type TileGroup = "Satellite" | "Color" | "LightNoColor" | "Dark";
 
@@ -263,7 +269,7 @@ const GRID_MESH_FILTER: maplibregl.ExpressionSpecification = [
 const SEISMIC_POINT_RADIUS_M = 5;
 // Floor so points stay visible when zoomed out (below the zoom where 5 m
 // in the real world drops under this pixel count).
-const SEISMIC_POINT_MIN_PX = 2;
+const SEISMIC_POINT_MIN_PX = 1;
 // "seismic/" layer prefix check — reused across circle radius/colour.
 const SEISMIC_LAYER_CHECK: maplibregl.ExpressionSpecification = [
   "==",
@@ -3687,6 +3693,7 @@ export function GisGlobeViewport({
   gridConvergenceDeg,
   alignToGridNorth,
   onAlignToGridNorthChange,
+  viewStateKey,
 }: {
   data: GeoJSONFeatureCollection | null;
   layers?: ReadonlyArray<LayerStyle>;
@@ -3756,11 +3763,24 @@ export function GisGlobeViewport({
   gridConvergenceDeg?: number | null;
   alignToGridNorth?: boolean;
   onAlignToGridNorthChange?: (aligned: boolean) => void;
+  /**
+   * Session-scoped identifier for the camera cache. When set, the map
+   * restores its last centre/zoom/bearing/pitch on remount instead of
+   * running the auto-fit, so leaving Files and coming back preserves
+   * the view. Cache miss falls through to the normal fit-to-data path.
+   */
+  viewStateKey?: string;
 }) {
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<MLMap | null>(null);
-  const [tileIndex, setTileIndex] = React.useState(0);
+  const [tileIndex, setTileIndex] = React.useState(
+    () => getMapSessionState(viewStateKey)?.tileIndex ?? 0
+  );
+  // Persist tile-provider pick so it sticks across settings-page nav.
+  React.useEffect(() => {
+    updateMapSessionState(viewStateKey, { tileIndex });
+  }, [tileIndex, viewStateKey]);
   const [styleReady, setStyleReady] = React.useState(false);
   const [zoomDisplay, setZoomDisplay] = React.useState(DEFAULT_ZOOM);
   const [pitchDisplay, setPitchDisplay] = React.useState(0);
@@ -4000,6 +4020,14 @@ export function GisGlobeViewport({
   const rampPickerRef = React.useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = React.useState(false);
   const fittedKeyRef = React.useRef<string | null>(null);
+  // When true we've restored a cached camera on mount, so the
+  // fit-to-data effect below stays quiet for this mount's lifetime.
+  const viewRestoredRef = React.useRef(false);
+  // Flipped on the first user-driven pan/zoom/rotate so the camera is
+  // only persisted once the map has a camera worth remembering — never
+  // the raw default, which would otherwise leak into the session cache
+  // during React StrictMode's double-invoke and block the auto-fit.
+  const userMovedRef = React.useRef(false);
   const [contextMenu, setContextMenu] = React.useState<
     { x: number; y: number; lng: number; lat: number } | null
   >(null);
@@ -4237,16 +4265,33 @@ export function GisGlobeViewport({
 
   React.useEffect(() => injectCss(), []);
 
+  // viewStateKey often transitions undefined → "files:<id>" once the
+  // active-project context resolves. Capturing it in a ref lets the
+  // moveend/cleanup save-camera path pick up the current key without
+  // rebuilding the map — otherwise fittedKeyRef persists across the
+  // rebuild and the second map's auto-fit short-circuits.
+  const viewStateKeyRef = React.useRef(viewStateKey);
+  React.useEffect(() => {
+    viewStateKeyRef.current = viewStateKey;
+  }, [viewStateKey]);
+
   // Create the map once
   React.useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
+    const initialCached = getMapViewState(viewStateKey);
+    if (initialCached) {
+      viewRestoredRef.current = true;
+      userMovedRef.current = true;
+    }
     const map = new maplibregl.Map({
       container: el,
       style: EMPTY_STYLE,
-      center: DEFAULT_CENTER,
-      zoom: DEFAULT_ZOOM,
+      center: initialCached ? initialCached.center : DEFAULT_CENTER,
+      zoom: initialCached ? initialCached.zoom : DEFAULT_ZOOM,
+      bearing: initialCached ? initialCached.bearing : 0,
+      pitch: initialCached ? initialCached.pitch : 0,
       attributionControl: false,
       // Disable auto-snap to true north — a small grid-convergence bearing
       // (e.g. 2° for EPSG:25832) is well within the default 7° snap window
@@ -4284,6 +4329,30 @@ export function GisGlobeViewport({
     });
     map.on("zoom", () => setZoomDisplay(map.getZoom()));
     map.on("pitch", () => setPitchDisplay(map.getPitch()));
+    // Only persist cameras the user has touched. Programmatic moves
+    // (construction, fitBounds, restore jumpTo) fire moveend without an
+    // originalEvent — saving those would overwrite the cache with raw
+    // defaults before the auto-fit runs, and in React StrictMode the
+    // double-invoke of the init effect would then flip viewRestoredRef
+    // back on and skip the fit entirely.
+    const saveCamera = () => {
+      if (!userMovedRef.current) return;
+      const c = map.getCenter();
+      setMapViewState(viewStateKeyRef.current, {
+        center: [c.lng, c.lat],
+        zoom: map.getZoom(),
+        bearing: map.getBearing(),
+        pitch: map.getPitch(),
+      });
+    };
+    const handleInteractionEnd = (e: { originalEvent?: Event | null }) => {
+      if (!e.originalEvent) return;
+      userMovedRef.current = true;
+      saveCamera();
+    };
+    map.on("moveend", handleInteractionEnd);
+    map.on("rotateend", handleInteractionEnd);
+    map.on("pitchend", handleInteractionEnd);
 
     // During a splitter drag we avoid calling map.resize() at all — each
     // call sets canvas.width/height, which clears the WebGL framebuffer,
@@ -4312,15 +4381,40 @@ export function GisGlobeViewport({
     ro.observe(el);
 
     mapRef.current = map;
+    if (viewStateKey) restoreAppliedKeyRef.current = viewStateKey;
 
     return () => {
       ro.disconnect();
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+      saveCamera();
       map.remove();
       mapRef.current = null;
       setStyleReady(false);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // When the session cache has an entry for the resolved viewStateKey
+  // (remount within a session), jump to the stored camera and flag the
+  // restore so the auto-fit path stays quiet. Re-applies on viewStateKey
+  // change (e.g. project switch); a miss leaves viewRestoredRef false
+  // so the normal fit-to-data runs.
+  const restoreAppliedKeyRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!viewStateKey) return;
+    if (restoreAppliedKeyRef.current === viewStateKey) return;
+    restoreAppliedKeyRef.current = viewStateKey;
+    const cached = getMapViewState(viewStateKey);
+    if (!cached || !mapRef.current) return;
+    viewRestoredRef.current = true;
+    userMovedRef.current = true;
+    mapRef.current.jumpTo({
+      center: cached.center,
+      zoom: cached.zoom,
+      bearing: cached.bearing,
+      pitch: cached.pitch,
+    });
+  }, [viewStateKey]);
 
   // ------------------------------------------------------------------
   // "Align to grid north" — rotate the camera so grid north points up.
@@ -4543,19 +4637,26 @@ export function GisGlobeViewport({
       });
     }
 
-    // Fit bounds once per dataKey
+    // Fit bounds once per dataKey, unless a cached camera was restored.
+    // When restoring we still want subsequent dataKey changes (e.g. the
+    // user opening a different project) to re-fit; the restore flag only
+    // suppresses the very first auto-fit after remount.
     if (data && data.features.length > 0 && fittedKeyRef.current !== dataKey) {
       fittedKeyRef.current = dataKey;
-      const bounds = geojsonBounds(data);
-      if (bounds) {
-        // Small delay so the size is final after ResizeObserver settles
-        setTimeout(() => {
-          map.fitBounds(bounds as LngLatBoundsLike, {
-            padding: 48,
-            maxZoom: 14,
-            duration: 1200,
-          });
-        }, 80);
+      if (viewRestoredRef.current) {
+        viewRestoredRef.current = false;
+      } else {
+        const bounds = geojsonBounds(data);
+        if (bounds) {
+          // Small delay so the size is final after ResizeObserver settles
+          setTimeout(() => {
+            map.fitBounds(bounds as LngLatBoundsLike, {
+              padding: 48,
+              maxZoom: 14,
+              duration: 1200,
+            });
+          }, 80);
+        }
       }
     } else if (!data) {
       fittedKeyRef.current = null;

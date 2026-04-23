@@ -15,6 +15,7 @@ import { useProjectFilesGeoJson } from "@/services/query/project-files";
 import type { VisibleFile, GisLayerStyle } from "./project-gis-viewer";
 import { Button } from "@/components/ui/button";
 import { appIcons, Icon } from "@/components/ui/icon";
+import { getMapViewState, setMapViewState } from "@/lib/map-view-state";
 
 // ---------------------------------------------------------------------------
 // Tile sources (same catalog as animate-3d-viewport)
@@ -406,9 +407,17 @@ interface GisViewerViewportProps {
    * anything.
    */
   fitBounds?: [number, number, number, number] | null;
+  /**
+   * Session-scoped identifier for the camera cache. When set, the last
+   * centre/zoom/bearing/pitch is stored here on pan/zoom and restored on
+   * remount — so leaving a settings tab and coming back preserves the
+   * view instead of snapping to the auto-fit. On a fresh session (cache
+   * miss) the fit-to-content paths run as usual.
+   */
+  viewStateKey?: string;
 }
 
-export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extraLayers, legendExtra, legendItems, addPolygonOptions, onAddPolygon, removableKeys, onRemoveFile, fitBounds }: GisViewerViewportProps) {
+export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extraLayers, legendExtra, legendItems, addPolygonOptions, onAddPolygon, removableKeys, onRemoveFile, fitBounds, viewStateKey }: GisViewerViewportProps) {
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const mapContainerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<MLMap | null>(null);
@@ -456,24 +465,102 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
     if (style.textContent !== GIS_CSS) style.textContent = GIS_CSS;
   }, []);
 
-  // Initialize map
+  // When this ref is true we've already restored a camera from the
+  // session cache, so auto-fit effects (visibleFiles + fitBounds) stay
+  // quiet for the lifetime of the mount. A cache miss leaves it false
+  // and the fit paths run normally.
+  const viewRestoredRef = React.useRef(false);
+  // Flipped on the first user-driven pan/zoom/rotate so the camera is
+  // only persisted once the map has a camera worth remembering — never
+  // the raw default, which would otherwise leak into the session cache
+  // during React StrictMode's double-invoke and block the auto-fit.
+  const userMovedRef = React.useRef(false);
+  // viewStateKey often transitions undefined → "<page>:<id>" once the
+  // active-project context resolves. Capturing it in a ref lets the
+  // moveend/cleanup save-camera path pick up the current key without
+  // rebuilding the map — otherwise the fitted-keys ref persists across
+  // the rebuild and the second map's auto-fit short-circuits.
+  const viewStateKeyRef = React.useRef(viewStateKey);
+  React.useEffect(() => {
+    viewStateKeyRef.current = viewStateKey;
+  }, [viewStateKey]);
+
+  // Initialize map (once — key changes are handled via the ref above
+  // and the restore effect below).
   React.useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
+    const initialCached = getMapViewState(viewStateKey);
+    if (initialCached) {
+      viewRestoredRef.current = true;
+      userMovedRef.current = true;
+    }
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
       style: buildStyle(TILE_SOURCES[tileIndex]),
-      center: [0, 20],
-      zoom: 2,
+      center: initialCached ? initialCached.center : [0, 20],
+      zoom: initialCached ? initialCached.zoom : 2,
+      bearing: initialCached ? initialCached.bearing : 0,
+      pitch: initialCached ? initialCached.pitch : 0,
       attributionControl: false,
     });
     map.on("zoom", () => setZoomDisplay(Math.round(map.getZoom() * 10) / 10));
     map.on("pitch", () => setPitchDisplay(Math.round(map.getPitch())));
     map.on("style.load", () => setStyleReady(true));
+    // See sibling viewport: only persist user-driven camera changes
+    // (detected via e.originalEvent). Programmatic moves and React
+    // StrictMode's init re-run would otherwise poison the cache with
+    // defaults and block the first-landing fit.
+    const saveCamera = () => {
+      if (!userMovedRef.current) return;
+      const c = map.getCenter();
+      setMapViewState(viewStateKeyRef.current, {
+        center: [c.lng, c.lat],
+        zoom: map.getZoom(),
+        bearing: map.getBearing(),
+        pitch: map.getPitch(),
+      });
+    };
+    const handleInteractionEnd = (e: { originalEvent?: Event | null }) => {
+      if (!e.originalEvent) return;
+      userMovedRef.current = true;
+      saveCamera();
+    };
+    map.on("moveend", handleInteractionEnd);
+    map.on("rotateend", handleInteractionEnd);
+    map.on("pitchend", handleInteractionEnd);
     mapRef.current = map;
+    if (viewStateKey) restoreAppliedKeyRef.current = viewStateKey;
 
-    return () => { map.remove(); mapRef.current = null; overlayRef.current = null; };
+    return () => {
+      saveCamera();
+      map.remove();
+      mapRef.current = null;
+      overlayRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // When the session cache has an entry for the resolved viewStateKey
+  // (remount within a session), jump to the stored camera and flag the
+  // restore so the auto-fit paths stay quiet. Runs whenever viewStateKey
+  // becomes truthy for the first time — subsequent viewStateKey changes
+  // (project switch) also re-apply.
+  const restoreAppliedKeyRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!viewStateKey) return;
+    if (restoreAppliedKeyRef.current === viewStateKey) return;
+    restoreAppliedKeyRef.current = viewStateKey;
+    const cached = getMapViewState(viewStateKey);
+    if (!cached || !mapRef.current) return;
+    viewRestoredRef.current = true;
+    userMovedRef.current = true;
+    mapRef.current.jumpTo({
+      center: cached.center,
+      zoom: cached.zoom,
+      bearing: cached.bearing,
+      pitch: cached.pitch,
+    });
+  }, [viewStateKey]);
 
   // Add deck.gl overlay once style is ready
   React.useEffect(() => {
@@ -748,6 +835,7 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
     if (locked) return;
     if (visibleFiles.length === 0) return;
     if (!containerReady) return;
+    if (viewRestoredRef.current) return;
     const map = mapRef.current;
     if (!map) return;
 
@@ -792,6 +880,7 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
   // different signal.
   React.useEffect(() => {
     if (locked) return;
+    if (viewRestoredRef.current) return;
     if (!fitBounds) return;
     if (!containerReady) return;
     const map = mapRef.current;

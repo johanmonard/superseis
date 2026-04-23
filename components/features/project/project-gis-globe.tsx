@@ -17,6 +17,10 @@ import {
 } from "@/services/api/project-files";
 import { fetchCrsInfo, type CrsInfoResponse } from "@/services/api/crs";
 import { computeGridConvergence } from "@/lib/grid-convergence";
+import {
+  getMapSessionState,
+  updateMapSessionState,
+} from "@/lib/map-view-state";
 import type { FileCategory } from "@/services/api/project-files";
 import { getRuntimeConfig } from "@/services/config/runtimeConfig";
 import { ProjectSettingsPage } from "./project-settings-page";
@@ -744,8 +748,32 @@ export function ProjectGisGlobe() {
   const queryClient = useQueryClient();
   const { data: fileList } = useProjectFiles(projectId);
 
-  // Selected files keyed as "category/filename" for uniqueness
-  const [selectedFiles, setSelectedFiles] = React.useState<string[]>([]);
+  // Selected files keyed as "category/filename" for uniqueness. Seeded
+  // from the session cache so ticks survive leaving and returning to
+  // the Files tab within a session — falls back to empty on a fresh
+  // projectId or a hard reload.
+  const [selectedFiles, setSelectedFiles] = React.useState<string[]>(() => {
+    if (projectId == null) return [];
+    return getMapSessionState(`files:${projectId}`)?.selectedFiles ?? [];
+  });
+
+  // Restore cached ticks on project switch (the initial useState above
+  // only fires on first mount, so a later project change wouldn't see
+  // its cached entry without this effect).
+  const restoredProjectIdRef = React.useRef<number | null>(projectId);
+  React.useEffect(() => {
+    if (projectId == null) return;
+    if (restoredProjectIdRef.current === projectId) return;
+    restoredProjectIdRef.current = projectId;
+    const cached = getMapSessionState(`files:${projectId}`)?.selectedFiles;
+    setSelectedFiles(cached ?? []);
+  }, [projectId]);
+
+  // Persist tick list for cross-navigation restore.
+  React.useEffect(() => {
+    if (projectId == null) return;
+    updateMapSessionState(`files:${projectId}`, { selectedFiles });
+  }, [selectedFiles, projectId]);
   const [hiddenFiles, setHiddenFiles] = React.useState<Set<string>>(
     () => new Set()
   );
@@ -2220,7 +2248,29 @@ export function ProjectGisGlobe() {
     return computeGridConvergence(polygonCentroid[0], polygonCentroid[1], proj);
   }, [crsQuery.data?.proj4text, polygonCentroid]);
 
-  const [alignToGridNorth, setAlignToGridNorth] = React.useState(false);
+  const [alignToGridNorth, setAlignToGridNorth] = React.useState<boolean>(
+    () => {
+      if (projectId == null) return false;
+      return (
+        getMapSessionState(`files:${projectId}`)?.alignToGridNorth ?? false
+      );
+    }
+  );
+  // Restore on project switch (initial useState only fires on first mount).
+  const restoredAlignProjectIdRef = React.useRef<number | null>(projectId);
+  React.useEffect(() => {
+    if (projectId == null) return;
+    if (restoredAlignProjectIdRef.current === projectId) return;
+    restoredAlignProjectIdRef.current = projectId;
+    setAlignToGridNorth(
+      getMapSessionState(`files:${projectId}`)?.alignToGridNorth ?? false,
+    );
+  }, [projectId]);
+  // Persist toggle state for cross-navigation restore.
+  React.useEffect(() => {
+    if (projectId == null) return;
+    updateMapSessionState(`files:${projectId}`, { alignToGridNorth });
+  }, [alignToGridNorth, projectId]);
   // Auto-disable when the inputs disappear (project change, survey cleared, etc.)
   React.useEffect(() => {
     if (gridConvergenceDeg == null && alignToGridNorth) setAlignToGridNorth(false);
@@ -2236,6 +2286,7 @@ export function ProjectGisGlobe() {
           layers={osmPanelOpen && osmOverrideLayers.length > 0 ? osmOverrideLayers : layers}
           onToggleLayerVisibility={toggleLayerVisibility}
           onToggleFclassVisibility={toggleFclassVisibility}
+          viewStateKey={projectId != null ? `files:${projectId}` : undefined}
           dataKey={osmPanelOpen ? `osm-preview:${osmVp?.polygonName ?? ""}:${osmDatasetExtent ? "has-extent" : "no-extent"}` : `project:${loadId}`}
           discardKey={discardId}
           editing={osmPanelOpen ? false : editing}

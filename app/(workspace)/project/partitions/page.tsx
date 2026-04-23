@@ -132,6 +132,7 @@ export default function PartitionsPage() {
             projectId={projectId}
             visibleFiles={mergedFiles}
             onStyleChange={handleStyleChange}
+            viewStateKey={projectId != null ? `partitions:${projectId}` : undefined}
           />
         ) : (
           <div className="flex h-full flex-col items-center justify-center p-[var(--space-4)]">

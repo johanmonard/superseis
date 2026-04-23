@@ -186,6 +186,7 @@ export function DesignGridViewport({
       extraLayers={extraLayers}
       legendItems={legendItems}
       fitBounds={stationBounds}
+      viewStateKey={projectId != null ? `grid:${projectId}` : undefined}
     />
   );
 }

@@ -270,6 +270,7 @@ export default function LayersPage() {
             legendItems={legendItems}
             addPolygonOptions={addPolygonOptions}
             onAddPolygon={handleAddPolygon}
+            viewStateKey={projectId != null ? `layers:${projectId}` : undefined}
           />
         ) : (
           <div className="flex h-full flex-col items-center justify-center p-[var(--space-4)]">

@@ -147,6 +147,7 @@ export default function MapsPage() {
               onStyleChange={() => {
                 /* legend edits ignored — styling is driven by the Layers page */
               }}
+              viewStateKey={projectId != null ? `maps:${projectId}` : undefined}
             />
           </div>
         ) : (

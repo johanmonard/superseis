@@ -141,7 +141,7 @@ export function OffsetsGridViewport({
       const dotCommon = {
         radiusUnits: "meters" as const,
         getRadius: DOT_RADIUS,
-        radiusMinPixels: 2,
+        radiusMinPixels: 1,
         radiusMaxPixels: 12,
         pickable: false,
       };
@@ -461,6 +461,7 @@ export function OffsetsGridViewport({
         extraLayers={extraLayers}
         legendItems={legendItems}
         fitBounds={stationBounds}
+        viewStateKey={projectId != null ? `offsets:${projectId}` : undefined}
       />
     </div>
   );
