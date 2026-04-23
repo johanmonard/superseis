@@ -112,12 +112,18 @@ export function DesignGridViewport({
     // reprojects the rotated GeoTIFF to Web-Mercator PNG tiles at
     // upload time, so deck.gl's TileLayer does the standard {z}/{x}/{y}
     // dance — no hand-placed quad, no rotation handling on the client.
-    if (foldMeta && foldTileVersion && projectId !== null && foldVisible) {
+    // The TileLayer stays mounted across tick/untick cycles — hiding via
+    // the ``visible`` prop instead of omitting the layer entirely. deck.gl
+    // disposes a tile cache when a layer unmounts; re-mounting with the
+    // same id picks up a stale/empty cache and silently fails to refetch
+    // on the second re-show. Keeping the instance alive sidesteps that.
+    if (foldMeta && foldTileVersion && projectId !== null) {
       const tileUrl = foldTilesUrlTemplate(projectId, foldTileVersion);
       const [west, south, east, north] = foldMeta.bounds;
       layers.push(
         new TileLayer({
           id: `fold-tiles:${foldTileVersion}`,
+          visible: foldVisible,
           data: tileUrl,
           // The tile endpoint sits behind the session cookie. deck.gl's
           // URL loader doesn't carry cookies by default, so push the

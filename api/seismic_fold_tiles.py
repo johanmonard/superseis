@@ -97,15 +97,26 @@ def _bilinear_sample(
     Fold values are integer counts; returning 0 for out-of-range makes the
     colormap step treat those pixels as transparent (same rule as empty
     bins inside the raster).
+
+    At low zooms the merc→source reprojection of pixels near the antimeridian
+    or poles can produce NaN/inf; a raw ``astype(np.int64)`` on those would
+    wrap to ``INT64_MIN`` and crash the lookup. Filter them first.
     """
     h, w = src.shape
-    inside = (col >= 0) & (col <= w - 1) & (row >= 0) & (row <= h - 1)
-    c0 = np.clip(np.floor(col), 0, w - 1).astype(np.int64)
-    r0 = np.clip(np.floor(row), 0, h - 1).astype(np.int64)
+    finite = np.isfinite(col) & np.isfinite(row)
+    col_safe = np.where(finite, col, 0.0)
+    row_safe = np.where(finite, row, 0.0)
+    inside = (
+        finite
+        & (col_safe >= 0) & (col_safe <= w - 1)
+        & (row_safe >= 0) & (row_safe <= h - 1)
+    )
+    c0 = np.clip(np.floor(col_safe), 0, w - 1).astype(np.int64)
+    r0 = np.clip(np.floor(row_safe), 0, h - 1).astype(np.int64)
     c1 = np.clip(c0 + 1, 0, w - 1)
     r1 = np.clip(r0 + 1, 0, h - 1)
-    fc = np.clip(col - c0, 0, 1)
-    fr = np.clip(row - r0, 0, 1)
+    fc = np.clip(col_safe - c0, 0, 1)
+    fr = np.clip(row_safe - r0, 0, 1)
     v00 = src[r0, c0]
     v10 = src[r0, c1]
     v01 = src[r1, c0]
@@ -207,11 +218,14 @@ def write_fold_tile_pyramid(
         src_transform, width, height, src_epsg
     )
     max_zoom = _pick_max_zoom(source_px_merc)
-    min_zoom = max(0, max_zoom - 3)
+    # Ramp all the way down to zoom 0 so zoomed-out views (continent /
+    # world scale) still pick up a tile. Low-zoom tiles are cheap — at
+    # z=0 the whole fold collapses into one 256-px tile — and fully
+    # transparent ones get skipped below, so the disk footprint is
+    # dominated by the top zooms. Back max_zoom off first if the
+    # theoretical tile count exceeds the cap.
+    min_zoom = 0
 
-    # Back max_zoom off until the total tile count stays under the cap.
-    # Coarse-but-wide surveys (or tiny bins with big footprint) would
-    # otherwise emit tens of thousands of tiles.
     while True:
         plan: list[dict[str, int]] = []
         total = 0
@@ -224,7 +238,6 @@ def write_fold_tile_pyramid(
         if total <= PYRAMID_MAX_TILES or max_zoom == 0:
             break
         max_zoom -= 1
-        min_zoom = max(0, max_zoom - 3)
 
     if tiles_dir.exists():
         shutil.rmtree(tiles_dir)
