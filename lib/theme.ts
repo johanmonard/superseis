@@ -4,17 +4,57 @@ export interface ThemeDefinition {
   description?: string;
   kind: "light" | "dark";
   counterpart?: string;
+  /** Display name for the theme family — the list picker groups by this. */
+  family: string;
 }
 
 export const THEME_REGISTRY: readonly ThemeDefinition[] = [
-  { id: "default", label: "Default", kind: "light", counterpart: "dark", description: "Baseline light appearance" },
-  { id: "light", label: "Light", kind: "light", counterpart: "dark", description: "Editable light variant" },
-  { id: "dark", label: "Dark", kind: "dark", counterpart: "default", description: "Dark surfaces and elevated contrast" },
-  { id: "test-1-light", label: "Test 1 — Light", kind: "light", counterpart: "test-1-dark", description: "Flat-pane IDE, zinc + orange" },
-  { id: "test-1-dark", label: "Test 1 — Dark", kind: "dark", counterpart: "test-1-light", description: "Flat-pane IDE, zinc + orange" },
-  { id: "test-2-light", label: "Test 2 — Light", kind: "light", counterpart: "test-2-dark", description: "Flat-pane IDE, hairline separators" },
-  { id: "test-2-dark", label: "Test 2 — Dark", kind: "dark", counterpart: "test-2-light", description: "Flat-pane IDE, hairline separators" },
+  { id: "default", label: "Default", family: "Default", kind: "light", counterpart: "dark", description: "Baseline light appearance" },
+  { id: "light", label: "Light", family: "Default", kind: "light", counterpart: "dark", description: "Editable light variant" },
+  { id: "dark", label: "Dark", family: "Default", kind: "dark", counterpart: "default", description: "Dark surfaces and elevated contrast" },
+  { id: "test-1-light", label: "Test 1 — Light", family: "Test 1", kind: "light", counterpart: "test-1-dark", description: "Flat-pane IDE, zinc + orange" },
+  { id: "test-1-dark", label: "Test 1 — Dark", family: "Test 1", kind: "dark", counterpart: "test-1-light", description: "Flat-pane IDE, zinc + orange" },
+  { id: "test-2-light", label: "Test 2 — Light", family: "Test 2", kind: "light", counterpart: "test-2-dark", description: "Flat-pane IDE, hairline separators" },
+  { id: "test-2-dark", label: "Test 2 — Dark", family: "Test 2", kind: "dark", counterpart: "test-2-light", description: "Flat-pane IDE, hairline separators" },
+  { id: "zen-1-light", label: "Zen 1 — Light", family: "Zen 1", kind: "light", counterpart: "zen-1-dark", description: "Matcha + almond, warm earth tones" },
+  { id: "zen-1-dark", label: "Zen 1 — Dark", family: "Zen 1", kind: "dark", counterpart: "zen-1-light", description: "Matcha + almond, warm earth tones" },
+  { id: "zen-2-light", label: "Zen 2 — Light", family: "Zen 2", kind: "light", counterpart: "zen-2-dark", description: "Zen palette on Test 2 hairline flat-pane IDE" },
+  { id: "zen-2-dark", label: "Zen 2 — Dark", family: "Zen 2", kind: "dark", counterpart: "zen-2-light", description: "Zen palette on Test 2 hairline flat-pane IDE" },
+  { id: "happy-1-light", label: "Happy 1 — Light", family: "Happy 1", kind: "light", counterpart: "happy-1-dark", description: "Vivid red-orange + pink + amber on cream" },
+  { id: "happy-1-dark", label: "Happy 1 — Dark", family: "Happy 1", kind: "dark", counterpart: "happy-1-light", description: "Vivid red-orange + pink + amber on cream" },
+  { id: "happy-2-light", label: "Happy 2 — Light", family: "Happy 2", kind: "light", counterpart: "happy-2-dark", description: "Sage + forest green with yellow + amber accents" },
+  { id: "happy-2-dark", label: "Happy 2 — Dark", family: "Happy 2", kind: "dark", counterpart: "happy-2-light", description: "Sage + forest green with yellow + amber accents" },
 ] as const;
+
+/**
+ * Unique theme families in registry order, each paired with the id to apply
+ * for a given kind (dark/light). Falls back to the other variant when a
+ * family has only one side defined.
+ */
+export function getThemeFamilies(): readonly {
+  family: string;
+  description?: string;
+  lightId: ThemeMode;
+  darkId: ThemeMode;
+}[] {
+  const families = new Map<
+    string,
+    { family: string; description?: string; lightId?: ThemeMode; darkId?: ThemeMode }
+  >();
+  for (const t of THEME_REGISTRY) {
+    const entry = families.get(t.family) ?? { family: t.family, description: t.description };
+    if (t.kind === "light" && !entry.lightId) entry.lightId = t.id;
+    if (t.kind === "dark" && !entry.darkId) entry.darkId = t.id;
+    if (!entry.description) entry.description = t.description;
+    families.set(t.family, entry);
+  }
+  return Array.from(families.values()).map((e) => ({
+    family: e.family,
+    description: e.description,
+    lightId: (e.lightId ?? e.darkId) as ThemeMode,
+    darkId: (e.darkId ?? e.lightId) as ThemeMode,
+  }));
+}
 
 export type ThemeMode = (typeof THEME_REGISTRY)[number]["id"];
 export type ThemeDensity = "compact" | "comfortable" | "dense";

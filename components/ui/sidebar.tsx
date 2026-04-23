@@ -20,7 +20,7 @@ export const Sidebar = React.forwardRef<HTMLElement, SidebarProps>(
     <aside
       ref={ref}
       className={cn(
-        "flex h-full min-h-0 flex-col border-r border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] transition-[width] duration-200 ease-out",
+        "flex h-full min-h-0 flex-col border-r border-[var(--color-border-subtle)] bg-[var(--color-sidebar-bg,var(--color-bg-surface))] transition-[width] duration-200 ease-out",
         widthClasses[width],
         className
       )}
