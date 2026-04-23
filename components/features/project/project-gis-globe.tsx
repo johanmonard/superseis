@@ -4,7 +4,7 @@ import * as React from "react";
 import dynamic from "next/dynamic";
 import initSqlJs from "sql.js";
 import type { Database } from "sql.js";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
 import { useProjectSection } from "@/services/query/project-sections";
@@ -15,6 +15,8 @@ import {
   projectDemTileUrl,
   projectDemManifestUrl,
 } from "@/services/api/project-files";
+import { fetchCrsInfo, type CrsInfoResponse } from "@/services/api/crs";
+import { computeGridConvergence } from "@/lib/grid-convergence";
 import type { FileCategory } from "@/services/api/project-files";
 import { getRuntimeConfig } from "@/services/config/runtimeConfig";
 import { ProjectSettingsPage } from "./project-settings-page";
@@ -2112,7 +2114,7 @@ export function ProjectGisGlobe() {
   const seismicFiles = fileList?.seismic ?? [];
 
   // Group seismic gpkgs by the grid option they were produced for. The
-  // backend names files as ``{theoretical_grid|offset_grid}__{slug}.gpkg``
+  // backend names files as ``{theoretical_grid|offset_grid|grid_mesh}__{slug}.gpkg``
   // where slug = non-alphanumerics → ``_``. We look up design_options to
   // recover the canonical display name; unmatched slugs (stale/orphan
   // files) fall through under the raw slug so nothing silently vanishes.
@@ -2132,7 +2134,7 @@ export function ProjectGisGlobe() {
 
     const groups = new Map<string, string[]>();
     for (const f of seismicFiles) {
-      const m = /^(theoretical_grid|offset_grid)__(.+)\.gpkg$/.exec(f);
+      const m = /^(theoretical_grid|offset_grid|grid_mesh)__(.+)\.gpkg$/.exec(f);
       const slug = m?.[2] ?? "";
       const display = (slug && slugToName.get(slug)) || slug || "Unknown";
       const bucket = groups.get(display) ?? [];
@@ -2150,6 +2152,79 @@ export function ProjectGisGlobe() {
         return a.name.localeCompare(b.name);
       });
   }, [seismicFiles, designOptionsSection]);
+
+  // ------------------------------------------------------------------
+  // Grid-north alignment: compute γ (meridian convergence) at the
+  // centroid of the first survey option's acquisition polygon, using
+  // the project CRS's proj4 string. Fed into GisGlobeViewport so the
+  // user can rotate the map to put grid north up.
+  // ------------------------------------------------------------------
+  const { data: surveySection } = useProjectSection(projectId, "survey");
+  const { data: definitionSection } = useProjectSection(projectId, "definition");
+
+  const firstAcquisitionPolygon = React.useMemo<string | null>(() => {
+    const groups = (surveySection?.data as
+      | { groups?: { acquisitionPolygon?: string }[] }
+      | undefined)?.groups;
+    const name = Array.isArray(groups) && groups.length > 0
+      ? (groups[0]?.acquisitionPolygon ?? "").trim()
+      : "";
+    return name || null;
+  }, [surveySection]);
+
+  const projectEpsg = React.useMemo<number | null>(() => {
+    const raw = (definitionSection?.data as { epsg?: string | number } | undefined)?.epsg;
+    const n = typeof raw === "number" ? raw : parseInt(String(raw ?? ""), 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, [definitionSection]);
+
+  const polygonQuery = useQuery({
+    queryKey: ["grid-north-polygon", projectId, firstAcquisitionPolygon],
+    queryFn: () => fetchFileGeoJson(projectId!, "polygons", `${firstAcquisitionPolygon}.gpkg`),
+    enabled: !!projectId && !!firstAcquisitionPolygon,
+    staleTime: 60_000,
+  });
+
+  const polygonCentroid = React.useMemo<[number, number] | null>(() => {
+    const fc = polygonQuery.data;
+    if (!fc || !Array.isArray(fc.features) || fc.features.length === 0) return null;
+    let sumLon = 0;
+    let sumLat = 0;
+    let n = 0;
+    const walk = (c: unknown) => {
+      if (!Array.isArray(c)) return;
+      if (typeof c[0] === "number" && typeof c[1] === "number") {
+        sumLon += c[0] as number;
+        sumLat += c[1] as number;
+        n += 1;
+        return;
+      }
+      for (const sub of c) walk(sub);
+    };
+    for (const f of fc.features) {
+      if (f.geometry) walk((f.geometry as GeoJSON.Geometry & { coordinates: unknown }).coordinates);
+    }
+    return n > 0 ? [sumLon / n, sumLat / n] : null;
+  }, [polygonQuery.data]);
+
+  const crsQuery = useQuery<CrsInfoResponse, Error>({
+    queryKey: ["crs-info", projectEpsg],
+    queryFn: ({ signal }) => fetchCrsInfo(projectEpsg as number, signal),
+    enabled: projectEpsg != null,
+    staleTime: Infinity,
+  });
+
+  const gridConvergenceDeg = React.useMemo<number | null>(() => {
+    const proj = crsQuery.data?.proj4text;
+    if (!proj || !polygonCentroid) return null;
+    return computeGridConvergence(polygonCentroid[0], polygonCentroid[1], proj);
+  }, [crsQuery.data?.proj4text, polygonCentroid]);
+
+  const [alignToGridNorth, setAlignToGridNorth] = React.useState(false);
+  // Auto-disable when the inputs disappear (project change, survey cleared, etc.)
+  React.useEffect(() => {
+    if (gridConvergenceDeg == null && alignToGridNorth) setAlignToGridNorth(false);
+  }, [gridConvergenceDeg, alignToGridNorth]);
 
   return (
     <ProjectSettingsPage
@@ -2209,6 +2284,9 @@ export function ProjectGisGlobe() {
           demFileUrl={demFileUrl}
           demTileUrlTemplate={demTileUrlTemplate}
           demManifestUrl={demManifestUrlValue}
+          gridConvergenceDeg={gridConvergenceDeg}
+          alignToGridNorth={alignToGridNorth}
+          onAlignToGridNorthChange={setAlignToGridNorth}
         />
       }
       middlePanel={osmPanelOpen ? (

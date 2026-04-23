@@ -114,6 +114,9 @@ class CrsInfo(Base):
     projection_method: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # JSON array of {name, value, unit} objects.
     projection_params: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # PROJ string (proj4 form). Used by the client to compute grid
+    # convergence for the "Align to grid north" bearing correction.
+    proj4text: Mapped[str | None] = mapped_column(Text, nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

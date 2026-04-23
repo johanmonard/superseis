@@ -56,6 +56,7 @@ class CrsInfoResponse(BaseModel):
     prime_meridian_lon: Optional[float] = None
     projection_method: Optional[str] = None
     projection_params: Optional[list[ProjectionParam]] = None
+    proj4text: Optional[str] = None
     fetched_at: datetime
     cached: bool
 
@@ -88,6 +89,7 @@ def _row_to_response(row: CrsInfo, *, cached: bool) -> CrsInfoResponse:
         prime_meridian_lon=row.prime_meridian_lon,
         projection_method=row.projection_method,
         projection_params=params,
+        proj4text=row.proj4text,
         fetched_at=row.fetched_at,
         cached=cached,
     )
@@ -202,6 +204,13 @@ def _resolve_with_pyproj(epsg: int) -> dict[str, Any]:
     except Exception:
         pass
 
+    # --- proj4 string (PROJ "+proj=…" form) ---
+    proj4text = None
+    try:
+        proj4text = crs.to_proj4()
+    except Exception:
+        pass
+
     return {
         "name": crs.name,
         "type_name": type_name,
@@ -223,6 +232,7 @@ def _resolve_with_pyproj(epsg: int) -> dict[str, Any]:
         "prime_meridian_lon": pm_lon,
         "projection_method": proj_method,
         "projection_params": proj_params,
+        "proj4text": proj4text,
     }
 
 
@@ -244,6 +254,18 @@ async def get_crs_info(
 
     existing = await db.get(CrsInfo, epsg)
     if existing is not None:
+        # Back-fill proj4text for rows cached before this column existed
+        # so the client gets a usable PROJ string without needing a cache
+        # wipe or a data migration.
+        if existing.proj4text is None:
+            try:
+                from pyproj import CRS
+
+                existing.proj4text = CRS.from_epsg(epsg).to_proj4()
+                await db.commit()
+                await db.refresh(existing)
+            except Exception:
+                await db.rollback()
         return _row_to_response(existing, cached=True)
 
     try:

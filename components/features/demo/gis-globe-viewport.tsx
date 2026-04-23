@@ -247,6 +247,15 @@ const FEATURES_SOURCE_ID = "features-source";
 const FEATURES_FILL_LAYER = "features-fill";
 const FEATURES_LINE_LAYER = "features-line";
 const FEATURES_CIRCLE_LAYER = "features-circle";
+const GRID_MESH_LINE_LAYER = "features-grid-mesh-line";
+
+// Reused by both the grid-mesh layer's own filter and the default line
+// layer's exclusion, so a feature can't end up double-rendered.
+const GRID_MESH_FILTER: maplibregl.ExpressionSpecification = [
+  "in",
+  "grid_mesh__",
+  ["coalesce", ["get", "__layer"], ""],
+] as unknown as maplibregl.ExpressionSpecification;
 
 const DRAFT_SOURCE_ID = "draft-source";
 const DRAFT_FILL_LAYER = "draft-fill";
@@ -302,6 +311,15 @@ function formatMeters(meters: number): string {
   if (!Number.isFinite(meters) || meters <= 0) return "0 m";
   if (meters < 1000) return `${Math.round(meters)} m`;
   return `${(meters / 1000).toFixed(meters < 10000 ? 2 : 1)} km`;
+}
+
+// Pretty-print grid convergence γ as magnitude + cardinal (E = grid north
+// east of true north, W = west). Zero prints without a cardinal letter.
+function formatGridConvergence(deg: number): string {
+  if (!Number.isFinite(deg)) return "—";
+  const mag = Math.abs(deg).toFixed(2);
+  if (Math.abs(deg) < 0.005) return `${mag}°`;
+  return `${mag}° ${deg > 0 ? "E" : "W"}`;
 }
 
 // Pretty-print a square-meter value. Sub-hectare values read as whole m²,
@@ -3007,6 +3025,18 @@ const GLOBE_CSS = `
     margin-right: 4px;
   }
   [data-theme-kind="dark"] .glb-cursor-readout__label { color: #94a3b8; }
+  .glb-cursor-readout__toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    pointer-events: auto;
+    cursor: pointer;
+    margin-bottom: 4px;
+    user-select: none;
+  }
+  .glb-cursor-readout__toggle input { margin: 0; cursor: pointer; }
+  .glb-cursor-readout__conv { color: #64748b; margin-left: 2px; }
+  [data-theme-kind="dark"] .glb-cursor-readout__conv { color: #94a3b8; }
 
   .glb-measure-readout {
     position: absolute;
@@ -3551,6 +3581,9 @@ export function GisGlobeViewport({
   demFileUrl,
   demTileUrlTemplate,
   demManifestUrl,
+  gridConvergenceDeg,
+  alignToGridNorth,
+  onAlignToGridNorthChange,
 }: {
   data: GeoJSONFeatureCollection | null;
   layers?: ReadonlyArray<LayerStyle>;
@@ -3611,6 +3644,15 @@ export function GisGlobeViewport({
   demTileUrlTemplate?: string;
   /** Override URL for the DEM tile pyramid manifest */
   demManifestUrl?: string;
+  /**
+   * Grid convergence at the project's reference point (in degrees, CW from
+   * true north). When provided together with `alignToGridNorth=true`, the
+   * map's bearing is eased to this value so grid north points up. Null =
+   * unavailable (toggle is hidden).
+   */
+  gridConvergenceDeg?: number | null;
+  alignToGridNorth?: boolean;
+  onAlignToGridNorthChange?: (aligned: boolean) => void;
 }) {
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -4103,6 +4145,11 @@ export function GisGlobeViewport({
       center: DEFAULT_CENTER,
       zoom: DEFAULT_ZOOM,
       attributionControl: false,
+      // Disable auto-snap to true north — a small grid-convergence bearing
+      // (e.g. 2° for EPSG:25832) is well within the default 7° snap window
+      // and would be silently reset after every drag-rotate release, fighting
+      // the "Align to grid north" toggle.
+      bearingSnap: 0,
       // MapLibre fetches raster-dem tiles, image sources, etc. through its
       // own pipeline, which doesn't carry cookies. Our backend-hosted DEM
       // tiles sit behind a session cookie, so anything pointed at the
@@ -4171,6 +4218,31 @@ export function GisGlobeViewport({
       setStyleReady(false);
     };
   }, []);
+
+  // ------------------------------------------------------------------
+  // "Align to grid north" — rotate the camera so grid north points up.
+  // When the user grabs the map and rotates by hand, we flip the toggle
+  // off immediately and leave the bearing where they dropped it.
+  // ------------------------------------------------------------------
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady) return;
+    if (!alignToGridNorth || gridConvergenceDeg == null) return;
+    map.easeTo({ bearing: gridConvergenceDeg, duration: 250 });
+  }, [alignToGridNorth, gridConvergenceDeg, styleReady]);
+
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !alignToGridNorth || !onAlignToGridNorthChange) return;
+    const onRotateEnd = (e: { originalEvent?: Event }) => {
+      if (!e.originalEvent) return; // programmatic easeTo — ignore
+      onAlignToGridNorthChange(false);
+    };
+    map.on("rotateend", onRotateEnd);
+    return () => {
+      map.off("rotateend", onRotateEnd);
+    };
+  }, [alignToGridNorth, onAlignToGridNorthChange]);
 
   // Apply the selected tile source (and optional labels overlay)
   React.useEffect(() => {
@@ -4273,10 +4345,16 @@ export function GisGlobeViewport({
         type: "line",
         source: FEATURES_SOURCE_ID,
         filter: [
-          "any",
-          ["==", ["geometry-type"], "LineString"],
-          ["==", ["geometry-type"], "Polygon"],
-        ],
+          "all",
+          [
+            "any",
+            ["==", ["geometry-type"], "LineString"],
+            ["==", ["geometry-type"], "Polygon"],
+          ],
+          // Grid-mesh features get their own dedicated thin-grey layer
+          // below; don't double-render them through the default style.
+          ["!", GRID_MESH_FILTER],
+        ] as unknown as maplibregl.ExpressionSpecification,
         paint: {
           "line-color": dirtyExpr,
           "line-width": [
@@ -4290,6 +4368,37 @@ export function GisGlobeViewport({
             ["boolean", ["feature-state", "editing"], false],
             0,
             0.9,
+          ],
+        },
+      });
+      // Grid mesh: thin grey lines at fixed width, faded out at low zoom
+      // so they only read as a mesh once the user zooms in.
+      map.addLayer({
+        id: GRID_MESH_LINE_LAYER,
+        type: "line",
+        source: FEATURES_SOURCE_ID,
+        filter: GRID_MESH_FILTER,
+        paint: {
+          "line-color": "#9ca3af",
+          // Width grows with zoom — near invisible when zoomed out, a
+          // clean thin rule when zoomed in. Opacity tracks width to
+          // reinforce the "only visible at high zoom" feel.
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            8, 0.1,
+            12, 0.3,
+            14, 0.6,
+            18, 1.5,
+          ],
+          "line-opacity": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            10, 0.15,
+            14, 0.6,
+            18, 0.9,
           ],
         },
       });
@@ -4402,14 +4511,21 @@ export function GisGlobeViewport({
     const visibleFilter = combinedVisibility;
 
     const fillBase: maplibregl.FilterSpecification = [
-      "==",
-      ["geometry-type"],
-      "Polygon",
-    ] as unknown as maplibregl.FilterSpecification;
-    const lineBase: maplibregl.FilterSpecification = [
-      "any",
-      ["==", ["geometry-type"], "LineString"],
+      "all",
       ["==", ["geometry-type"], "Polygon"],
+      ["!", GRID_MESH_FILTER],
+    ] as unknown as maplibregl.FilterSpecification;
+    // Grid mesh has its own dedicated thin-grey line layer; exclude it
+    // here so the default style (per-file palette colour) doesn't also
+    // paint it underneath.
+    const lineBase: maplibregl.FilterSpecification = [
+      "all",
+      [
+        "any",
+        ["==", ["geometry-type"], "LineString"],
+        ["==", ["geometry-type"], "Polygon"],
+      ],
+      ["!", GRID_MESH_FILTER],
     ] as unknown as maplibregl.FilterSpecification;
     const circleBase: maplibregl.FilterSpecification = [
       "==",
@@ -9424,16 +9540,31 @@ export function GisGlobeViewport({
         </div>
       )}
 
-      {cursorReadout && (
+      {(cursorReadout || gridConvergenceDeg != null) && (
         <div className="glb-cursor-readout">
-          <div>
-            <span className="glb-cursor-readout__label">Lat</span>
-            {cursorReadout.lat.toFixed(5)}
-            {"  "}
-            <span className="glb-cursor-readout__label">Lng</span>
-            {cursorReadout.lng.toFixed(5)}
-          </div>
-          {terrainOn && (
+          {gridConvergenceDeg != null && onAlignToGridNorthChange && (
+            <label className="glb-cursor-readout__toggle">
+              <input
+                type="checkbox"
+                checked={alignToGridNorth === true}
+                onChange={(e) => onAlignToGridNorthChange(e.target.checked)}
+              />
+              Align to grid north
+              <span className="glb-cursor-readout__conv">
+                {formatGridConvergence(gridConvergenceDeg)}
+              </span>
+            </label>
+          )}
+          {cursorReadout && (
+            <div>
+              <span className="glb-cursor-readout__label">Lat</span>
+              {cursorReadout.lat.toFixed(5)}
+              {"  "}
+              <span className="glb-cursor-readout__label">Lng</span>
+              {cursorReadout.lng.toFixed(5)}
+            </div>
+          )}
+          {cursorReadout && terrainOn && (
             <div>
               <span className="glb-cursor-readout__label">Alt</span>
               {cursorReadout.alt != null

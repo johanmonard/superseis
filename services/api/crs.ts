@@ -28,6 +28,7 @@ export interface CrsInfoResponse {
   prime_meridian_lon: number | null;
   projection_method: string | null;
   projection_params: CrsProjectionParam[] | null;
+  proj4text: string | null;
   fetched_at: string;
   cached: boolean;
 }
