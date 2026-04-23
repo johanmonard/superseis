@@ -4587,7 +4587,7 @@ export function GisGlobeViewport({
             8, 0.1,
             12, 0.3,
             14, 0.6,
-            18, 1.5,
+            18, 1,
           ],
           "line-opacity": [
             "interpolate",
