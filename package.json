@@ -24,6 +24,7 @@
     "@dagrejs/dagre": "^3.0.0",
     "@deck.gl/core": "^9.2.11",
     "@deck.gl/extensions": "^9.2.11",
+    "@deck.gl/geo-layers": "^9.3.1",
     "@deck.gl/layers": "^9.2.11",
     "@deck.gl/mapbox": "^9.2.11",
     "@geoman-io/leaflet-geoman-free": "^2.19.3",

@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { ScatterplotLayer } from "@deck.gl/layers";
+import { BitmapLayer, ScatterplotLayer } from "@deck.gl/layers";
+import { TileLayer } from "@deck.gl/geo-layers";
 
 import type {
   VisibleFile,
@@ -11,7 +12,9 @@ import { ViewportPlaceholder } from "@/components/features/project/viewport-plac
 import { GisViewerViewport } from "@/components/features/project/gis-viewer-viewport";
 import { appIcons, Icon } from "@/components/ui/icon";
 import type { FileCategory } from "@/services/api/project-files";
+import { foldTilesUrlTemplate } from "@/services/api/project-fold";
 import type { GridArtifactResponse } from "@/services/api/project-grid-artifacts";
+import { useFoldMeta } from "@/services/query/project-fold";
 import { useGridStations } from "@/services/query/project-grid-artifacts";
 
 const R_COLOR: [number, number, number, number] = [59, 130, 246, 200]; // blue-500
@@ -41,6 +44,15 @@ export function DesignGridViewport({
   // option change) is the caller's job — see useInvalidateGridArtifacts.
   const rQuery = useGridStations(projectId, "r");
   const sQuery = useGridStations(projectId, "s");
+  const foldQuery = useFoldMeta(projectId);
+  const foldMeta = foldQuery.data ?? null;
+  // Version string makes the tile URL unique per run so the browser and
+  // TileLayer's own cache don't serve stale PNGs when the user re-runs
+  // Process fold with new params — the backend overwrites the tiles
+  // at the same paths.
+  const foldTileVersion = foldMeta
+    ? `${foldMeta.option_name}:${foldMeta.colormap}:${foldMeta.value_max}:${foldMeta.params.offset_min}:${foldMeta.params.offset_max}`
+    : null;
   const rPts: GridArtifactResponse | null = rQuery.data ?? null;
   const sPts: GridArtifactResponse | null = sQuery.data ?? null;
   const anyLoading = rQuery.isLoading || sQuery.isLoading;
@@ -55,30 +67,102 @@ export function DesignGridViewport({
         : "idle";
   const errorMsg = !missing && firstError ? firstError.message : null;
 
+  // Per-component visibility owned locally — the viewport's built-in
+  // file toggle is bypassed because we supply our own legendItems. Each
+  // flag defaults to true and gets flipped by the legend checkboxes.
+  const [foldVisible, setFoldVisible] = React.useState(true);
+  const [rVisible, setRVisible] = React.useState(true);
+  const [sVisible, setSVisible] = React.useState(true);
+  const [regionVisible, setRegionVisible] = React.useState<Record<string, boolean>>({});
+  // Prune stale entries when regioning changes (removed polygons) and
+  // seed new ones to visible-by-default — React setState inside render
+  // would loop, so this runs as an effect keyed on regionPolygons.
+  React.useEffect(() => {
+    setRegionVisible((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const stem of regionPolygons) {
+        next[stem] = prev[stem] ?? true;
+      }
+      return next;
+    });
+  }, [regionPolygons]);
+
   const visibleFiles: VisibleFile[] = React.useMemo(() => {
-    const style = (color: string): GisLayerStyle => ({
+    const style = (color: string, visible: boolean): GisLayerStyle => ({
       color,
       width: 2,
       opacity: 0.9,
       fillOpacity: 0.12,
       filled: true,
-      visible: true,
+      visible,
     });
     return regionPolygons.map<VisibleFile>((stem, i) => ({
       category: "polygons" as FileCategory,
       filename: `${stem}.gpkg`,
-      style: style(REGION_PALETTE[i % REGION_PALETTE.length]),
+      style: style(
+        REGION_PALETTE[i % REGION_PALETTE.length],
+        regionVisible[stem] ?? true,
+      ),
     }));
-  }, [regionPolygons]);
+  }, [regionPolygons, regionVisible]);
 
   const extraLayers = React.useMemo(() => {
     const layers: unknown[] = [];
+    // Fold overlay first so stations draw on top of it. The backend
+    // reprojects the rotated GeoTIFF to Web-Mercator PNG tiles at
+    // upload time, so deck.gl's TileLayer does the standard {z}/{x}/{y}
+    // dance — no hand-placed quad, no rotation handling on the client.
+    if (foldMeta && foldTileVersion && projectId !== null && foldVisible) {
+      const tileUrl = foldTilesUrlTemplate(projectId, foldTileVersion);
+      const [west, south, east, north] = foldMeta.bounds;
+      layers.push(
+        new TileLayer({
+          id: `fold-tiles:${foldTileVersion}`,
+          data: tileUrl,
+          // The tile endpoint sits behind the session cookie. deck.gl's
+          // URL loader doesn't carry cookies by default, so push the
+          // flag through loadOptions — @loaders.gl/images forwards this
+          // to the underlying ``fetch`` call.
+          loadOptions: {
+            fetch: { credentials: "include" },
+          },
+          minZoom: foldMeta.min_zoom,
+          maxZoom: foldMeta.max_zoom,
+          tileSize: 256,
+          extent: [west, south, east, north],
+          pickable: false,
+          // deck.gl renders each tile as its own BitmapLayer. The bbox
+          // discriminator ("west" key) distinguishes geo tiles from the
+          // non-geo (OSM-style) variant — we're always geo.
+          renderSubLayers: (props) => {
+            const data = props.data as
+              | ImageBitmap
+              | HTMLImageElement
+              | null;
+            if (!data) return null;
+            const bbox = props.tile.bbox as {
+              west: number;
+              south: number;
+              east: number;
+              north: number;
+            };
+            return new BitmapLayer({
+              id: props.id,
+              image: data,
+              bounds: [bbox.west, bbox.south, bbox.east, bbox.north],
+              opacity: 0.65,
+              pickable: false,
+            });
+          },
+        }),
+      );
+    }
     // Station radius is in world meters so dots grow/shrink with zoom.
     // The clamps keep them visible at extreme zoom-out and from turning
     // into blobs at extreme zoom-in. 5 m ~ one bin for typical seismic
     // grids with RPI/SPI 25–50 m.
     const radiusMeters = 5;
-    if (sPts && sPts.points.length > 0) {
+    if (sPts && sPts.points.length > 0 && sVisible) {
       layers.push(
         new ScatterplotLayer({
           id: "grid-s",
@@ -93,7 +177,7 @@ export function DesignGridViewport({
         }),
       );
     }
-    if (rPts && rPts.points.length > 0) {
+    if (rPts && rPts.points.length > 0 && rVisible) {
       layers.push(
         new ScatterplotLayer({
           id: "grid-r",
@@ -109,7 +193,16 @@ export function DesignGridViewport({
       );
     }
     return layers;
-  }, [rPts, sPts]);
+  }, [
+    rPts,
+    sPts,
+    foldMeta,
+    foldTileVersion,
+    projectId,
+    foldVisible,
+    rVisible,
+    sVisible,
+  ]);
 
   const hasStations =
     (rPts?.points.length ?? 0) + (sPts?.points.length ?? 0) > 0;
@@ -163,16 +256,40 @@ export function DesignGridViewport({
   }
 
   const legendItems = [
+    ...(foldMeta
+      ? [{
+          key: "fold",
+          color: "#8b5cf6",
+          label: `Fold ${foldMeta.value_min}–${foldMeta.value_max} (${foldMeta.colormap})`,
+          visible: foldVisible,
+          onToggle: () => setFoldVisible((v) => !v),
+        }]
+      : []),
     ...(rPts && rPts.points.length > 0
-      ? [{ key: "r", color: "#3b82f6", label: `Receivers (${rPts.count})` }]
+      ? [{
+          key: "r",
+          color: "#3b82f6",
+          label: `Receivers (${rPts.count})`,
+          visible: rVisible,
+          onToggle: () => setRVisible((v) => !v),
+        }]
       : []),
     ...(sPts && sPts.points.length > 0
-      ? [{ key: "s", color: "#f97316", label: `Sources (${sPts.count})` }]
+      ? [{
+          key: "s",
+          color: "#f97316",
+          label: `Sources (${sPts.count})`,
+          visible: sVisible,
+          onToggle: () => setSVisible((v) => !v),
+        }]
       : []),
     ...regionPolygons.map((stem, i) => ({
       key: `region-${stem}`,
       color: REGION_PALETTE[i % REGION_PALETTE.length],
       label: stem,
+      visible: regionVisible[stem] ?? true,
+      onToggle: () =>
+        setRegionVisible((prev) => ({ ...prev, [stem]: !(prev[stem] ?? true) })),
     })),
   ];
 

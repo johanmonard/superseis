@@ -8,12 +8,19 @@ import { Button } from "@/components/ui/button";
 const { check: Check, pencil: Pencil, play: Play, plus: Plus, trash: Trash2, x: X } = appIcons;
 import { CoordinateInput } from "@/components/ui/coordinate-input";
 import { Field } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Icon } from "@/components/ui/icon";
 import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
 import { usePipelineReport } from "@/lib/use-pipeline-report";
 import { cn } from "@/lib/utils";
+import { formatApiError } from "@/services/api/client";
+import {
+  FOLD_COLORMAPS,
+  type FoldColormap,
+} from "@/services/api/project-fold";
+import { useRunFold } from "@/services/query/project-fold";
 import { useProjectSection } from "@/services/query/project-sections";
 
 /* ------------------------------------------------------------------
@@ -612,7 +619,153 @@ export function ProjectDesignOptions() {
           Process grid
         </Button>
       </div>
+
+      <ProcessFoldSection projectId={projectId} flush={flush} />
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------
+   Process fold — bin grid + offset band + colormap, then one-shot POST
+   to the fold endpoint. The viewport picks up the new PNG via its own
+   query invalidation in services/query/project-fold.ts.
+   ------------------------------------------------------------------ */
+
+const FOLD_INPUT_DEFAULTS = {
+  inline_bin: "0.5",
+  crossline_bin: "0.5",
+  offset_min: "0",
+  offset_max: "5000",
+  colormap: "viridis" as FoldColormap,
+};
+
+function ProcessFoldSection({
+  projectId,
+  flush,
+}: {
+  projectId: number | null;
+  flush: () => Promise<void>;
+}) {
+  const [inlineBin, setInlineBin] = React.useState(FOLD_INPUT_DEFAULTS.inline_bin);
+  const [crosslineBin, setCrosslineBin] = React.useState(FOLD_INPUT_DEFAULTS.crossline_bin);
+  const [offsetMin, setOffsetMin] = React.useState(FOLD_INPUT_DEFAULTS.offset_min);
+  const [offsetMax, setOffsetMax] = React.useState(FOLD_INPUT_DEFAULTS.offset_max);
+  const [colormap, setColormap] = React.useState<FoldColormap>(FOLD_INPUT_DEFAULTS.colormap);
+  const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
+
+  const runFoldMutation = useRunFold(projectId);
+
+  const handleProcessFold = React.useCallback(async () => {
+    if (!projectId || runFoldMutation.isPending) return;
+    await flush();
+    setErrorMsg(null);
+    try {
+      await runFoldMutation.mutateAsync({
+        inline_bin: Number(inlineBin),
+        crossline_bin: Number(crosslineBin),
+        offset_min: Number(offsetMin),
+        offset_max: Number(offsetMax),
+        colormap,
+      });
+    } catch (err) {
+      setErrorMsg(formatApiError(err));
+    }
+  }, [
+    projectId,
+    runFoldMutation,
+    inlineBin,
+    crosslineBin,
+    offsetMin,
+    offsetMax,
+    colormap,
+    flush,
+  ]);
+
+  const running = runFoldMutation.isPending;
+
+  return (
+    <>
+      <div className="h-px bg-[var(--color-border-subtle)]" />
+
+      <div className="grid grid-cols-2 gap-[var(--space-3)]">
+        <Field label="Inline bin (stations)" htmlFor="fold-inline-bin" layout="horizontal" labelWidth="7rem">
+          <Input
+            id="fold-inline-bin"
+            type="number"
+            step="0.1"
+            min="0"
+            value={inlineBin}
+            onChange={(e) => setInlineBin(e.target.value)}
+          />
+        </Field>
+        <Field label="Crossline bin (stations)" htmlFor="fold-crossline-bin" layout="horizontal" labelWidth="7rem">
+          <Input
+            id="fold-crossline-bin"
+            type="number"
+            step="0.1"
+            min="0"
+            value={crosslineBin}
+            onChange={(e) => setCrosslineBin(e.target.value)}
+          />
+        </Field>
+        <Field label="Offset min (m)" htmlFor="fold-offset-min" layout="horizontal" labelWidth="7rem">
+          <Input
+            id="fold-offset-min"
+            type="number"
+            step="50"
+            min="0"
+            value={offsetMin}
+            onChange={(e) => setOffsetMin(e.target.value)}
+          />
+        </Field>
+        <Field label="Offset max (m)" htmlFor="fold-offset-max" layout="horizontal" labelWidth="7rem">
+          <Input
+            id="fold-offset-max"
+            type="number"
+            step="50"
+            min="0"
+            value={offsetMax}
+            onChange={(e) => setOffsetMax(e.target.value)}
+          />
+        </Field>
+      </div>
+
+      <Field label="Colormap" htmlFor="fold-colormap" layout="horizontal">
+        <Select
+          id="fold-colormap"
+          value={colormap}
+          onChange={(e) => setColormap(e.target.value as FoldColormap)}
+        >
+          {FOLD_COLORMAPS.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </Select>
+      </Field>
+
+      {errorMsg ? (
+        <p role="alert" className="text-xs text-[var(--color-status-danger)]">
+          {errorMsg}
+        </p>
+      ) : null}
+
+      <div className="flex justify-end">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={handleProcessFold}
+          disabled={!projectId || running}
+        >
+          {running ? (
+            <Icon icon={appIcons.loader} size={12} className="mr-[var(--space-1)] animate-spin" />
+          ) : (
+            <Play size={12} className="mr-[var(--space-1)]" />
+          )}
+          Process fold
+        </Button>
+      </div>
+    </>
   );
 }
 
