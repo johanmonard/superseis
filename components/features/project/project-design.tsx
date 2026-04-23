@@ -3,13 +3,13 @@
 import * as React from "react";
 import { appIcons } from "@/components/ui/icon";
 
-import { AngleInput } from "@/components/ui/angle-input";
+import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 
 const {
-  barChart3: BarChart3,
   check: Check,
   pencil: Pencil,
+  play: Play,
   plus: Plus,
   trash: Trash2,
   x: X,
@@ -18,7 +18,6 @@ import { SliderInput } from "@/components/ui/slider-input";
 import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
-import { PanelHeaderSlot } from "@/components/features/project/project-settings-page";
 
 /* ------------------------------------------------------------------
    Types
@@ -35,7 +34,6 @@ interface DesignGroup {
   activeRp: string;
   spSalvo: string;
   roll: string;
-  rlAzimuth: string;
 }
 
 function createGroup(name: string, overrides?: Partial<DesignGroup>): DesignGroup {
@@ -50,7 +48,6 @@ function createGroup(name: string, overrides?: Partial<DesignGroup>): DesignGrou
     activeRp: "0",
     spSalvo: "0",
     roll: "0",
-    rlAzimuth: "0",
     ...overrides,
   };
 }
@@ -262,24 +259,6 @@ export function ProjectDesign({
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
-      {onAnalyzeToggle && (
-        <PanelHeaderSlot>
-          <button
-            type="button"
-            onClick={onAnalyzeToggle}
-            aria-pressed={analysisOpen}
-            className={cn(
-              "flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] px-[var(--space-2)] py-[var(--space-1)] text-xs font-medium transition-colors",
-              analysisOpen
-                ? "bg-[var(--color-accent)] text-[var(--color-accent-foreground)]"
-                : "bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
-            )}
-          >
-            <BarChart3 size={12} /> Analysis
-          </button>
-        </PanelHeaderSlot>
-      )}
-
       <GroupSelector
         groups={groups}
         activeId={activeId}
@@ -372,15 +351,22 @@ export function ProjectDesign({
           />
         </Field>
 
-        <Field label="RL Azimuth" layout="horizontal">
-          <AngleInput
-            value={Number(activeGroup.rlAzimuth) || 0}
-            onChange={(v) => updateGroup(activeGroup.id, { rlAzimuth: String(v) })}
-            min={0}
-            max={360}
-            step={0.01}
-          />
-        </Field>
+        {onAnalyzeToggle && (
+          <>
+            <div className="h-px bg-[var(--color-border-subtle)]" />
+            <div className="flex justify-end">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={onAnalyzeToggle}
+                aria-pressed={analysisOpen}
+              >
+                <Play size={12} className="mr-[var(--space-1)]" />
+                Analyze
+              </Button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
