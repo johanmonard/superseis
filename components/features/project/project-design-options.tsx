@@ -632,8 +632,6 @@ export function ProjectDesignOptions() {
    ------------------------------------------------------------------ */
 
 const FOLD_INPUT_DEFAULTS = {
-  inline_bin: "0.5",
-  crossline_bin: "0.5",
   offset_min: "0",
   offset_max: "5000",
   colormap: "viridis" as FoldColormap,
@@ -646,8 +644,6 @@ function ProcessFoldSection({
   projectId: number | null;
   flush: () => Promise<void>;
 }) {
-  const [inlineBin, setInlineBin] = React.useState(FOLD_INPUT_DEFAULTS.inline_bin);
-  const [crosslineBin, setCrosslineBin] = React.useState(FOLD_INPUT_DEFAULTS.crossline_bin);
   const [offsetMin, setOffsetMin] = React.useState(FOLD_INPUT_DEFAULTS.offset_min);
   const [offsetMax, setOffsetMax] = React.useState(FOLD_INPUT_DEFAULTS.offset_max);
   const [colormap, setColormap] = React.useState<FoldColormap>(FOLD_INPUT_DEFAULTS.colormap);
@@ -661,8 +657,6 @@ function ProcessFoldSection({
     setErrorMsg(null);
     try {
       await runFoldMutation.mutateAsync({
-        inline_bin: Number(inlineBin),
-        crossline_bin: Number(crosslineBin),
         offset_min: Number(offsetMin),
         offset_max: Number(offsetMax),
         colormap,
@@ -673,8 +667,6 @@ function ProcessFoldSection({
   }, [
     projectId,
     runFoldMutation,
-    inlineBin,
-    crosslineBin,
     offsetMin,
     offsetMax,
     colormap,
@@ -688,26 +680,6 @@ function ProcessFoldSection({
       <div className="h-px bg-[var(--color-border-subtle)]" />
 
       <div className="grid grid-cols-2 gap-[var(--space-3)]">
-        <Field label="Inline bin (stations)" htmlFor="fold-inline-bin" layout="horizontal" labelWidth="7rem">
-          <Input
-            id="fold-inline-bin"
-            type="number"
-            step="0.1"
-            min="0"
-            value={inlineBin}
-            onChange={(e) => setInlineBin(e.target.value)}
-          />
-        </Field>
-        <Field label="Crossline bin (stations)" htmlFor="fold-crossline-bin" layout="horizontal" labelWidth="7rem">
-          <Input
-            id="fold-crossline-bin"
-            type="number"
-            step="0.1"
-            min="0"
-            value={crosslineBin}
-            onChange={(e) => setCrosslineBin(e.target.value)}
-          />
-        </Field>
         <Field label="Offset min (m)" htmlFor="fold-offset-min" layout="horizontal" labelWidth="7rem">
           <Input
             id="fold-offset-min"

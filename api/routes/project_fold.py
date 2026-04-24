@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -55,6 +56,10 @@ class FoldParams(BaseModel):
     offset_max: float
     active_lines: int | None
     active_stations: int | None
+    # ``inline_bin`` / ``crossline_bin`` stay in the response (derived
+    # server-side from the option's resolution + designs) so the UI can
+    # surface what was actually used, but are no longer accepted in the
+    # request.
 
 
 class FoldMetaResponse(BaseModel):
@@ -73,11 +78,11 @@ class FoldMetaResponse(BaseModel):
     height: int
     tiles_written: int
     params: FoldParams
+    input_fingerprint: str = ""
+    cached: bool = False
 
 
 class RunFoldRequest(BaseModel):
-    inline_bin: float = Field(default=0.5, gt=0.0)
-    crossline_bin: float = Field(default=0.5, gt=0.0)
     offset_min: float = Field(default=0.0, ge=0.0)
     offset_max: float = Field(default=5000.0, gt=0.0)
     colormap: str = Field(default="viridis")
@@ -135,19 +140,20 @@ async def run_fold(
     epsg = int(cfg.metadata.epsg) if cfg.metadata.epsg else 4326
 
     try:
-        meta = write_fold_for_option(
+        meta = await asyncio.to_thread(
+            write_fold_for_option,
             project_dir,
             epsg,
             cfg,
             option_name,
-            inline_bin=body.inline_bin,
-            crossline_bin=body.crossline_bin,
             offset_min=body.offset_min,
             offset_max=body.offset_max,
             colormap=body.colormap,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     return FoldMetaResponse(**meta)
 

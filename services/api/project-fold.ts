@@ -35,11 +35,13 @@ export interface FoldMetaResponse {
   height: number;
   tiles_written: number;
   params: FoldParams;
+  /** Short hash of the inputs that produced this fold. */
+  input_fingerprint?: string;
+  /** True when this response came from an existing on-disk fold. */
+  cached?: boolean;
 }
 
 export interface RunFoldRequest {
-  inline_bin: number;
-  crossline_bin: number;
   offset_min: number;
   offset_max: number;
   colormap: FoldColormap;
