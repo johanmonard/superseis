@@ -132,15 +132,13 @@ function useLandingAmbientSound(enabled: boolean) {
       window.addEventListener("touchstart", gestureHandler, true);
     };
 
-    audio.addEventListener("error", () => {
-      console.error("[ambient] audio load error", audio.error);
-    });
+    let disposed = false;
 
     audio
       .play()
       .then(() => setBlocked(false))
-      .catch((err) => {
-        console.info("[ambient] autoplay blocked, waiting for gesture", err?.name ?? err);
+      .catch(() => {
+        if (disposed) return;
         setBlocked(true);
         attachGesture();
       });
@@ -148,8 +146,11 @@ function useLandingAmbientSound(enabled: boolean) {
     raf = requestAnimationFrame(tick);
 
     return () => {
+      disposed = true;
       cancelAnimationFrame(raf);
       audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
       removeGesture();
     };
   }, [enabled]);
