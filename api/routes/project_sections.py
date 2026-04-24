@@ -573,19 +573,6 @@ def _rebuild_typed_offsetters(cfg: Any, ui_data: dict[str, Any]) -> bool:
         cfg.active_options.offsetter = active_name
         changed = True
 
-    # --- Cascade: sync active grid with active offsetter's designOption --
-    # Offsets depend on the theoretical grid carrying the regioning the
-    # offsetter expects. Same names by UI contract — resync so a stale
-    # active_options.grid doesn't silently produce a regioning-free grid.
-    if active_name:
-        active_cfg = next((c for c in configs if (c.get("name") or "").strip() == active_name), None)
-        if active_cfg is not None:
-            design_option_name = (active_cfg.get("designOption") or "").strip()
-            if design_option_name and design_option_name in (cfg.grid or {}):
-                if cfg.active_options.grid != design_option_name:
-                    cfg.active_options.grid = design_option_name
-                    changed = True
-
     return changed
 
 
