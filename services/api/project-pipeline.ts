@@ -138,6 +138,7 @@ export type ClosureStepStatus =
   | 'pending'
   | 'running'
   | 'completed'
+  | 'cached'
   | 'failed'
   | 'skipped'
 

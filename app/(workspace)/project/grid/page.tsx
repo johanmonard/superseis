@@ -10,6 +10,7 @@ import {
   useGridRegioning,
   useInvalidateGridArtifacts,
 } from "@/services/query/project-grid-artifacts";
+import { useInvalidateFoldArtifacts } from "@/services/query/project-fold";
 
 const DesignGridViewport = dynamic(
   () =>
@@ -25,8 +26,13 @@ export default function GridPage() {
   const { state: pipelineState } = usePipelineReport();
 
   // When a grid closure finishes successfully, invalidate the cached
-  // artifact queries so the viewport refetches with fresh parquets.
+  // artifact queries so the viewport refetches with fresh parquets. The
+  // fold meta is also per-option on the backend (distinct tif + tile
+  // pyramid + fingerprinted meta), so invalidate it too — the viewport
+  // either pulls the existing option's cached fold or renders empty
+  // until the user clicks Process fold.
   const invalidateGrid = useInvalidateGridArtifacts();
+  const invalidateFold = useInvalidateFoldArtifacts();
   const prevGridDoneRef = React.useRef(false);
   React.useEffect(() => {
     const gridDone =
@@ -35,9 +41,10 @@ export default function GridPage() {
       !pipelineState.progress.error;
     if (gridDone && !prevGridDoneRef.current && projectId) {
       invalidateGrid.mutate(projectId);
+      invalidateFold.mutate(projectId);
     }
     prevGridDoneRef.current = gridDone;
-  }, [pipelineState, projectId, invalidateGrid]);
+  }, [pipelineState, projectId, invalidateGrid, invalidateFold]);
 
   const { data: regioning } = useGridRegioning(projectId);
 

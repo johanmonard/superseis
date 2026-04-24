@@ -24,6 +24,7 @@ from api.db.engine import get_db
 from api.db.models import Project
 from api.dojo import get_dojo_project_service
 
+from dojo.v3.domain.pipeline import grid_artifacts_dir
 from dojo.v3.services.project_service import ProjectNotFoundError, ProjectService
 
 router = APIRouter(
@@ -125,7 +126,8 @@ async def get_grid_stations(
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="Dojo project not found")
 
-    path = project_dir / "work" / "artifacts" / "grid" / f"{ptype}.parquet"
+    active_grid = cfg.active_options.grid or ""
+    path = grid_artifacts_dir(project_dir, active_grid) / f"{ptype}.parquet"
     if not path.exists():
         raise HTTPException(
             status_code=404,

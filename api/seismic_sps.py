@@ -49,14 +49,16 @@ def _build_point_table(parquet_path: Path, kind: str) -> PointTable:
     return PointTable(kind=kind, table=sps_table)
 
 
-def write_theoretical_sps_files(project_dir: Path | str) -> None:
+def write_theoretical_sps_files(project_dir: Path | str, option_name: str) -> None:
     """Emit ``theoretical.r01`` and ``theoretical.s01`` next to the parquets.
 
     No-op if either parquet is missing. Mirrors the tolerant contract of
     the surrounding gpkg writers: callers wrap this in a broad except so
     SPS emission can never fail the pipeline.
     """
-    grid_dir = Path(project_dir) / "work" / "artifacts" / "grid"
+    from dojo.v3.domain.pipeline import grid_artifacts_dir
+
+    grid_dir = grid_artifacts_dir(Path(project_dir), option_name)
     pairs = (("r.parquet", "R", "theoretical.r01"),
              ("s.parquet", "S", "theoretical.s01"))
     for parquet_name, kind, out_name in pairs:

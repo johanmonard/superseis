@@ -21,6 +21,8 @@ import numpy as np
 import pandas as pd
 from shapely.geometry import MultiLineString, Point
 
+from dojo.v3.domain.pipeline import grid_artifacts_dir
+
 
 SEISMIC_DIR_NAME = "seismic"
 THEORETICAL_GRID_STEM = "theoretical_grid"
@@ -101,7 +103,7 @@ def write_theoretical_grid_gpkg(
     """
     if not option_name:
         return None
-    grid_dir = project_dir / "work" / "artifacts" / "grid"
+    grid_dir = grid_artifacts_dir(project_dir, option_name)
     parts: list[gpd.GeoDataFrame] = []
     for ptype, fclass in (("r", "receivers"), ("s", "sources")):
         path = grid_dir / f"{ptype}.parquet"
@@ -294,7 +296,7 @@ def write_grid_mesh_gpkg(
     # Pull station positions from the parquets the GRID step just wrote.
     # The r/s parquets share the same frame; either is fine, but we merge
     # them so the mesh extent covers both sides.
-    grid_dir = project_dir / "work" / "artifacts" / "grid"
+    grid_dir = grid_artifacts_dir(project_dir, option_name)
     station_xy_parts: list[np.ndarray] = []
     for ptype in ("r", "s"):
         p = grid_dir / f"{ptype}.parquet"

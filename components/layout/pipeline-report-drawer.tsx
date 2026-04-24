@@ -82,6 +82,8 @@ function StatusDot({ status }: { status: ClosureStepStatus }) {
       return <Loader size={12} className="animate-spin text-[var(--color-accent)]" />;
     case "completed":
       return <CircleCheck size={12} className="text-[var(--color-status-success)]" />;
+    case "cached":
+      return <CircleCheck size={12} className="text-[var(--color-text-muted)]" />;
     case "failed":
       return <AlertTriangle size={12} className="text-[var(--color-status-danger)]" />;
     case "skipped":

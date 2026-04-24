@@ -42,3 +42,15 @@ export function useRunFold(projectId: number | null) {
     },
   });
 }
+
+/** Drop the cached fold meta so the viewport refetches for the active option. */
+export function useInvalidateFoldArtifacts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (projectId: number) => {
+      await qc.invalidateQueries({
+        queryKey: foldKeys.project(projectId),
+      });
+    },
+  });
+}

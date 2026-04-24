@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import threading
 from typing import Any, Optional
 
@@ -27,8 +26,6 @@ from api.seismic_gpkg import (
     write_offset_grid_gpkg,
     write_theoretical_grid_gpkg,
 )
-from api.seismic_sps import write_theoretical_sps_files
-
 from dojo.v3.adapters.v3_runner import V3Runner
 from dojo.v3.domain.pipeline import STEP_ORDER, Step, StepStatus, steps_in_closure
 from dojo.v3.services.pipeline_service import PipelineService
@@ -76,7 +73,6 @@ def _post_step_seismic_artifacts(
         if step == Step.GRID:
             write_theoretical_grid_gpkg(project_dir, epsg, option_name)
             _write_option_grid_mesh(cfg, project_dir, epsg, option_name)
-            write_theoretical_sps_files(project_dir)
         elif step == Step.OFFSETS:
             write_offset_grid_gpkg(project_dir, epsg, option_name)
     except Exception:
@@ -358,37 +354,50 @@ async def run_step_closure(
     if existing and not existing["done"]:
         return _serialize_closure(existing)
 
-    # Resolve dirty upstream + the target itself, preserving topological
-    # order from STEP_ORDER.
+    # Plan the closure. Every step in the closure is reported back to the
+    # UI so the user sees the full dependency chain — clean ones show as
+    # "cached" up-front; dirty ones + the target run through dojo.
     try:
         plan = pipeline_svc.plan(project_id)
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="Dojo project not found")
-    closure_set = set(steps_in_closure([target_step]))
+    closure_steps: list[Step] = [
+        s for s in STEP_ORDER if s in set(steps_in_closure([target_step]))
+    ]
     plan_by_step = {sp.step: sp for sp in plan.steps}
-    steps_to_run: list[Step] = []
-    for step in STEP_ORDER:
-        if step not in closure_set:
-            continue
-        sp = plan_by_step.get(step)
-        # Always run the target (even if clean) so the viewport reflects
-        # the current config; otherwise only run dirty steps.
-        if step == target_step or (sp is not None and sp.needs_run):
-            steps_to_run.append(step)
 
-    state: dict[str, Any] = {
-        "target": step_name,
-        "steps": [
-            {
-                "step": s.value,
+    steps_report: list[dict[str, Any]] = []
+    steps_to_run: list[Step] = []
+    for step in closure_steps:
+        sp = plan_by_step.get(step)
+        is_dirty = sp is not None and sp.needs_run
+        # Target is always invoked so dojo can confirm cache status and
+        # refresh the viewport-facing artifacts if needed.
+        will_invoke = step == target_step or is_dirty
+        if will_invoke:
+            steps_to_run.append(step)
+            steps_report.append({
+                "step": step.value,
                 "status": "pending",
                 "fraction": 0.0,
                 "message": "",
                 "messages": [],
                 "error": None,
-            }
-            for s in steps_to_run
-        ],
+            })
+        else:
+            cache_msg = f"{step.value} up to date — cached"
+            steps_report.append({
+                "step": step.value,
+                "status": "cached",
+                "fraction": 1.0,
+                "message": cache_msg,
+                "messages": [f"[100%] {cache_msg}"],
+                "error": None,
+            })
+
+    state: dict[str, Any] = {
+        "target": step_name,
+        "steps": steps_report,
         "current_index": 0,
         "done": False,
         "error": None,
@@ -399,8 +408,18 @@ async def run_step_closure(
         state["done"] = True
         return _serialize_closure(state)
 
+    # Map each runnable step to its position in state["steps"] so progress
+    # updates land on the right entry (clean-cached steps live alongside
+    # runnable ones in the report).
+    step_entry_index: dict[Step, int] = {
+        Step(entry["step"]): i
+        for i, entry in enumerate(state["steps"])
+        if entry["status"] == "pending"
+    }
+
     def run_in_thread():
-        for idx, step in enumerate(steps_to_run):
+        for step in steps_to_run:
+            idx = step_entry_index[step]
             state["current_index"] = idx
             entry = state["steps"][idx]
             entry["status"] = "running"
@@ -416,12 +435,28 @@ async def run_step_closure(
                     entry["status"] = "failed"
                     entry["error"] = manifest.error or "Step failed"
                     state["error"] = f"{step.value}: {entry['error']}"
-                    # Skip remaining steps on failure
-                    for j in range(idx + 1, len(state["steps"])):
-                        state["steps"][j]["status"] = "skipped"
+                    # Skip remaining runnable steps on failure.
+                    seen = False
+                    for other in steps_to_run:
+                        if other is step:
+                            seen = True
+                            continue
+                        if seen:
+                            state["steps"][step_entry_index[other]]["status"] = "skipped"
                     break
-                entry["status"] = "completed"
-                entry["fraction"] = 1.0
+                if manifest.status == StepStatus.CACHED:
+                    scope_note = (
+                        f" for option {manifest.scope_key!r}"
+                        if manifest.scope_key else ""
+                    )
+                    cache_msg = f"{step.value} up to date — cached{scope_note}"
+                    entry["status"] = "cached"
+                    entry["fraction"] = 1.0
+                    entry["message"] = cache_msg
+                    entry["messages"].append(f"[100%] {cache_msg}")
+                else:
+                    entry["status"] = "completed"
+                    entry["fraction"] = 1.0
                 _post_step_seismic_artifacts(dojo_svc, project_id, step)
             except ProjectNotFoundError:
                 entry["status"] = "failed"
