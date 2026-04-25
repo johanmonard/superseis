@@ -26,6 +26,8 @@ import {
   setMapViewState,
   updateMapSessionState,
 } from "@/lib/map-view-state";
+import { defaultTileIndex } from "@/lib/default-tile";
+import { useIsDarkTheme } from "@/lib/use-is-dark-theme";
 
 type TileGroup = "Satellite" | "Color" | "LightNoColor" | "Dark";
 
@@ -2665,17 +2667,13 @@ const GLOBE_CSS = `
     gap: 8px;
     padding: 6px 10px;
     border-radius: 999px;
-    background-color: rgba(255, 255, 255, 0.92);
-    border: 1px solid rgba(15, 23, 42, 0.12);
-    box-shadow: 0 6px 20px rgba(15, 23, 42, 0.18);
+    background-color: color-mix(in srgb, var(--color-bg-surface) 92%, transparent);
+    border: 1px solid var(--color-border-subtle);
+    box-shadow: 0 6px 20px var(--color-shadow-alpha);
     cursor: grab;
     user-select: none;
     backdrop-filter: blur(8px);
-  }
-  [data-theme-kind="dark"] .glb-fs-toolbar {
-    background-color: rgba(15, 23, 42, 0.82);
-    border-color: rgba(255, 255, 255, 0.12);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+    color: var(--color-text-primary);
   }
   .glb-fs-toolbar--dragging { cursor: grabbing; }
 
@@ -3117,29 +3115,22 @@ const GLOBE_CSS = `
     pointer-events: none;
     padding: 6px 10px;
     border-radius: 8px;
-    background-color: rgba(255, 255, 255, 0.9);
-    border: 1px solid rgba(15, 23, 42, 0.12);
-    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+    background-color: color-mix(in srgb, var(--color-bg-surface) 90%, transparent);
+    border: 1px solid var(--color-border-subtle);
+    box-shadow: 0 4px 12px var(--color-shadow-alpha);
     backdrop-filter: blur(6px);
     font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
     font-variant-numeric: tabular-nums;
     font-size: 11px;
     line-height: 1.45;
-    color: #1e293b;
+    color: var(--color-text-primary);
     user-select: none;
     white-space: nowrap;
   }
-  [data-theme-kind="dark"] .glb-cursor-readout {
-    background-color: rgba(15, 23, 42, 0.85);
-    border-color: rgba(255, 255, 255, 0.12);
-    color: #e2e8f0;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
-  }
   .glb-cursor-readout__label {
-    color: #64748b;
+    color: var(--color-text-muted);
     margin-right: 4px;
   }
-  [data-theme-kind="dark"] .glb-cursor-readout__label { color: #94a3b8; }
   .glb-cursor-readout__toggle {
     display: flex;
     align-items: center;
@@ -3150,8 +3141,7 @@ const GLOBE_CSS = `
     user-select: none;
   }
   .glb-cursor-readout__toggle input { margin: 0; cursor: pointer; }
-  .glb-cursor-readout__conv { color: #64748b; margin-left: 2px; }
-  [data-theme-kind="dark"] .glb-cursor-readout__conv { color: #94a3b8; }
+  .glb-cursor-readout__conv { color: var(--color-text-muted); margin-left: 2px; }
 
   .glb-measure-readout {
     position: absolute;
@@ -3318,43 +3308,35 @@ const GLOBE_CSS = `
     gap: 4px;
     padding: 8px 10px 8px 8px;
     border-radius: 8px;
-    background-color: rgba(255, 255, 255, 0.92);
-    border: 1px solid rgba(15, 23, 42, 0.12);
-    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+    background-color: color-mix(in srgb, var(--color-bg-surface) 92%, transparent);
+    border: 1px solid var(--color-border-subtle);
+    box-shadow: 0 4px 12px var(--color-shadow-alpha);
     backdrop-filter: blur(6px);
     font-family: system-ui, sans-serif;
     font-size: 12px;
-    color: #1e293b;
+    color: var(--color-text-primary);
     max-width: 280px;
     max-height: calc(100% - 20px);
     overflow-y: auto;
     user-select: none;
-  }
-  [data-theme-kind="dark"] .glb-legend {
-    background-color: rgba(15, 23, 42, 0.85);
-    border-color: rgba(255, 255, 255, 0.12);
-    color: #e2e8f0;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
   }
   .glb-legend__title {
     font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: #64748b;
+    color: var(--color-text-muted);
     margin: 0 0 2px 2px;
   }
-  [data-theme-kind="dark"] .glb-legend__title { color: #94a3b8; }
   .glb-legend__group {
     font-size: 9px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: #64748b;
+    color: var(--color-text-muted);
     margin: 5px 0 1px 2px;
   }
   .glb-legend__group:first-child { margin-top: 0; }
-  [data-theme-kind="dark"] .glb-legend__group { color: #94a3b8; }
   .glb-legend__row {
     display: flex;
     align-items: center;
@@ -3364,10 +3346,7 @@ const GLOBE_CSS = `
     border-radius: 4px;
   }
   .glb-legend__row:hover {
-    background-color: rgba(15, 23, 42, 0.06);
-  }
-  [data-theme-kind="dark"] .glb-legend__row:hover {
-    background-color: rgba(255, 255, 255, 0.06);
+    background-color: var(--color-bg-elevated);
   }
   .glb-legend__checkbox {
     margin: 0;
@@ -3379,12 +3358,9 @@ const GLOBE_CSS = `
     width: 14px;
     height: 14px;
     border-radius: 3px;
-    border: 1px solid rgba(15, 23, 42, 0.25);
+    border: 1px solid var(--color-border-strong);
     flex-shrink: 0;
     transition: opacity 120ms;
-  }
-  [data-theme-kind="dark"] .glb-legend__swatch {
-    border-color: rgba(255, 255, 255, 0.25);
   }
   .glb-legend__row--hidden .glb-legend__swatch {
     opacity: 0.3;
@@ -3829,12 +3805,28 @@ export function GisGlobeViewport({
   const containerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<MLMap | null>(null);
   const [tileIndex, setTileIndex] = React.useState(
-    () => getMapSessionState(viewStateKey)?.tileIndex ?? 0
+    () =>
+      getMapSessionState(viewStateKey)?.tileIndex ??
+      defaultTileIndex(TILE_SOURCES),
   );
   // Persist tile-provider pick so it sticks across settings-page nav.
   React.useEffect(() => {
     updateMapSessionState(viewStateKey, { tileIndex });
   }, [tileIndex, viewStateKey]);
+  // Auto-swap CartoDB Dark ⇄ CartoDB Positron when the user toggles the
+  // theme kind. Only kicks in when the current tile is one of the two
+  // defaults — explicit non-CartoDB picks are preserved.
+  const isDarkTheme = useIsDarkTheme();
+  React.useEffect(() => {
+    const currentName = TILE_SOURCES[tileIndex]?.name;
+    if (currentName !== "CartoDB Dark" && currentName !== "CartoDB Positron") {
+      return;
+    }
+    const wantName = isDarkTheme ? "CartoDB Dark" : "CartoDB Positron";
+    if (currentName === wantName) return;
+    const wantIdx = TILE_SOURCES.findIndex((s) => s.name === wantName);
+    if (wantIdx >= 0) setTileIndex(wantIdx);
+  }, [isDarkTheme, tileIndex]);
   const [styleReady, setStyleReady] = React.useState(false);
   const [zoomDisplay, setZoomDisplay] = React.useState(DEFAULT_ZOOM);
   const [pitchDisplay, setPitchDisplay] = React.useState(0);

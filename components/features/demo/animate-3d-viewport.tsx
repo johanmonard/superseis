@@ -1,6 +1,8 @@
 "use client";
 
 import * as React from "react";
+import { defaultTileIndex } from "@/lib/default-tile";
+import { useIsDarkTheme } from "@/lib/use-is-dark-theme";
 import maplibregl, {
   type Map as MLMap,
   type StyleSpecification,
@@ -1099,7 +1101,22 @@ export function Animate3DViewport({
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<MLMap | null>(null);
-  const [tileIndex, setTileIndex] = React.useState(15); // CartoDB Dark
+  const [tileIndex, setTileIndex] = React.useState(() =>
+    defaultTileIndex(TILE_SOURCES),
+  );
+  // Theme-aware default-tile swap (Dark ⇄ Positron). Skipped when the user
+  // has explicitly picked a non-CartoDB tile.
+  const isDarkTheme = useIsDarkTheme();
+  React.useEffect(() => {
+    const currentName = TILE_SOURCES[tileIndex]?.name;
+    if (currentName !== "CartoDB Dark" && currentName !== "CartoDB Positron") {
+      return;
+    }
+    const wantName = isDarkTheme ? "CartoDB Dark" : "CartoDB Positron";
+    if (currentName === wantName) return;
+    const wantIdx = TILE_SOURCES.findIndex((s) => s.name === wantName);
+    if (wantIdx >= 0) setTileIndex(wantIdx);
+  }, [isDarkTheme, tileIndex]);
   const [styleReady, setStyleReady] = React.useState(false);
   const [zoomDisplay, setZoomDisplay] = React.useState(DEFAULT_ZOOM);
   const [pitchDisplay, setPitchDisplay] = React.useState(0);

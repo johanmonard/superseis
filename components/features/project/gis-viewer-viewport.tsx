@@ -10,6 +10,8 @@ import maplibregl, {
 import "maplibre-gl/dist/maplibre-gl.css";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 
+import { defaultTileIndex } from "@/lib/default-tile";
+import { useIsDarkTheme } from "@/lib/use-is-dark-theme";
 import { type FileCategory } from "@/services/api/project-files";
 import { useProjectFilesGeoJson } from "@/services/query/project-files";
 import type { VisibleFile, GisLayerStyle } from "./project-gis-viewer";
@@ -55,7 +57,9 @@ const TILE_SOURCES: TileSource[] = [
   { name: "Wikimedia", tiles: ["https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}.png"], attribution: "&copy; Wikimedia, &copy; OpenStreetMap contributors", maxZoom: 19, group: "Color" },
 ];
 
-const DEFAULT_TILE = 15; // CartoDB Dark
+// Default basemap is theme-aware (CartoDB Dark in dark mode, CartoDB Positron
+// in light mode); see ``defaultTileIndex``. Picked at initial mount only —
+// later theme switches don't override a user's tile choice.
 
 function buildStyle(src: TileSource): StyleSpecification {
   const raster: RasterSourceSpecification = {
@@ -422,7 +426,23 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
   const mapContainerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<MLMap | null>(null);
   const overlayRef = React.useRef<MapboxOverlay | null>(null);
-  const [tileIndex, setTileIndex] = React.useState(DEFAULT_TILE);
+  const [tileIndex, setTileIndex] = React.useState(() =>
+    defaultTileIndex(TILE_SOURCES),
+  );
+  // Auto-swap CartoDB Dark ⇄ CartoDB Positron when the user toggles the
+  // theme kind, but only if the current tile is one of those two defaults
+  // — preserves any explicit non-CartoDB choice.
+  const isDarkTheme = useIsDarkTheme();
+  React.useEffect(() => {
+    const currentName = TILE_SOURCES[tileIndex]?.name;
+    if (currentName !== "CartoDB Dark" && currentName !== "CartoDB Positron") {
+      return;
+    }
+    const wantName = isDarkTheme ? "CartoDB Dark" : "CartoDB Positron";
+    if (currentName === wantName) return;
+    const wantIdx = TILE_SOURCES.findIndex((s) => s.name === wantName);
+    if (wantIdx >= 0) setTileIndex(wantIdx);
+  }, [isDarkTheme, tileIndex]);
   const [styleReady, setStyleReady] = React.useState(false);
   const [zoomDisplay, setZoomDisplay] = React.useState(2);
   const [pitchDisplay, setPitchDisplay] = React.useState(0);

@@ -7,6 +7,8 @@ import "@geoman-io/leaflet-geoman-free";
 import "@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css";
 import { MapContainer, TileLayer, GeoJSON, useMap } from "react-leaflet";
 import type { GeoJSONFeatureCollection } from "@/lib/gpkg";
+import { defaultTileIndex } from "@/lib/default-tile";
+import { useIsDarkTheme } from "@/lib/use-is-dark-theme";
 
 const TILE_SOURCES: { name: string; url: string; attr: string; maxZoom: number }[] = [
   // --- Satellite / Aerial ---
@@ -879,7 +881,22 @@ export function GisViewport({
   onEdited: (features: GeoJSON.Feature[]) => void;
   onAdded: (feature: GeoJSON.Feature) => void;
 }) {
-  const [tileIndex, setTileIndex] = React.useState(0);
+  const [tileIndex, setTileIndex] = React.useState(() =>
+    defaultTileIndex(TILE_SOURCES),
+  );
+  // Theme-aware default-tile swap (Dark ⇄ Positron). Skipped when the user
+  // has explicitly picked a non-CartoDB tile.
+  const isDarkTheme = useIsDarkTheme();
+  React.useEffect(() => {
+    const currentName = TILE_SOURCES[tileIndex]?.name;
+    if (currentName !== "CartoDB Dark" && currentName !== "CartoDB Positron") {
+      return;
+    }
+    const wantName = isDarkTheme ? "CartoDB Dark" : "CartoDB Positron";
+    if (currentName === wantName) return;
+    const wantIdx = TILE_SOURCES.findIndex((s) => s.name === wantName);
+    if (wantIdx >= 0) setTileIndex(wantIdx);
+  }, [isDarkTheme, tileIndex]);
   React.useEffect(() => injectGeomanCss(), []);
 
   const hasData = data && data.features.length > 0;

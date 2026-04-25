@@ -283,7 +283,7 @@ export function CountryMap({ country, crsBounds }: CountryMapProps) {
           cx={size / 2}
           cy={size / 2}
           r={globeRadius}
-          fill="color-mix(in srgb, var(--color-accent) 8%, var(--color-bg-canvas))"
+          fill="var(--color-bg-elevated)"
           stroke="var(--color-border-subtle)"
         />
         <Geographies geography={GEO_URL}>
@@ -305,7 +305,7 @@ export function CountryMap({ country, crsBounds }: CountryMapProps) {
                       ? "var(--color-accent)"
                       : isHovered
                         ? "color-mix(in srgb, var(--color-accent) 30%, transparent)"
-                        : "var(--color-bg-elevated)"
+                        : "color-mix(in srgb, var(--color-accent) 8%, var(--color-bg-canvas))"
                   }
                   stroke="var(--color-border-strong)"
                   strokeWidth={0.5}
