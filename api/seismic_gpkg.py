@@ -25,9 +25,20 @@ from dojo.v3.domain.pipeline import grid_artifacts_dir
 
 
 SEISMIC_DIR_NAME = "seismic"
-THEORETICAL_GRID_STEM = "theoretical_grid"
-OFFSET_GRID_STEM = "offset_grid"
+# Filename stems for the three grid-derived gpkg products. Ordered so
+# every name starts with ``grid_`` — sorts the seismic listing into a
+# coherent block in the Files page (alongside ``fold_*`` rasters).
+THEORETICAL_GRID_STEM = "grid_theoretical"
+OFFSET_GRID_STEM = "grid_offset"
 GRID_MESH_STEM = "grid_mesh"
+
+# Pre-rename stems still found on disk for older projects. We match
+# them in the prune path and delete them once the new-named file lands
+# so legacy artifacts don't linger forever.
+_LEGACY_STEM_RENAMES: dict[str, str] = {
+    "theoretical_grid": THEORETICAL_GRID_STEM,
+    "offset_grid": OFFSET_GRID_STEM,
+}
 
 
 def _slug(name: str) -> str:
@@ -59,6 +70,23 @@ def ensure_seismic_dir(project_dir: Path) -> Path:
     return seismic
 
 
+def _drop_legacy_gpkg(seismic_dir: Path, current_stem: str, option_name: str) -> None:
+    """Delete the pre-rename gpkg for ``option_name`` if one is sitting next
+    to the freshly written file. Idempotent — tolerates missing files and
+    transient OS errors so the writer caller is never blocked by cleanup.
+    """
+    slug = _slug(option_name)
+    for legacy_stem, target_stem in _LEGACY_STEM_RENAMES.items():
+        if target_stem != current_stem:
+            continue
+        legacy = seismic_dir / f"{legacy_stem}__{slug}.gpkg"
+        if legacy.exists():
+            try:
+                legacy.unlink()
+            except OSError:
+                pass
+
+
 def prune_option_seismic_files(project_dir: Path, keep_option_names: list[str]) -> None:
     """Delete per-option grid .gpkg files whose option is not in ``keep``.
 
@@ -69,11 +97,20 @@ def prune_option_seismic_files(project_dir: Path, keep_option_names: list[str]) 
     if not seismic.is_dir():
         return
     keep_slugs = {_slug(n) for n in keep_option_names if n}
+    # Match new stems and pre-rename ones — legacy artifacts left over
+    # from earlier projects must still be reachable here so renamed or
+    # deleted options don't leave orphan .gpkg files behind.
+    candidate_stems = (
+        THEORETICAL_GRID_STEM,
+        OFFSET_GRID_STEM,
+        GRID_MESH_STEM,
+        *_LEGACY_STEM_RENAMES,
+    )
     for path in seismic.iterdir():
         if not path.is_file() or path.suffix != ".gpkg":
             continue
         stem = path.stem
-        for prefix in (THEORETICAL_GRID_STEM, OFFSET_GRID_STEM, GRID_MESH_STEM):
+        for prefix in candidate_stems:
             marker = f"{prefix}__"
             if stem.startswith(marker):
                 slug = stem[len(marker):]
@@ -133,6 +170,7 @@ def write_theoretical_grid_gpkg(
     seismic = ensure_seismic_dir(project_dir)
     out = seismic / theoretical_grid_fname(option_name)
     combined.to_file(out, driver="GPKG")
+    _drop_legacy_gpkg(seismic, THEORETICAL_GRID_STEM, option_name)
     return out
 
 
@@ -227,6 +265,7 @@ def write_offset_grid_gpkg(
     seismic = ensure_seismic_dir(project_dir)
     out = seismic / offset_grid_fname(option_name)
     combined.to_file(out, driver="GPKG")
+    _drop_legacy_gpkg(seismic, OFFSET_GRID_STEM, option_name)
     return out
 
 

@@ -20,6 +20,7 @@ from api.routes.project_sections import (
     _heal_typed_offsetters,
     _rebuild_typed_grid_design_def,
 )
+from api.seismic_fold import purge_fold_artifacts
 from api.seismic_gpkg import (
     ensure_seismic_dir,
     write_grid_mesh_gpkg,
@@ -51,12 +52,20 @@ def _post_step_seismic_artifacts(
     dojo_svc: ProjectService,
     project_id: int,
     step: Step,
+    *,
+    actually_ran: bool = True,
 ) -> None:
     """Mirror parquet output to ``inputs/gis/seismic/*.gpkg`` after a step.
 
     Kept tolerant: any failure to write the convenience .gpkg is silently
     swallowed so it can never fail the pipeline itself. The parquet is
     authoritative.
+
+    When ``actually_ran`` is True (the step re-executed, not a cache
+    hit), saved fold rasters tied to the active option are purged: a
+    GRID rerun invalidates fold for both sources, an OFFSETS rerun
+    invalidates only the offsets-source fold. The user re-renders the
+    fold maps they still want from the Process fold UI.
     """
     try:
         project_dir = dojo_svc.get_project_dir(project_id)
@@ -79,6 +88,16 @@ def _post_step_seismic_artifacts(
         # Deliberately silent — the Files page will simply lack this
         # convenience layer until the next successful run.
         pass
+    if actually_ran:
+        try:
+            if step == Step.GRID:
+                purge_fold_artifacts(project_dir, option_name)
+            elif step == Step.OFFSETS:
+                purge_fold_artifacts(project_dir, option_name, source="offsets")
+        except Exception:
+            # Same tolerance as the .gpkg side — fold cleanup is a
+            # convenience, never load-bearing.
+            pass
 
 
 def _write_option_grid_mesh(
@@ -281,7 +300,9 @@ async def run_step(
                 "error": manifest.error,
             }
             if manifest.status == StepStatus.COMPLETED:
-                _post_step_seismic_artifacts(dojo_svc, project_id, step)
+                _post_step_seismic_artifacts(
+                    dojo_svc, project_id, step, actually_ran=True
+                )
         except ProjectNotFoundError:
             _step_progress[progress_key]["result"] = {
                 "status": "failed", "error": "Dojo project not found",
@@ -457,7 +478,12 @@ async def run_step_closure(
                 else:
                     entry["status"] = "completed"
                     entry["fraction"] = 1.0
-                _post_step_seismic_artifacts(dojo_svc, project_id, step)
+                _post_step_seismic_artifacts(
+                    dojo_svc,
+                    project_id,
+                    step,
+                    actually_ran=manifest.status != StepStatus.CACHED,
+                )
             except ProjectNotFoundError:
                 entry["status"] = "failed"
                 entry["error"] = "Dojo project not found"

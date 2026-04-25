@@ -156,10 +156,21 @@ async def list_all_files(
             # SEISMIC section (even before the first pipeline run).
             gis_path.mkdir(parents=True, exist_ok=True)
         if gis_path.exists():
-            result[cat] = sorted(
-                f.name for f in gis_path.iterdir()
-                if f.is_file() and f.suffix == ".gpkg"
-            )
+            if cat == "seismic":
+                # Include fold rasters (.tif) alongside the .gpkg layers
+                # so the Files page surfaces every offset-range render
+                # the user has produced. The companion _tiles dirs and
+                # .meta.json sidecars are implementation detail and stay
+                # hidden.
+                result[cat] = sorted(
+                    f.name for f in gis_path.iterdir()
+                    if f.is_file() and f.suffix in (".gpkg", ".tif")
+                )
+            else:
+                result[cat] = sorted(
+                    f.name for f in gis_path.iterdir()
+                    if f.is_file() and f.suffix == ".gpkg"
+                )
         else:
             result[cat] = []
     # DEM lists .tif files
