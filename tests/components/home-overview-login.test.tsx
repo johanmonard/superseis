@@ -6,6 +6,18 @@ const mocks = vi.hoisted(() => ({
   logoutMutate: vi.fn(),
   createProjectMutate: vi.fn(),
   setActiveProject: vi.fn(),
+  routerPush: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    push: mocks.routerPush,
+    replace: vi.fn(),
+    refresh: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    prefetch: vi.fn(),
+  }),
 }));
 
 vi.mock("next/image", () => ({
@@ -61,6 +73,7 @@ describe("HomeOverview landing sign-in", () => {
     mocks.logoutMutate.mockReset();
     mocks.createProjectMutate.mockReset();
     mocks.setActiveProject.mockReset();
+    mocks.routerPush.mockReset();
 
     vi.stubGlobal("Audio", function Audio() {
       return {

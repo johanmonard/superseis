@@ -5,18 +5,23 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { appIcons } from "@/components/ui/icon";
 
 const {
-  chevronRight: ChevronRight,
-  folderOpen: FolderOpen,
   loader: Loader,
   logIn: LogIn,
-  volume2: Volume2,
-  volumeX: VolumeX,
 } = appIcons;
 
 import { useActiveProject } from "@/lib/use-active-project";
+import { useSoundPreference } from "@/lib/use-sound-preference";
+import { useThemePreferences } from "@/lib/use-theme-preferences";
+import {
+  THEME_REGISTRY,
+  getThemeFamilies,
+  type ThemeMode,
+} from "@/lib/theme";
+import { Icon } from "@/components/ui/icon";
 import {
   useAuthSession,
   useLoginMutation,
@@ -27,19 +32,11 @@ import { useProjectList, useCreateProject } from "@/services/query/project";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogBody,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { ProjectSettingsWorkflow } from "./project-settings-workflow";
 import {
   AnimationLoop,
   SpinningCube,
@@ -251,7 +248,7 @@ function cardSlotStyle(
   };
 }
 
-const ABOUT_STAGGER_MS = 700;
+const ABOUT_STAGGER_MS = 200;
 const ABOUT_INITIAL_DELAY_MS = 180;
 const ABOUT_MAX_COL_W = 208; // 20 % narrower than the previous 260 px cap.
 const ABOUT_COL_GAP = 24;
@@ -366,54 +363,102 @@ function AboutHoverCard({ children }: { children: React.ReactNode }) {
 
 function LandingUserMenu({
   session,
-  soundOn,
-  onToggleSound,
 }: {
   session: { email: string; is_admin: boolean };
-  soundOn: boolean;
-  onToggleSound: () => void;
 }) {
   const logoutMutation = useLogoutMutation();
+  const { prefs: themePrefs, updatePrefs: setThemePrefs } = useThemePreferences();
+  const [soundOn, setSoundOn] = useSoundPreference();
 
-  const initials = session.email.slice(0, 2).toUpperCase();
+  const currentThemeDef = THEME_REGISTRY.find((t) => t.id === themePrefs.mode);
+  const isDark = currentThemeDef?.kind === "dark";
+
+  const handleThemeChange = React.useCallback(
+    (nextMode: ThemeMode) => {
+      setThemePrefs((current) => ({ ...current, mode: nextMode }));
+    },
+    [setThemePrefs],
+  );
+
+  const toggleDarkMode = React.useCallback(() => {
+    setThemePrefs((current) => {
+      const def = THEME_REGISTRY.find((t) => t.id === current.mode);
+      const fallback = def?.kind === "dark" ? "default" : "dark";
+      return { ...current, mode: (def?.counterpart ?? fallback) as ThemeMode };
+    });
+  }, [setThemePrefs]);
 
   const handleLogout = React.useCallback(() => {
     logoutMutation.mutate();
   }, [logoutMutation]);
 
   return (
-    <div className="flex items-center gap-[var(--space-2)]">
-      <button
-        type="button"
-        onClick={onToggleSound}
-        aria-label={soundOn ? "Mute ambient sound" : "Unmute ambient sound"}
-        className={cn(
-          "flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-text-muted)]",
-          "transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]",
-        )}
+    <div className="flex items-center gap-[var(--space-1)]">
+      <Button
+        variant="ghost"
+        size="sm"
+        aria-label={isDark ? "Switch to light" : "Switch to dark"}
+        onClick={toggleDarkMode}
       >
-        {soundOn ? (
-          <Volume2 size={16} strokeWidth={1.75} />
-        ) : (
-          <VolumeX size={16} strokeWidth={1.75} />
-        )}
-      </button>
-
+        <Icon icon={isDark ? appIcons.sun : appIcons.moon} />
+      </Button>
       <Popover>
         <PopoverTrigger asChild>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="gap-[var(--space-2)]"
-            aria-label="Open session menu"
-          >
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-bg-elevated)] text-xs font-semibold text-[var(--color-text-primary)]">
-              {initials}
-            </span>
-            <span className="hidden max-w-28 truncate sm:inline">
-              {session.email}
-            </span>
+          <Button variant="ghost" size="sm" aria-label="Change theme">
+            <Icon icon={appIcons.palette} />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-48 p-[var(--space-2)]">
+          <div className="flex flex-col gap-[var(--space-1)]">
+            <p className="px-[var(--space-3)] pb-[var(--space-1)] pt-[var(--space-2)] text-xs font-medium text-[var(--color-text-muted)]">
+              Theme
+            </p>
+            {getThemeFamilies().map((family) => {
+              // Picker always lands on the family's dark variant; the
+              // sun/moon toggle handles the kind switch. One row per
+              // family — no separate light/dark entries.
+              const targetId = family.darkId;
+              const currentFamily = THEME_REGISTRY.find(
+                (t) => t.id === themePrefs.mode,
+              )?.family;
+              const isActive = currentFamily === family.family;
+              return (
+                <button
+                  key={family.family}
+                  type="button"
+                  onClick={() => handleThemeChange(targetId)}
+                  className={cn(
+                    "flex flex-col items-start gap-0.5 rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-2)] text-left text-sm transition-colors",
+                    isActive
+                      ? "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] font-medium text-[var(--color-accent)]"
+                      : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)]",
+                  )}
+                >
+                  <span>{family.family}</span>
+                  {family.description && (
+                    <span className="text-[10px] font-normal text-[var(--color-text-muted)]">
+                      {family.description}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </PopoverContent>
+      </Popover>
+      <Button
+        variant="ghost"
+        size="sm"
+        aria-label={soundOn ? "Mute ambient sound" : "Unmute ambient sound"}
+        aria-pressed={soundOn}
+        onClick={() => setSoundOn(!soundOn)}
+      >
+        <Icon icon={soundOn ? appIcons.volume2 : appIcons.volumeX} />
+      </Button>
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button variant="ghost" size="sm" aria-label="Open session menu">
+            <Icon icon={appIcons.user} />
           </Button>
         </PopoverTrigger>
         <PopoverContent align="end" className="w-72">
@@ -644,7 +689,7 @@ function LoginHoverCard({ children }: { children: React.ReactNode }) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <WireframeCard label="Login" onClick={() => {}}>
+      <WireframeCard label="Login" onClick={() => void handleSubmit()}>
         {children}
       </WireframeCard>
 
@@ -1090,54 +1135,17 @@ function WireframeCard({
   );
 }
 
-function ProjectListItem({
-  name,
-  updatedAt,
-  onClick,
-}: {
-  name: string;
-  updatedAt: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group flex w-full items-center gap-[var(--space-3)] rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] px-[var(--space-4)] py-[var(--space-3)] text-left transition-colors hover:border-[var(--color-border-strong)] hover:bg-[var(--color-bg-elevated)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]"
-    >
-      <FolderOpen
-        size={16}
-        strokeWidth={1.75}
-        className="shrink-0 text-[var(--color-text-muted)]"
-      />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-          {name}
-        </span>
-        <span className="text-xs text-[var(--color-text-muted)]">
-          Last modified {updatedAt}
-        </span>
-      </div>
-      <ChevronRight
-        size={14}
-        strokeWidth={2}
-        className="shrink-0 text-[var(--color-text-muted)] opacity-0 transition-opacity group-hover:opacity-100"
-      />
-    </button>
-  );
-}
 
 /* ------------------------------------------------------------------
    Main component
    ------------------------------------------------------------------ */
 
 export function HomeOverview() {
+  const router = useRouter();
   const isDark = useIsDarkTheme();
   const { activeProject, setActiveProject } = useActiveProject();
-  const { data: projects, isLoading: isLoadingProjects } = useProjectList();
+  const { data: projects } = useProjectList();
   const createMutation = useCreateProject();
-
-  const [showLoadDialog, setShowLoadDialog] = React.useState(false);
 
   const [landingMounted, setLandingMounted] = React.useState(false);
   React.useEffect(() => {
@@ -1160,7 +1168,7 @@ export function HomeOverview() {
     }
   }, [session, activeProject, setActiveProject]);
 
-  const [soundOn, setSoundOn] = React.useState(true);
+  const [soundOn] = useSoundPreference();
   const { blocked: soundBlocked } = useLandingAmbientSound(
     soundOn && !activeProject,
   );
@@ -1184,6 +1192,7 @@ export function HomeOverview() {
       {
         onSuccess: (project) => {
           setActiveProject({ id: project.id, name: project.name });
+          router.push("/project/definition");
         },
       }
     );
@@ -1191,13 +1200,16 @@ export function HomeOverview() {
 
   const handleLoadProject = (project: { id: number; name: string }) => {
     setActiveProject(project);
-    setShowLoadDialog(false);
+    router.push("/project/definition");
   };
 
-  /* ---- Welcome view (no project loaded) ---- */
-  if (!activeProject || !session) {
-    return (
-      <>
+  const handleOpenLastProject = () => {
+    const last = projectList[0];
+    if (last) handleLoadProject({ id: last.id, name: last.name });
+  };
+
+  return (
+    <>
         {/* User menu — drops down from above once `loggedIn` flips true, a
             touch after the card row starts cascading in. Renders an empty
             slot when no session so the transform can animate from -200%. */}
@@ -1212,11 +1224,7 @@ export function HomeOverview() {
           }}
         >
           {session ? (
-            <LandingUserMenu
-              session={session}
-              soundOn={soundOn}
-              onToggleSound={() => setSoundOn((v) => !v)}
-            />
+            <LandingUserMenu session={session} />
           ) : null}
         </div>
 
@@ -1295,7 +1303,7 @@ export function HomeOverview() {
                 <OpenProjectHoverCard
                   projects={projectList}
                   onSelect={handleLoadProject}
-                  onClickCard={() => setShowLoadDialog(true)}
+                  onClickCard={handleOpenLastProject}
                 >
                   <PendulumWave />
                 </OpenProjectHoverCard>
@@ -1341,85 +1349,6 @@ export function HomeOverview() {
         >
           click anywhere to enable sound
         </div>
-
-        <LoadProjectDialog
-          open={showLoadDialog}
-          onOpenChange={setShowLoadDialog}
-          projects={projectList}
-          isLoading={isLoadingProjects}
-          onSelect={handleLoadProject}
-        />
       </>
-    );
-  }
-
-  /* ---- Active project view — settings workflow ---- */
-  return (
-    <>
-      <div className="h-full w-full">
-        <ProjectSettingsWorkflow />
-      </div>
-
-      <LoadProjectDialog
-        open={showLoadDialog}
-        onOpenChange={setShowLoadDialog}
-        projects={projectList}
-        isLoading={isLoadingProjects}
-        onSelect={handleLoadProject}
-      />
-    </>
-  );
-}
-
-/* ------------------------------------------------------------------
-   Dialogs
-   ------------------------------------------------------------------ */
-
-function LoadProjectDialog({
-  open,
-  onOpenChange,
-  projects,
-  isLoading,
-  onSelect,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  projects: { id: number; name: string; updatedAt: string }[];
-  isLoading?: boolean;
-  onSelect: (project: { id: number; name: string }) => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogHeader>
-        <DialogTitle>Load Project</DialogTitle>
-      </DialogHeader>
-      <DialogBody>
-        {isLoading ? (
-          <p className="py-[var(--space-4)] text-center text-sm text-[var(--color-text-muted)]">
-            Loading projects...
-          </p>
-        ) : projects.length === 0 ? (
-          <p className="py-[var(--space-4)] text-center text-sm text-[var(--color-text-muted)]">
-            No projects found.
-          </p>
-        ) : (
-          <div className="flex flex-col gap-[var(--space-2)]">
-            {projects.map((p) => (
-              <ProjectListItem
-                key={p.id}
-                name={p.name}
-                updatedAt={p.updatedAt}
-                onClick={() => onSelect({ id: p.id, name: p.name })}
-              />
-            ))}
-          </div>
-        )}
-      </DialogBody>
-      <DialogFooter>
-        <Button variant="secondary" size="sm" onClick={() => onOpenChange(false)}>
-          Cancel
-        </Button>
-      </DialogFooter>
-    </Dialog>
   );
 }

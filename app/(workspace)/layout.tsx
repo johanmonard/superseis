@@ -6,10 +6,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { appConfig } from "../../config/app.config";
 import { navigation } from "../../config/navigation.config";
 import { filterNavigationForWorkspaceRelease } from "../../config/release.config";
-import { getWorkspacePageIdentity } from "../../config/workspace-page.config";
 import { WorkspaceLayout } from "../../components/layout/workspace-layout";
 import { WorkspaceSidebarNav } from "../../components/layout/workspace-sidebar-nav";
-import { WorkspacePageHeader } from "../../components/layout/workspace-page-header";
 import {
   Card,
   CardContent,
@@ -105,8 +103,6 @@ export default function WorkspaceRouteLayout({
     return released.filter((item) => !(item.adminOnly && !session?.is_admin));
   }, [session]);
 
-  const pageIdentity = getWorkspacePageIdentity(pathname);
-
   if (isLoading) {
     return (
       <WorkspaceStatusScreen
@@ -140,16 +136,11 @@ export default function WorkspaceRouteLayout({
               brandName={appConfig.name}
               brandTagline={appConfig.tagline}
               showAuthStubBanner={isAuthStub}
+              session={session}
             />
           }
         >
           <div className="flex h-full min-h-0 flex-col gap-[var(--layout-gap)] divide-y divide-[var(--color-layout-divider)]">
-            {!isLandingShell && session && (
-              <WorkspacePageHeader
-                session={session}
-                pageTitle={pageIdentity?.title}
-              />
-            )}
             <ErrorBoundary>
               <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
             </ErrorBoundary>

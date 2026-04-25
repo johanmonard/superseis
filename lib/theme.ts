@@ -20,10 +20,6 @@ export const THEME_REGISTRY: readonly ThemeDefinition[] = [
   { id: "zen-1-dark", label: "Zen 1 — Dark", family: "Zen 1", kind: "dark", counterpart: "zen-1-light", description: "Matcha + almond, warm earth tones" },
   { id: "zen-2-light", label: "Zen 2 — Light", family: "Zen 2", kind: "light", counterpart: "zen-2-dark", description: "Zen palette on Test 2 hairline flat-pane IDE" },
   { id: "zen-2-dark", label: "Zen 2 — Dark", family: "Zen 2", kind: "dark", counterpart: "zen-2-light", description: "Zen palette on Test 2 hairline flat-pane IDE" },
-  { id: "happy-1-light", label: "Happy 1 — Light", family: "Happy 1", kind: "light", counterpart: "happy-1-dark", description: "Vivid red-orange + pink + amber on cream" },
-  { id: "happy-1-dark", label: "Happy 1 — Dark", family: "Happy 1", kind: "dark", counterpart: "happy-1-light", description: "Vivid red-orange + pink + amber on cream" },
-  { id: "happy-2-light", label: "Happy 2 — Light", family: "Happy 2", kind: "light", counterpart: "happy-2-dark", description: "Sage + forest green with yellow + amber accents" },
-  { id: "happy-2-dark", label: "Happy 2 — Dark", family: "Happy 2", kind: "dark", counterpart: "happy-2-light", description: "Sage + forest green with yellow + amber accents" },
 ] as const;
 
 /**
@@ -67,11 +63,10 @@ export interface ThemePreferences {
 export const THEME_STORAGE_KEY = "app:theme-preferences";
 
 export const DEFAULT_THEME_PREFERENCES: ThemePreferences = {
-  mode: "default",
-  density: "compact",
+  mode: "dark",
+  density: "dense",
 };
 
-const VALID_DENSITIES: readonly ThemeDensity[] = ["compact", "comfortable", "dense"];
 const VALID_MODES: readonly ThemeMode[] = THEME_REGISTRY.map((t) => t.id);
 
 export function isThemeMode(value: unknown): value is ThemeMode {
@@ -96,9 +91,7 @@ export function loadThemePreferences(): ThemePreferences {
     const parsed = JSON.parse(raw) as Partial<ThemePreferences>;
     return {
       mode: isThemeMode(parsed.mode) ? parsed.mode : DEFAULT_THEME_PREFERENCES.mode,
-      density: VALID_DENSITIES.includes(parsed.density as ThemeDensity)
-        ? (parsed.density as ThemeDensity)
-        : DEFAULT_THEME_PREFERENCES.density,
+      density: DEFAULT_THEME_PREFERENCES.density,
     };
   } catch {
     return createDefaultThemePreferences();

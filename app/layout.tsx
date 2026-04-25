@@ -26,10 +26,7 @@ const themeRestoreScript = `
     var mode = Object.prototype.hasOwnProperty.call(kinds, p.mode) ? p.mode : ${JSON.stringify(DEFAULT_THEME_PREFERENCES.mode)};
     h.setAttribute("data-theme", mode);
     h.setAttribute("data-theme-kind", kinds[mode]);
-    h.setAttribute(
-      "data-density",
-      p.density === "comfortable" || p.density === "dense" ? p.density : "compact"
-    );
+    h.setAttribute("data-density", ${JSON.stringify(DEFAULT_THEME_PREFERENCES.density)});
   } catch(e) {}
 })();
 `;
