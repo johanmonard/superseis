@@ -25,12 +25,13 @@ from dojo.v3.domain.pipeline import grid_artifacts_dir
 
 
 SEISMIC_DIR_NAME = "seismic"
-# Filename stems for the three grid-derived gpkg products. Ordered so
-# every name starts with ``grid_`` — sorts the seismic listing into a
-# coherent block in the Files page (alongside ``fold_*`` rasters).
+# Filename stems for the three grid-derived gpkg products. The two
+# station layers stay under ``grid_*`` so they sort together; the bin
+# polygon mesh uses ``bins_mesh`` to read more naturally on the Files
+# page (it's the bin layout, not another station list).
 THEORETICAL_GRID_STEM = "grid_theoretical"
 OFFSET_GRID_STEM = "grid_offset"
-GRID_MESH_STEM = "grid_mesh"
+GRID_MESH_STEM = "bins_mesh"
 
 # Pre-rename stems still found on disk for older projects. We match
 # them in the prune path and delete them once the new-named file lands
@@ -38,6 +39,7 @@ GRID_MESH_STEM = "grid_mesh"
 _LEGACY_STEM_RENAMES: dict[str, str] = {
     "theoretical_grid": THEORETICAL_GRID_STEM,
     "offset_grid": OFFSET_GRID_STEM,
+    "grid_mesh": GRID_MESH_STEM,
 }
 
 

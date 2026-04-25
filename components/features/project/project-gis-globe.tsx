@@ -2292,8 +2292,8 @@ export function ProjectGisGlobe() {
 
   // Group seismic files by the grid option they were produced for.
   // Recognised filename shapes (slug = non-alphanumerics → ``_``):
-  //   - ``{grid_theoretical|grid_offset|grid_mesh}__{slug}.gpkg`` — gpkg layers
-  //   - ``{theoretical_grid|offset_grid}__{slug}.gpkg`` — pre-rename
+  //   - ``{grid_theoretical|grid_offset|bins_mesh}__{slug}.gpkg`` — gpkg layers
+  //   - ``{theoretical_grid|offset_grid|grid_mesh}__{slug}.gpkg`` — pre-rename
   //     legacy gpkg names; the writer migrates them on next run but
   //     they remain visible until then.
   //   - ``fold__{slug}__{omin}-{omax}.tif`` — theoretical fold raster
@@ -2318,7 +2318,7 @@ export function ProjectGisGlobe() {
     const order = new Map<string, number>(options.map((n, i) => [n, i]));
 
     const slugFromFile = (f: string): string => {
-      const gpkg = /^(grid_theoretical|grid_offset|grid_mesh|theoretical_grid|offset_grid)__(.+)\.gpkg$/.exec(f);
+      const gpkg = /^(grid_theoretical|grid_offset|bins_mesh|grid_mesh|theoretical_grid|offset_grid)__(.+)\.gpkg$/.exec(f);
       if (gpkg) return gpkg[2];
       // Fold tifs: longest-stem-first so ``fold_offsets`` is matched
       // before the shorter ``fold`` prefix.

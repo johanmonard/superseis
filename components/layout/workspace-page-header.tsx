@@ -459,7 +459,7 @@ function ProjectFilesDialog({
 
     const groups = new Map<string, string[]>();
     for (const f of seismic) {
-      const m = /^(theoretical_grid|offset_grid|grid_mesh)__(.+)\.gpkg$/.exec(f);
+      const m = /^(theoretical_grid|offset_grid|grid_mesh|bins_mesh)__(.+)\.gpkg$/.exec(f);
       const slug = m?.[2] ?? "";
       const display = (slug && slugToName.get(slug)) || slug || "Unknown";
       const bucket = groups.get(display) ?? [];

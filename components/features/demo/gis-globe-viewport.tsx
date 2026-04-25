@@ -259,12 +259,14 @@ const FEATURES_LINE_LAYER = "features-line";
 const FEATURES_CIRCLE_LAYER = "features-circle";
 const GRID_MESH_LINE_LAYER = "features-grid-mesh-line";
 
-// Reused by both the grid-mesh layer's own filter and the default line
-// layer's exclusion, so a feature can't end up double-rendered.
+// Reused by both the bin-mesh layer's own filter and the default line
+// layer's exclusion, so a feature can't end up double-rendered. Matches
+// both the current ``bins_mesh__`` stem and the pre-rename ``grid_mesh__``
+// so legacy projects still pick up the dedicated styling.
 const GRID_MESH_FILTER: maplibregl.ExpressionSpecification = [
-  "in",
-  "grid_mesh__",
-  ["coalesce", ["get", "__layer"], ""],
+  "any",
+  ["in", "bins_mesh__", ["coalesce", ["get", "__layer"], ""]],
+  ["in", "grid_mesh__", ["coalesce", ["get", "__layer"], ""]],
 ] as unknown as maplibregl.ExpressionSpecification;
 
 // Points belonging to a seismic layer (key prefix "seismic/") are rendered
