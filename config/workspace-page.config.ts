@@ -52,7 +52,7 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
   },
   {
     href: "/project/files",
-    title: "Files",
+    title: "GIS Studio",
     subtitle: "Upload and visualize project GIS files (polygons, POI, layers).",
   },
   {

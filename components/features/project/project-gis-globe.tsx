@@ -2518,7 +2518,7 @@ export function ProjectGisGlobe() {
 
   return (
     <ProjectSettingsPage
-      title="Files"
+      title="GIS Studio"
       panelTitle="GIS Files"
       viewport={
         <GisGlobeViewport

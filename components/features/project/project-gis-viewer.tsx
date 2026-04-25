@@ -210,7 +210,7 @@ export function ProjectGisViewer() {
 
   return (
     <ProjectSettingsPage
-      title="Files"
+      title="GIS Studio"
       panelTitle="GIS Files"
       viewport={
         <GisViewerViewport

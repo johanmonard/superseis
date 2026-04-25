@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 const {
   chevronLeft: ChevronLeft,
   chevronRight: ChevronRight,
+  info: InfoIcon,
   search: Search,
   upload: Upload,
   x: X,
@@ -398,10 +399,10 @@ export function ProjectDefinition() {
 
   return (
     <div ref={containerRef} className="flex h-full flex-row">
-      {/* Parameters panel */}
+      {/* Parameters panel — mid step in the sidebar→left→right gradient. */}
       <div
         className={cn(
-          "overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-panel-edge)] bg-[var(--color-bg-surface)]",
+          "overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-panel-edge)] bg-[color-mix(in_srgb,var(--color-bg-canvas)_50%,var(--color-bg-surface))]",
           !isResizing && "transition-all duration-300 ease-in-out",
           !collapsed && "overflow-auto"
         )}
@@ -419,11 +420,20 @@ export function ProjectDefinition() {
           </button>
         ) : (
         <div className="p-[var(--space-4)]">
-          <div className="mb-[var(--space-4)] flex items-center justify-end">
+          <div className="mb-[var(--space-4)] flex items-center justify-between gap-[var(--space-2)]">
+            <h1 className="flex items-center gap-[var(--space-2)] truncate text-xl font-semibold text-[var(--color-text-primary)]">
+              <InfoIcon
+                size={22}
+                strokeWidth={1.75}
+                className="shrink-0 text-[var(--color-text-secondary)]"
+                aria-hidden="true"
+              />
+              <span className="truncate">Definition</span>
+            </h1>
             <button
               type="button"
               onClick={() => setCollapsed(true)}
-              className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
               aria-label="Collapse panel"
             >
               <ChevronLeft size={14} />
@@ -621,11 +631,11 @@ export function ProjectDefinition() {
         </div>
       )}
 
-      {/* CRS info middle panel */}
+      {/* CRS info middle panel — same tone as the left parameters panel. */}
       {showCrsPanel && crsPanelState && (
         <>
           <div
-            className="min-w-0 flex-shrink-0 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-panel-edge)] bg-[var(--color-bg-surface)]"
+            className="min-w-0 flex-shrink-0 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-panel-edge)] bg-[color-mix(in_srgb,var(--color-bg-canvas)_50%,var(--color-bg-surface))]"
             // eslint-disable-next-line template/no-jsx-style-prop -- runtime sizing
             style={{ width: "clamp(300px, 28%, 460px)" }}
           >

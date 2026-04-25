@@ -2,9 +2,11 @@
 
 import * as React from "react";
 import { createPortal } from "react-dom";
+import { usePathname } from "next/navigation";
 import { appIcons } from "@/components/ui/icon";
 
 import { cn } from "@/lib/utils";
+import { getNavigationIconForPathname } from "@/config/navigation.config";
 
 const { chevronLeft: ChevronLeft, chevronRight: ChevronRight } = appIcons;
 import { ViewportPlaceholder } from "./viewport-placeholder";
@@ -41,6 +43,9 @@ export function ProjectSettingsPage({
   middlePanel?: React.ReactNode;
   defaultLeftFraction?: number;
 }) {
+  const pathname = usePathname();
+  const iconKey = getNavigationIconForPathname(pathname);
+  const PageIcon = iconKey ? appIcons[iconKey] : null;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [leftFraction, setLeftFraction] = React.useState(defaultLeftFraction);
   const [collapsed, setCollapsed] = React.useState(false);
@@ -86,10 +91,10 @@ export function ProjectSettingsPage({
 
   return (
     <div ref={containerRef} className="flex h-full flex-row">
-      {/* Parameters panel */}
+      {/* Parameters panel — mid step in the sidebar→left→right gradient. */}
       <div
         className={cn(
-          "border rounded-[var(--radius-md)] border-[var(--color-panel-edge)] bg-[var(--color-bg-surface)]",
+          "border rounded-[var(--radius-md)] border-[var(--color-panel-edge)] bg-[color-mix(in_srgb,var(--color-bg-canvas)_50%,var(--color-bg-surface))]",
           !isResizing && "transition-all duration-300 ease-in-out",
           collapsed ? "min-w-0 overflow-hidden" : "min-w-0 overflow-y-auto"
         )}
@@ -115,7 +120,18 @@ export function ProjectSettingsPage({
           <div className="p-[var(--space-4)]">
             <div className="mb-[var(--space-4)]">
               <div className="flex items-center justify-between gap-[var(--space-2)]">
-                <div ref={setHeaderSlot} className="flex items-center gap-[var(--space-2)]" />
+                <h1 className="flex items-center gap-[var(--space-2)] truncate text-xl font-semibold text-[var(--color-text-primary)]">
+                  {PageIcon ? (
+                    <PageIcon
+                      size={22}
+                      strokeWidth={1.75}
+                      className="shrink-0 text-[var(--color-text-secondary)]"
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  <span className="truncate">{title}</span>
+                </h1>
+                <div ref={setHeaderSlot} className="flex flex-1 items-center gap-[var(--space-2)]" />
                 <button
                   type="button"
                   onClick={() => setCollapsed(true)}
@@ -159,10 +175,10 @@ export function ProjectSettingsPage({
         </div>
       )}
 
-      {/* Middle panel (optional) */}
+      {/* Middle panel (optional) — same tone as the left parameters panel. */}
       {middlePanel && (
         <>
-          <div className="min-w-0 flex-shrink-0 overflow-y-auto border rounded-[var(--radius-md)] border-[var(--color-panel-edge)] bg-[var(--color-bg-surface)]"
+          <div className="min-w-0 flex-shrink-0 overflow-y-auto border rounded-[var(--radius-md)] border-[var(--color-panel-edge)] bg-[color-mix(in_srgb,var(--color-bg-canvas)_50%,var(--color-bg-surface))]"
             // eslint-disable-next-line template/no-jsx-style-prop -- runtime sizing
             style={{ width: "25%" }}
           >

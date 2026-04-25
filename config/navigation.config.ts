@@ -8,6 +8,8 @@ export type NavigationChildItem = {
   href?: string;
   icon?: AppIconKey;
   children?: NavigationChildItem[];
+  /** Render a hairline divider after this child in the sidebar. */
+  separatorAfter?: boolean;
 };
 
 export type NavigationItem = {
@@ -18,6 +20,8 @@ export type NavigationItem = {
   section: NavigationSection;
   adminOnly?: boolean;
   children?: NavigationChildItem[];
+  /** Render a hairline divider after this item in the sidebar. */
+  separatorAfter?: boolean;
 };
 
 export function getNavigationIconForPathname(pathname: string): AppIconKey | null {
@@ -42,68 +46,45 @@ export function getNavigationIconForPathname(pathname: string): AppIconKey | nul
 }
 
 export const navigation: NavigationItem[] = [
-  { label: "Home", href: "/", module: "home", icon: "home", section: "main" },
   {
-    label: "Demo",
-    module: "demo",
-    icon: "blocks",
+    label: "Settings",
+    module: "project",
+    icon: "settings",
     section: "main",
     children: [
-      { label: "Dashboard", href: "/demo/dashboard", icon: "barChart3" },
-      { label: "Tasks", href: "/demo/tasks", icon: "listChecks" },
-      { label: "Items", href: "/demo/items", icon: "projectManagement" },
-      { label: "Primitives", href: "/demo/primitives", icon: "dashboards" },
-      { label: "Sequence", href: "/demo/sequence", icon: "listChecks" },
-      { label: "React Flow", href: "/demo/reactflow", icon: "blocks" },
-      { label: "Maps", href: "/demo/maps", icon: "map" },
-      { label: "Wireframes", href: "/demo/wireframes", icon: "compass" },
-      { label: "GIS", href: "/demo/gis", icon: "layers" },
-      { label: "GIS Globe", href: "/demo/gis-globe", icon: "map" },
-      { label: "OSM info", href: "/demo/osm-info", icon: "mapPin" },
-      { label: "Animate 3D", href: "/demo/animate", icon: "activity" },
-      { label: "Workflow", href: "/demo/workflow", icon: "blocks" },
-      { label: "Raster", href: "/demo/raster", icon: "grid" },
+      { label: "GIS Studio", href: "/project/files", icon: "map", separatorAfter: true },
+      { label: "Definition", href: "/project/definition", icon: "info" },
+      { label: "Partitions", href: "/project/partitions", icon: "dashboards" },
+      { label: "Design", href: "/project/design", icon: "compass" },
+      { label: "Survey", href: "/project/survey", icon: "mountain" },
+      { label: "Grid", href: "/project/grid", icon: "grid" },
+      { label: "Layers", href: "/project/layers", icon: "layers" },
+      { label: "Maps", href: "/project/maps", icon: "mapPin" },
+      { label: "Offsets", href: "/project/offsets", icon: "sliders" },
     ],
   },
   {
-    label: "Project",
+    label: "Crew",
     module: "project",
-    icon: "projectManagement",
+    icon: "users",
     section: "main",
-    children: [
-      {
-        label: "Settings",
-        icon: "settings",
-        children: [
-          { label: "Definition", href: "/project/definition", icon: "dashboards" },
-          { label: "Files", href: "/project/files", icon: "folderOpen" },
-          { label: "Partitions", href: "/project/partitions", icon: "grid" },
-          { label: "Design", href: "/project/design", icon: "compass" },
-          { label: "Survey", href: "/project/survey", icon: "mountain" },
-          { label: "Grid", href: "/project/grid", icon: "grid" },
-          { label: "Layers", href: "/project/layers", icon: "layers" },
-          { label: "Maps", href: "/project/maps", icon: "mapPin" },
-          { label: "Offsets", href: "/project/offsets", icon: "sliders" },
-        ],
-      },
-      {
-        label: "Crew",
-        href: "/project/crew",
-        icon: "users",
-      },
-      {
-        label: "Activities",
-        href: "/project/activities",
-        icon: "activity",
-        children: [],
-      },
-      {
-        label: "Resources",
-        href: "/project/resources",
-        icon: "blocks",
-        children: [],
-      },
-    ],
+    href: "/project/crew",
+  },
+  {
+    label: "Activities",
+    module: "project",
+    icon: "activity",
+    section: "main",
+    href: "/project/activities",
+    children: [],
+  },
+  {
+    label: "Resources",
+    module: "project",
+    icon: "blocks",
+    section: "main",
+    href: "/project/resources",
+    children: [],
   },
   // [new-module:insert-navigation]
   {
@@ -118,4 +99,27 @@ export const navigation: NavigationItem[] = [
       { label: "Users", href: "/admin/users", icon: "users" },
     ],
   },
+];
+
+export interface DemoLink {
+  label: string;
+  href: string;
+  icon: AppIconKey;
+}
+
+export const DEMO_LINKS: DemoLink[] = [
+  { label: "Dashboard", href: "/demo/dashboard", icon: "barChart3" },
+  { label: "Tasks", href: "/demo/tasks", icon: "listChecks" },
+  { label: "Items", href: "/demo/items", icon: "projectManagement" },
+  { label: "Primitives", href: "/demo/primitives", icon: "dashboards" },
+  { label: "Sequence", href: "/demo/sequence", icon: "listChecks" },
+  { label: "React Flow", href: "/demo/reactflow", icon: "blocks" },
+  { label: "Maps", href: "/demo/maps", icon: "map" },
+  { label: "Wireframes", href: "/demo/wireframes", icon: "compass" },
+  { label: "GIS", href: "/demo/gis", icon: "layers" },
+  { label: "GIS Globe", href: "/demo/gis-globe", icon: "map" },
+  { label: "OSM info", href: "/demo/osm-info", icon: "mapPin" },
+  { label: "Animate 3D", href: "/demo/animate", icon: "activity" },
+  { label: "Workflow", href: "/demo/workflow", icon: "blocks" },
+  { label: "Raster", href: "/demo/raster", icon: "grid" },
 ];
