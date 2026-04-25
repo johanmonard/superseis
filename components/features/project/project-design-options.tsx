@@ -15,13 +15,8 @@ import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
 import { usePipelineReport } from "@/lib/use-pipeline-report";
 import { cn } from "@/lib/utils";
-import { formatApiError } from "@/services/api/client";
-import {
-  FOLD_COLORMAPS,
-  type FoldColormap,
-} from "@/services/api/project-fold";
-import { useRunFold } from "@/services/query/project-fold";
 import { useProjectSection } from "@/services/query/project-sections";
+import { ProcessFoldSection } from "./process-fold-section";
 
 /* ------------------------------------------------------------------
    Types
@@ -599,8 +594,6 @@ export function ProjectDesignOptions() {
         </Select>
       </Field>
 
-      <div className="h-px bg-[var(--color-border-subtle)]" />
-
       {/* Runs the grid step (+ all dirty upstream) for the active option
           so the viewport can show the theoretical stations. Progress
           surfaces in the bottom drawer. */}
@@ -622,122 +615,6 @@ export function ProjectDesignOptions() {
 
       <ProcessFoldSection projectId={projectId} flush={flush} />
     </div>
-  );
-}
-
-/* ------------------------------------------------------------------
-   Process fold — bin grid + offset band + colormap, then one-shot POST
-   to the fold endpoint. The viewport picks up the new PNG via its own
-   query invalidation in services/query/project-fold.ts.
-   ------------------------------------------------------------------ */
-
-const FOLD_INPUT_DEFAULTS = {
-  offset_min: "0",
-  offset_max: "5000",
-  colormap: "viridis" as FoldColormap,
-};
-
-function ProcessFoldSection({
-  projectId,
-  flush,
-}: {
-  projectId: number | null;
-  flush: () => Promise<void>;
-}) {
-  const [offsetMin, setOffsetMin] = React.useState(FOLD_INPUT_DEFAULTS.offset_min);
-  const [offsetMax, setOffsetMax] = React.useState(FOLD_INPUT_DEFAULTS.offset_max);
-  const [colormap, setColormap] = React.useState<FoldColormap>(FOLD_INPUT_DEFAULTS.colormap);
-  const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
-
-  const runFoldMutation = useRunFold(projectId);
-
-  const handleProcessFold = React.useCallback(async () => {
-    if (!projectId || runFoldMutation.isPending) return;
-    await flush();
-    setErrorMsg(null);
-    try {
-      await runFoldMutation.mutateAsync({
-        offset_min: Number(offsetMin),
-        offset_max: Number(offsetMax),
-        colormap,
-      });
-    } catch (err) {
-      setErrorMsg(formatApiError(err));
-    }
-  }, [
-    projectId,
-    runFoldMutation,
-    offsetMin,
-    offsetMax,
-    colormap,
-    flush,
-  ]);
-
-  const running = runFoldMutation.isPending;
-
-  return (
-    <>
-      <div className="h-px bg-[var(--color-border-subtle)]" />
-
-      <div className="grid grid-cols-2 gap-[var(--space-3)]">
-        <Field label="Offset min (m)" htmlFor="fold-offset-min" layout="horizontal" labelWidth="7rem">
-          <Input
-            id="fold-offset-min"
-            type="number"
-            step="50"
-            min="0"
-            value={offsetMin}
-            onChange={(e) => setOffsetMin(e.target.value)}
-          />
-        </Field>
-        <Field label="Offset max (m)" htmlFor="fold-offset-max" layout="horizontal" labelWidth="7rem">
-          <Input
-            id="fold-offset-max"
-            type="number"
-            step="50"
-            min="0"
-            value={offsetMax}
-            onChange={(e) => setOffsetMax(e.target.value)}
-          />
-        </Field>
-      </div>
-
-      <Field label="Colormap" htmlFor="fold-colormap" layout="horizontal">
-        <Select
-          id="fold-colormap"
-          value={colormap}
-          onChange={(e) => setColormap(e.target.value as FoldColormap)}
-        >
-          {FOLD_COLORMAPS.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </Select>
-      </Field>
-
-      {errorMsg ? (
-        <p role="alert" className="text-xs text-[var(--color-status-danger)]">
-          {errorMsg}
-        </p>
-      ) : null}
-
-      <div className="flex justify-end">
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={handleProcessFold}
-          disabled={!projectId || running}
-        >
-          {running ? (
-            <Icon icon={appIcons.loader} size={12} className="mr-[var(--space-1)] animate-spin" />
-          ) : (
-            <Play size={12} className="mr-[var(--space-1)]" />
-          )}
-          Process fold
-        </Button>
-      </div>
-    </>
   );
 }
 

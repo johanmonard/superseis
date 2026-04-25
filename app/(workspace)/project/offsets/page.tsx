@@ -12,6 +12,7 @@ import {
   useGridRegioning,
 } from "@/services/query/project-grid-artifacts";
 import { offsetArtifactKeys } from "@/services/query/project-offset-artifacts";
+import { foldKeys } from "@/services/query/project-fold";
 
 const OffsetsGridViewport = dynamic(
   () =>
@@ -43,6 +44,9 @@ export default function OffsetsPage() {
     if (done && !prevOffsetsDone.current && projectId) {
       qc.invalidateQueries({ queryKey: offsetArtifactKeys.project(projectId) });
       qc.invalidateQueries({ queryKey: gridArtifactKeys.project(projectId) });
+      // Offsets re-run rewrites the offsets parquets — any cached
+      // offsets-source fold meta is now stale.
+      qc.invalidateQueries({ queryKey: foldKeys.project(projectId) });
     }
     prevOffsetsDone.current = done;
   }, [pipelineState, projectId, qc]);

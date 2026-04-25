@@ -15,6 +15,7 @@ import { useSectionData } from "@/lib/use-autosave";
 import { usePipelineReport } from "@/lib/use-pipeline-report";
 import { useProjectSection } from "@/services/query/project-sections";
 import { buildStandardPreset, type DesignAttrs, type Side } from "@/lib/offset-presets";
+import { ProcessFoldSection } from "./process-fold-section";
 
 const {
   check: Check,
@@ -1243,6 +1244,12 @@ export function ProjectOffsets() {
           Process offsets
         </Button>
       </div>
+
+      <ProcessFoldSection
+        projectId={projectId}
+        flush={flush}
+        source="offsets"
+      />
     </div>
   );
 }

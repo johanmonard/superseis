@@ -91,7 +91,10 @@ from api.routes.project import router as project_router
 from api.routes.project_files import router as project_files_router
 from api.routes.project_layers import router as project_layers_router
 from api.routes.project_osm import router as project_osm_router
-from api.routes.project_fold import router as project_fold_router
+from api.routes.project_fold import (
+    router as project_fold_router,
+    router_offsets as project_offsets_fold_router,
+)
 from api.routes.project_grid_artifacts import router as project_grid_artifacts_router
 from api.routes.project_offset_artifacts import router as project_offset_artifacts_router
 from api.routes.project_pipeline import router as project_pipeline_router
@@ -112,6 +115,7 @@ app.include_router(project_files_router)
 app.include_router(project_layers_router)
 app.include_router(project_osm_router)
 app.include_router(project_fold_router)
+app.include_router(project_offsets_fold_router)
 app.include_router(project_grid_artifacts_router)
 app.include_router(project_offset_artifacts_router)
 app.include_router(project_pipeline_router)
