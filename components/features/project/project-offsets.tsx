@@ -858,7 +858,7 @@ function PointTypePanel({
                   const isShiftedInline = rule.ruleType === "Shifted inline";
                   return (
                     <div key={rule.id} className="flex items-center gap-[var(--space-1)]">
-                      <div className="w-2/5 shrink-0">
+                      <div className="w-1/2 shrink-0">
                         <Select
                           value={rule.ruleType}
                           onChange={(e) =>
@@ -874,39 +874,37 @@ function PointTypePanel({
                           ))}
                         </Select>
                       </div>
-                      <div className="flex-1">
+                      <div className="flex w-1/2 shrink-0 items-center gap-[var(--space-1)]">
                         <Input
                           type="number"
                           value={rule.value}
                           onChange={(e) =>
                             updateOffsetRule(rule.id, { value: e.target.value })
                           }
-                          className="!h-6 !text-[11px] text-right"
+                          className="!h-6 !text-[11px] flex-1 min-w-0 text-right"
                           placeholder={isShiftedInline ? "Range" : "Val"}
                           title={isShiftedInline ? "Inline range (v)" : undefined}
                         />
-                      </div>
-                      {isShiftedInline && (
-                        <div className="flex-1">
+                        {isShiftedInline && (
                           <Input
                             type="number"
                             value={rule.valueAt ?? ""}
                             onChange={(e) =>
                               updateOffsetRule(rule.id, { valueAt: e.target.value })
                             }
-                            className="!h-6 !text-[11px] text-right"
+                            className="!h-6 !text-[11px] flex-1 min-w-0 text-right"
                             placeholder="Shift"
                             title="Crossline shift (at)"
                           />
-                        </div>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => removeOffsetRule(rule.id)}
-                        className="flex h-5 w-5 shrink-0 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-danger)]"
-                      >
-                        <X size={10} />
-                      </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => removeOffsetRule(rule.id)}
+                          className="flex h-5 w-5 shrink-0 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-danger)]"
+                        >
+                          <X size={10} />
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
