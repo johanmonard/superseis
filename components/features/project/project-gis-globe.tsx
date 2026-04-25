@@ -30,7 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { appIcons } from "@/components/ui/icon";
 
-const { pencil: Pencil, play: Play, plus: Plus, download: Download, loader: Loader, circleCheck: CircleCheck, alertTriangle: AlertTriangle } = appIcons;
+const { pencil: Pencil, play: Play, plus: Plus, download: Download, loader: Loader, circleCheck: CircleCheck, alertTriangle: AlertTriangle, chevronDown: ChevronDown } = appIcons;
 import { AngleInput } from "@/components/ui/angle-input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
@@ -58,7 +58,14 @@ import type {
 import type {
   RampName,
   LayerStyle,
+  FoldOverlaySpec,
 } from "@/components/features/demo/gis-globe-viewport";
+import {
+  foldRasterChunkUrl,
+  type FoldSource,
+} from "@/services/api/project-fold";
+import { useFoldMeta } from "@/services/query/project-fold";
+import { FoldColormapLegend } from "./fold-colormap-legend";
 
 const GisGlobeViewport = dynamic(
   () =>
@@ -177,6 +184,51 @@ const CATEGORY_GEOM_TYPE: Partial<Record<FileCategory, GpkgInitGeomType>> = {
   polygons: "POLYGON",
   poi: "POINT",
 };
+
+// --------------------------------------------------------------------------
+// Collapsible section header
+// --------------------------------------------------------------------------
+
+/**
+ * Title row for the Files left-panel sections — clickable button + chevron
+ * that animates -90° when the section is collapsed. ``actions`` slot keeps
+ * upload/import controls aligned to the right of the header without
+ * conflicting with the toggle hit area.
+ */
+function CollapsibleSectionHeader({
+  title,
+  collapsed,
+  onToggle,
+  actions,
+}: {
+  title: React.ReactNode;
+  collapsed: boolean;
+  onToggle: () => void;
+  actions?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={!collapsed}
+        className="flex items-center gap-[var(--space-1)] text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+      >
+        <span>{title}</span>
+        <ChevronDown
+          size={14}
+          aria-hidden
+          className={
+            "transition-transform duration-200 ease-out"
+            + (collapsed ? " -rotate-90" : "")
+          }
+        />
+      </button>
+      {actions}
+    </div>
+  );
+}
+
 
 // --------------------------------------------------------------------------
 // Margin box
@@ -774,6 +826,81 @@ export function ProjectGisGlobe() {
     if (projectId == null) return;
     updateMapSessionState(`files:${projectId}`, { selectedFiles });
   }, [selectedFiles, projectId]);
+
+  // Active fold overlay (single, radio-style). Stores the canonical
+  // grid-option name plus the source + offset range that uniquely
+  // identifies a rendered fold on disk; ``null`` means no overlay.
+  type ActiveFold = {
+    option: string;
+    source: FoldSource;
+    omin: number;
+    omax: number;
+  };
+  const [activeFold, setActiveFold] = React.useState<ActiveFold | null>(() => {
+    if (projectId == null) return null;
+    return getMapSessionState(`files:${projectId}`)?.activeFold ?? null;
+  });
+  // Restore on project switch — useState init only fires on first mount.
+  const restoredFoldProjectIdRef = React.useRef<number | null>(projectId);
+  React.useEffect(() => {
+    if (projectId == null) return;
+    if (restoredFoldProjectIdRef.current === projectId) return;
+    restoredFoldProjectIdRef.current = projectId;
+    setActiveFold(
+      getMapSessionState(`files:${projectId}`)?.activeFold ?? null,
+    );
+  }, [projectId]);
+  React.useEffect(() => {
+    if (projectId == null) return;
+    updateMapSessionState(`files:${projectId}`, { activeFold });
+  }, [activeFold, projectId]);
+
+  const toggleFoldOverlay = React.useCallback((next: ActiveFold) => {
+    setActiveFold((curr) =>
+      curr
+      && curr.option === next.option
+      && curr.source === next.source
+      && curr.omin === next.omin
+      && curr.omax === next.omax
+        ? null
+        : next,
+    );
+  }, []);
+
+  // Per-section collapsed state — every left-panel section registers a
+  // stable id. Set membership is the source of truth, persisted as an
+  // array so the layout sticks across nav.
+  const [collapsedSections, setCollapsedSections] = React.useState<Set<string>>(
+    () => {
+      if (projectId == null) return new Set();
+      return new Set(
+        getMapSessionState(`files:${projectId}`)?.collapsedSections ?? [],
+      );
+    },
+  );
+  const restoredCollapseProjectIdRef = React.useRef<number | null>(projectId);
+  React.useEffect(() => {
+    if (projectId == null) return;
+    if (restoredCollapseProjectIdRef.current === projectId) return;
+    restoredCollapseProjectIdRef.current = projectId;
+    setCollapsedSections(
+      new Set(getMapSessionState(`files:${projectId}`)?.collapsedSections ?? []),
+    );
+  }, [projectId]);
+  React.useEffect(() => {
+    if (projectId == null) return;
+    updateMapSessionState(`files:${projectId}`, {
+      collapsedSections: [...collapsedSections],
+    });
+  }, [collapsedSections, projectId]);
+  const toggleSectionCollapsed = React.useCallback((id: string) => {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
   const [hiddenFiles, setHiddenFiles] = React.useState<Set<string>>(
     () => new Set()
   );
@@ -969,7 +1096,13 @@ export function ProjectGisGlobe() {
     }
 
     // Skip files already loaded (includes edit files bootstrapped above)
-    const reallyToAdd = toAdd.filter((f) => !currentKeys.has(f));
+    // and any non-gpkg artifact (e.g. fold .tif inventory) — those are
+    // listed for visibility but not loadable as vector layers, and
+    // letting them through would feed garbage to sql.js and reject the
+    // whole batch.
+    const reallyToAdd = toAdd.filter(
+      (f) => !currentKeys.has(f) && /\.gpkg$/i.test(f),
+    );
     if (reallyToAdd.length === 0) {
       if (toRemove.length > 0) setLoadId((n) => n + 1);
       return;
@@ -982,7 +1115,9 @@ export function ProjectGisGlobe() {
       const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
       if (cancelled) return;
 
-      const results = await Promise.all(
+      // ``allSettled`` so one bad file (404, corrupt gpkg, server hiccup)
+      // can't blank every other layer — fulfilled loads still apply.
+      const settled = await Promise.allSettled(
         reallyToAdd.map(async (key) => {
           const parsed = parseFileKey(key);
           if (!parsed) throw new Error(`Bad key: ${key}`);
@@ -1014,21 +1149,35 @@ export function ProjectGisGlobe() {
       );
 
       if (cancelled) {
-        for (const { db } of results) db.close();
+        for (const r of settled) {
+          if (r.status === "fulfilled") r.value.db.close();
+        }
         return;
       }
 
-      for (const { key, db } of results) {
+      const fulfilled = settled.flatMap((r) =>
+        r.status === "fulfilled" ? [r.value] : [],
+      );
+      const failures = settled
+        .map((r, i) => (r.status === "rejected" ? { key: reallyToAdd[i], reason: r.reason } : null))
+        .filter((x): x is { key: string; reason: unknown } => x !== null);
+
+      for (const { key, db } of fulfilled) {
         dbsRef.current.set(key, db);
       }
       setLayerData((prev) => {
         const next = new Map(prev);
-        for (const { key, data, meta } of results) {
+        for (const { key, data, meta } of fulfilled) {
           next.set(key, { data, meta });
         }
         return next;
       });
       setLoading(false);
+      if (failures.length > 0) {
+        // Surface the first failure as an inline error but don't block
+        // the layers that did load.
+        setError(`Failed to load ${failures.length} file(s): ${String(failures[0].reason)}`);
+      }
       setLoadId((n) => n + 1);
     })().catch((e) => {
       if (!cancelled) {
@@ -2141,11 +2290,19 @@ export function ProjectGisGlobe() {
   const osmEditFiles = fileList?.osm_edits ?? [];
   const seismicFiles = fileList?.seismic ?? [];
 
-  // Group seismic gpkgs by the grid option they were produced for. The
-  // backend names files as ``{theoretical_grid|offset_grid|grid_mesh}__{slug}.gpkg``
-  // where slug = non-alphanumerics → ``_``. We look up design_options to
-  // recover the canonical display name; unmatched slugs (stale/orphan
-  // files) fall through under the raw slug so nothing silently vanishes.
+  // Group seismic files by the grid option they were produced for.
+  // Recognised filename shapes (slug = non-alphanumerics → ``_``):
+  //   - ``{grid_theoretical|grid_offset|grid_mesh}__{slug}.gpkg`` — gpkg layers
+  //   - ``{theoretical_grid|offset_grid}__{slug}.gpkg`` — pre-rename
+  //     legacy gpkg names; the writer migrates them on next run but
+  //     they remain visible until then.
+  //   - ``fold__{slug}__{omin}-{omax}.tif`` — theoretical fold raster
+  //   - ``fold_offsets__{slug}__{omin}-{omax}.tif`` — offsets fold raster
+  //   - ``fold__{slug}.tif`` / ``fold_offsets__{slug}.tif`` — legacy
+  //     unstamped fold (kept readable so older projects don't lose their
+  //     listings on first refresh after upgrade).
+  // Unmatched slugs (stale/orphan files) fall through under the raw slug
+  // so nothing silently vanishes.
   const { data: designOptionsSection } = useProjectSection(
     projectId,
     "design_options",
@@ -2160,10 +2317,21 @@ export function ProjectGisGlobe() {
     const slugToName = new Map(options.map((n) => [slugify(n), n]));
     const order = new Map<string, number>(options.map((n, i) => [n, i]));
 
+    const slugFromFile = (f: string): string => {
+      const gpkg = /^(grid_theoretical|grid_offset|grid_mesh|theoretical_grid|offset_grid)__(.+)\.gpkg$/.exec(f);
+      if (gpkg) return gpkg[2];
+      // Fold tifs: longest-stem-first so ``fold_offsets`` is matched
+      // before the shorter ``fold`` prefix.
+      const foldOff = /^fold_offsets__(.+?)(?:__[\d.+-]+)?\.tif$/.exec(f);
+      if (foldOff) return foldOff[1];
+      const fold = /^fold__(.+?)(?:__[\d.+-]+)?\.tif$/.exec(f);
+      if (fold) return fold[1];
+      return "";
+    };
+
     const groups = new Map<string, string[]>();
     for (const f of seismicFiles) {
-      const m = /^(theoretical_grid|offset_grid|grid_mesh)__(.+)\.gpkg$/.exec(f);
-      const slug = m?.[2] ?? "";
+      const slug = slugFromFile(f);
       const display = (slug && slugToName.get(slug)) || slug || "Unknown";
       const bucket = groups.get(display) ?? [];
       bucket.push(f);
@@ -2276,6 +2444,78 @@ export function ProjectGisGlobe() {
     if (gridConvergenceDeg == null && alignToGridNorth) setAlignToGridNorth(false);
   }, [gridConvergenceDeg, alignToGridNorth]);
 
+  // ------------------------------------------------------------------
+  // Fold overlay — radio-style: at most one fold raster on the globe.
+  // The picked range identifies a single rendered triple on disk
+  // (.tif + tile pyramid + meta), and useFoldMeta hits the backend
+  // ``/meta?omin=&omax=&option=`` endpoint for that exact render.
+  // ------------------------------------------------------------------
+  const foldRangeKey = React.useMemo(
+    () =>
+      activeFold
+        ? {
+            omin: activeFold.omin,
+            omax: activeFold.omax,
+            option: activeFold.option,
+          }
+        : undefined,
+    [activeFold],
+  );
+  const { data: activeFoldMeta } = useFoldMeta(
+    projectId,
+    activeFold?.source ?? "grid",
+    foldRangeKey,
+    activeFold !== null,
+  );
+  const foldOverlay = React.useMemo<FoldOverlaySpec | null>(() => {
+    if (!activeFold || !activeFoldMeta || projectId == null) return null;
+    // The Files page renders the fold as one MapLibre image source
+    // per chunk, each anchored at four UTM-projected WGS84 corners.
+    // Older meta files (rendered before chunked overlays existed)
+    // won't carry ``image_chunks``; the user re-renders to pick them up.
+    const chunks = activeFoldMeta.image_chunks;
+    if (!chunks || chunks.length === 0) return null;
+    // Version embeds everything that affects the served PNGs so the
+    // browser cache invalidates exactly when a re-render changes the
+    // bytes (same shape the grid + offsets viewports use).
+    const version = [
+      activeFoldMeta.option_name,
+      activeFoldMeta.colormap,
+      activeFoldMeta.value_max,
+      activeFoldMeta.params.offset_min,
+      activeFoldMeta.params.offset_max,
+    ].join(":");
+    return {
+      id: `${activeFold.option}::${activeFold.source}::${activeFold.omin}-${activeFold.omax}`,
+      chunks: chunks.map((chunk) => ({
+        chunkId: chunk.chunk_id,
+        imageUrl: foldRasterChunkUrl(
+          projectId,
+          chunk.chunk_id,
+          version,
+          activeFold.source,
+          foldRangeKey,
+        ),
+        corners: chunk.corners_wgs84,
+      })),
+    };
+  }, [activeFold, activeFoldMeta, projectId, foldRangeKey]);
+  const foldLegendNode =
+    activeFold && activeFoldMeta ? (
+      <div className="glb-legend__group">Fold</div>
+    ) : null;
+  const foldLegendExtra =
+    activeFold && activeFoldMeta ? (
+      <>
+        {foldLegendNode}
+        <FoldColormapLegend
+          colormap={activeFoldMeta.colormap}
+          valueMin={activeFoldMeta.value_min}
+          valueMax={activeFoldMeta.value_max}
+        />
+      </>
+    ) : null;
+
   return (
     <ProjectSettingsPage
       title="Files"
@@ -2338,6 +2578,8 @@ export function ProjectGisGlobe() {
           gridConvergenceDeg={gridConvergenceDeg}
           alignToGridNorth={alignToGridNorth}
           onAlignToGridNorthChange={setAlignToGridNorth}
+          foldOverlay={foldOverlay}
+          legendExtra={foldLegendExtra}
         />
       }
       middlePanel={osmPanelOpen ? (
@@ -2369,22 +2611,30 @@ export function ProjectGisGlobe() {
         {/* Polygons, POI sections */}
         {SIDEBAR_SECTIONS.filter(({ key }) => key !== "gis_layers").map(({ key, label, category }) => {
           const files = fileList?.[key] ?? [];
+          const sectionCollapsed = collapsedSections.has(key);
           return (
             <div key={key} className="flex flex-col gap-[var(--space-2)]">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-                  {label}
-                </span>
-                <button
-                  type="button"
-                  title={`Create new ${key === "poi" ? "POI" : "polygon"} file`}
-                  onClick={() => openCreateDialog(category)}
-                  className="rounded p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                >
-                  <Plus size={14} />
-                </button>
-              </div>
-              <div className="flex max-h-[200px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] p-[var(--space-2)]">
+              <CollapsibleSectionHeader
+                title={label}
+                collapsed={sectionCollapsed}
+                onToggle={() => toggleSectionCollapsed(key)}
+                actions={
+                  <button
+                    type="button"
+                    title={`Create new ${key === "poi" ? "POI" : "polygon"} file`}
+                    onClick={() => openCreateDialog(category)}
+                    className="rounded p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                  >
+                    <Plus size={14} />
+                  </button>
+                }
+              />
+              <div
+                className={
+                  "flex flex-col gap-1 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] p-[var(--space-2)]"
+                  + (sectionCollapsed ? " hidden" : "")
+                }
+              >
                 {files.length === 0 ? (
                   <p className="text-xs text-[var(--color-text-muted)]">
                     No files
@@ -2433,30 +2683,37 @@ export function ProjectGisGlobe() {
 
         {/* Terrain models section + osm edit files after separator */}
         <div className="flex flex-col gap-[var(--space-2)]">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-              Terrain models
-            </span>
-            <div className="flex items-center gap-[var(--space-1)]">
-              <button
-                type="button"
-                title="Create a new user layer file"
-                onClick={openUserLayerDialog}
-                className="flex items-center gap-[var(--space-1)] rounded px-[var(--space-1)] py-0.5 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-              >
-                user <Plus size={12} />
-              </button>
-              <button
-                type="button"
-                title="Download OSM layers"
-                onClick={() => setOsmPanelOpen((v) => !v)}
-                className={`flex items-center gap-[var(--space-1)] rounded px-[var(--space-1)] py-0.5 text-xs ${osmPanelOpen ? "text-[var(--color-accent)]" : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"}`}
-              >
-                osm <Plus size={12} />
-              </button>
-            </div>
-          </div>
-          <div className="flex max-h-[280px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] p-[var(--space-2)]">
+          <CollapsibleSectionHeader
+            title="Terrain models"
+            collapsed={collapsedSections.has("terrain-models")}
+            onToggle={() => toggleSectionCollapsed("terrain-models")}
+            actions={
+              <div className="flex items-center gap-[var(--space-1)]">
+                <button
+                  type="button"
+                  title="Create a new user layer file"
+                  onClick={openUserLayerDialog}
+                  className="flex items-center gap-[var(--space-1)] rounded px-[var(--space-1)] py-0.5 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                >
+                  user <Plus size={12} />
+                </button>
+                <button
+                  type="button"
+                  title="Download OSM layers"
+                  onClick={() => setOsmPanelOpen((v) => !v)}
+                  className={`flex items-center gap-[var(--space-1)] rounded px-[var(--space-1)] py-0.5 text-xs ${osmPanelOpen ? "text-[var(--color-accent)]" : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"}`}
+                >
+                  osm <Plus size={12} />
+                </button>
+              </div>
+            }
+          />
+          <div
+            className={
+              "flex flex-col gap-1 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] p-[var(--space-2)]"
+              + (collapsedSections.has("terrain-models") ? " hidden" : "")
+            }
+          >
             {(fileList?.gis_layers ?? []).length === 0 && osmEditFiles.length === 0 ? (
               <p className="text-xs text-[var(--color-text-muted)]">
                 No files
@@ -2543,14 +2800,75 @@ export function ProjectGisGlobe() {
           </div>
         </div>
 
+        {/* Terrain Analysis — sits right after Terrain models because
+            its inputs (polygons, layer fields) flow naturally from the
+            terrain-layer choices above. Form-only, no listing scroll. */}
+        <div className="flex flex-col gap-[var(--space-2)]">
+          <CollapsibleSectionHeader
+            title="Terrain Analysis"
+            collapsed={collapsedSections.has("terrain-analysis")}
+            onToggle={() => toggleSectionCollapsed("terrain-analysis")}
+          />
+          <div
+            className={
+              "flex flex-col gap-[var(--space-2)]"
+              + (collapsedSections.has("terrain-analysis") ? " hidden" : "")
+            }
+          >
+            <Field label="Polygon" layout="horizontal">
+              <Select
+                value={terrainPolygon}
+                onChange={(e) => setTerrainPolygon(e.target.value)}
+              >
+                <option value="">None</option>
+                {(fileList?.polygons ?? []).map((f) => {
+                  const stem = f.replace(/\.gpkg$/i, "");
+                  return (
+                    <option key={stem} value={stem}>{stem}</option>
+                  );
+                })}
+              </Select>
+            </Field>
+            <Field label="Source field" layout="horizontal">
+              <Input
+                value={terrainSourceField}
+                onChange={(e) => setTerrainSourceField(e.target.value)}
+                className="font-mono text-xs"
+              />
+            </Field>
+            <div className="flex justify-end">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!projectId || !terrainPolygon}
+                onClick={() => {
+                  setTerrainAnalysisOpen(true);
+                  setTerrainAnalysisToken(Date.now());
+                }}
+              >
+                <Play size={12} className="mr-[var(--space-1)]" />
+                Process
+              </Button>
+            </div>
+          </div>
+        </div>
+
         {/* Seismic section — pipeline-generated .gpkg (read-only).
             Files are grouped by the grid option that produced them so
-            multiple options can coexist without ambiguity. */}
+            multiple options can coexist without ambiguity. Collapsible
+            because the listing can grow long with many fold renders.*/}
         <div className="flex flex-col gap-[var(--space-2)]">
-          <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-            Seismic
-          </span>
-          <div className="flex max-h-[200px] flex-col gap-[var(--space-2)] overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] p-[var(--space-2)]">
+          <CollapsibleSectionHeader
+            title="Seismic"
+            collapsed={collapsedSections.has("seismic")}
+            onToggle={() => toggleSectionCollapsed("seismic")}
+          />
+          <div
+            className={
+              "flex flex-col gap-[var(--space-2)] rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] p-[var(--space-2)]"
+              + (collapsedSections.has("seismic") ? " hidden" : "")
+            }
+          >
             {seismicGroups.length === 0 ? (
               <p className="text-xs text-[var(--color-text-muted)]">
                 No files
@@ -2564,9 +2882,95 @@ export function ProjectGisGlobe() {
                   {group.files.map((f) => {
                     const fileKey = `seismic/${f}`;
                     const checked = selectedFiles.includes(fileKey);
-                    // Strip the "__slug" suffix from the label — the
-                    // group heading already names the option.
-                    const shortLabel = f.replace(/__[^.]+(?=\.gpkg$)/, "");
+                    // Build a compact label — group heading already names
+                    // the option, so drop the slug. Fold tifs surface
+                    // their source (theoretical/offset) and offset range.
+                    const foldOff = /^fold_offsets__.+?(?:__([\d.+-]+))?\.tif$/.exec(f);
+                    const fold = /^fold__.+?(?:__([\d.+-]+))?\.tif$/.exec(f);
+                    const isFoldTif = !!(foldOff || fold);
+                    const foldSource: FoldSource | null = foldOff
+                      ? "offsets"
+                      : fold
+                      ? "grid"
+                      : null;
+                    const rangeStr = foldOff?.[1] ?? fold?.[1] ?? null;
+                    let foldRange: { omin: number; omax: number } | null = null;
+                    if (rangeStr) {
+                      const parts = rangeStr.split("-").map(Number);
+                      if (parts.length === 2 && parts.every(Number.isFinite)) {
+                        foldRange = { omin: parts[0], omax: parts[1] };
+                      }
+                    }
+                    let shortLabel: string;
+                    if (foldOff) {
+                      const range = rangeStr ? ` (${rangeStr}m)` : "";
+                      shortLabel = `Fold - offset${range}`;
+                    } else if (fold) {
+                      const range = rangeStr ? ` (${rangeStr}m)` : "";
+                      shortLabel = `Fold - theoretical${range}`;
+                    } else {
+                      shortLabel = f.replace(/__[^.]+(?=\.gpkg$)/, "");
+                    }
+                    if (isFoldTif) {
+                      // Range-stamped fold tifs become a radio toggle —
+                      // single-active across the whole listing, drives
+                      // the on-globe overlay. Legacy unstamped tifs (no
+                      // ``__omin-omax`` suffix) stay as plain inventory
+                      // because their tile pyramid was already wiped
+                      // when a newer render landed.
+                      // Bind the activatable triple once so the type
+                      // narrowing carries into the click handler.
+                      const activatable =
+                        foldSource !== null && foldRange !== null
+                          ? {
+                              option: group.name,
+                              source: foldSource,
+                              omin: foldRange.omin,
+                              omax: foldRange.omax,
+                            }
+                          : null;
+                      const isActiveOverlay =
+                        activatable !== null
+                        && activeFold !== null
+                        && activeFold.option === activatable.option
+                        && activeFold.source === activatable.source
+                        && activeFold.omin === activatable.omin
+                        && activeFold.omax === activatable.omax;
+                      return (
+                        <div
+                          key={f}
+                          className={
+                            "flex min-w-0 items-center gap-2 pl-[var(--space-2)] text-xs leading-tight"
+                            + (activatable ? "" : " text-[var(--color-text-muted)]")
+                          }
+                        >
+                          {activatable ? (
+                            <input
+                              type="radio"
+                              name={`fold-overlay-${projectId ?? 0}`}
+                              checked={isActiveOverlay}
+                              // Click handles the toggle-off case
+                              // (radios don't fire onChange when the
+                              // already-checked input is clicked).
+                              onClick={() => toggleFoldOverlay(activatable)}
+                              onChange={() => {}}
+                              className="shrink-0 cursor-pointer"
+                              aria-label={`Show ${shortLabel} on the map`}
+                              title={
+                                isActiveOverlay
+                                  ? "Click to hide this fold overlay"
+                                  : "Click to display this fold overlay"
+                              }
+                            />
+                          ) : (
+                            <span className="shrink-0 select-none" aria-hidden>
+                              ·
+                            </span>
+                          )}
+                          <span className="min-w-0 flex-1 truncate">{shortLabel}</span>
+                        </div>
+                      );
+                    }
                     return (
                       <div
                         key={f}
@@ -2595,10 +2999,17 @@ export function ProjectGisGlobe() {
 
         {/* DEM section */}
         <div className="flex flex-col gap-[var(--space-2)]">
-          <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-            DEM
-          </span>
-          <div className="flex max-h-[200px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] p-[var(--space-2)]">
+          <CollapsibleSectionHeader
+            title="DEM"
+            collapsed={collapsedSections.has("dem")}
+            onToggle={() => toggleSectionCollapsed("dem")}
+          />
+          <div
+            className={
+              "flex flex-col gap-1 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] p-[var(--space-2)]"
+              + (collapsedSections.has("dem") ? " hidden" : "")
+            }
+          >
             {demFiles.length === 0 ? (
               <p className="text-xs text-[var(--color-text-muted)]">
                 No files
@@ -2624,51 +3035,6 @@ export function ProjectGisGlobe() {
                 );
               })
             )}
-          </div>
-        </div>
-
-        {/* Separator */}
-        <div className="h-px bg-[var(--color-border-subtle)]" />
-
-        {/* Terrain Analysis section */}
-        <div className="flex flex-col gap-[var(--space-2)]">
-          <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-            Terrain Analysis
-          </span>
-          <Field label="Polygon" layout="horizontal">
-            <Select
-              value={terrainPolygon}
-              onChange={(e) => setTerrainPolygon(e.target.value)}
-            >
-              <option value="">None</option>
-              {(fileList?.polygons ?? []).map((f) => {
-                const stem = f.replace(/\.gpkg$/i, "");
-                return (
-                  <option key={stem} value={stem}>{stem}</option>
-                );
-              })}
-            </Select>
-          </Field>
-          <Field label="Source field" layout="horizontal">
-            <Input
-              value={terrainSourceField}
-              onChange={(e) => setTerrainSourceField(e.target.value)}
-              className="font-mono text-xs"
-            />
-          </Field>
-          <div className="flex justify-end">
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={!projectId || !terrainPolygon}
-              onClick={() => {
-                setTerrainAnalysisOpen(true);
-                setTerrainAnalysisToken(Date.now());
-              }}
-            >
-              <Play size={12} className="mr-[var(--space-1)]" />
-              Process
-            </Button>
           </div>
         </div>
 

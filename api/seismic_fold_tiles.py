@@ -5,7 +5,9 @@ EPSG:3857), the fold GeoTIFF is written in the project's CRS and may
 carry the survey's RL rotation. That means we can't just crop-and-resample
 in source-pixel space — each output tile pixel has to be round-tripped:
     Web-Mercator sample point → source CRS → inverse source affine → (col, row)
-then bilinearly interpolated from the fold array.
+then **nearest-neighbour** sampled from the fold array. Fold values are
+discrete bin counts, so interpolation would invent values that don't
+exist and soften every bin edge — the rendering UX wants crisp blocks.
 
 Output lives next to the other seismic rasters at
 ``inputs/gis/seismic/fold__{slug}_tiles/{z}/{x}/{y}.png`` with a
@@ -71,17 +73,32 @@ def _tile_range_for_zoom(
 
 
 def _pick_max_zoom(source_pixel_merc: float) -> int:
-    """Zoom whose native pixel matches the source pixel in Web-Mercator.
+    """Zoom whose tile pixels comfortably oversample the source pixel.
 
     ``source_pixel_merc`` is the linear footprint of one source-TIF pixel
-    evaluated near the raster centre, in metres. We solve
-        world_half / (128 · px_merc) = 2^z
-    for z and clamp to sensible bounds.
+    in Web-Mercator metres. The naive choice ``round(log2(WORLD_HALF / (128 ·
+    px_merc)))`` lands a tile pixel just slightly larger than the source
+    pixel — fine on paper, but at non-equatorial latitudes the Mercator
+    scale factor stretches the apparent tile pixel and the user starts
+    seeing the Mercator-axis-aligned tile grid itself instead of the
+    source's (rotated) UTM grid. That manifests two ways: the visible
+    "fold pixel" becomes the tile pixel size (e.g. ~21 m ground at lat
+    56.5° vs the 20 m UTM source) and the fold rows appear axis-aligned
+    to Mercator, missing the survey's grid-convergence tilt that the
+    vector mesh shows correctly.
+
+    Bumping by one zoom level (`+1` after `ceil`) puts the tile pixel
+    well below the source pixel so each source pixel covers ~4 tile
+    pixels — the colour boundaries inside the rendered tile then track
+    the source's UTM grid (rotation included) rather than the
+    Mercator tile grid. ``PYRAMID_MAX_TILES`` still caps the on-disk
+    footprint, so the writer auto-backs-off this max for very large
+    surveys.
     """
     if source_pixel_merc <= 0:
         return 18
     z = math.log2(WORLD_HALF / (128 * source_pixel_merc))
-    return max(0, min(18, round(z)))
+    return max(0, min(18, math.ceil(z) + 1))
 
 
 # ---------------------------------------------------------------------------
@@ -89,14 +106,24 @@ def _pick_max_zoom(source_pixel_merc: float) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _bilinear_sample(
+def _nearest_sample(
     src: np.ndarray, col: np.ndarray, row: np.ndarray
 ) -> np.ndarray:
-    """Vectorised bilinear sample that zeros out-of-range coords.
+    """Vectorised nearest-neighbour sample that zeros out-of-range coords.
 
-    Fold values are integer counts; returning 0 for out-of-range makes the
-    colormap step treat those pixels as transparent (same rule as empty
-    bins inside the raster).
+    Fold values are integer bin counts — there's no meaningful in-between
+    value, so any interpolation invents data that doesn't exist (and
+    visually softens the bin edges). Each tile pixel is mapped to the
+    bin whose extent contains it; anything off the raster returns 0
+    (transparent in the colormap step, same rule as empty bins inside
+    the array).
+
+    Coordinate convention: ``col`` and ``row`` come from the source's
+    inverse affine, where ``col=0`` is the **upper-left corner** of
+    pixel 0 (so ``col=0.5`` is pixel 0's centre and ``col=1`` is pixel
+    1's left edge). ``np.floor`` therefore picks the bin that contains
+    the world point — using ``np.round`` would shift sampling by half a
+    bin and offset the entire raster from the grid mesh.
 
     At low zooms the merc→source reprojection of pixels near the antimeridian
     or poles can produce NaN/inf; a raw ``astype(np.int64)`` on those would
@@ -106,27 +133,17 @@ def _bilinear_sample(
     finite = np.isfinite(col) & np.isfinite(row)
     col_safe = np.where(finite, col, 0.0)
     row_safe = np.where(finite, row, 0.0)
+    # Half-open inclusion on each side: bin n covers [n, n+1), so a
+    # tile pixel landing exactly on bin n+1's left edge belongs to bin
+    # n+1, not bin n.
     inside = (
         finite
-        & (col_safe >= 0) & (col_safe <= w - 1)
-        & (row_safe >= 0) & (row_safe <= h - 1)
+        & (col_safe >= 0) & (col_safe < w)
+        & (row_safe >= 0) & (row_safe < h)
     )
-    c0 = np.clip(np.floor(col_safe), 0, w - 1).astype(np.int64)
-    r0 = np.clip(np.floor(row_safe), 0, h - 1).astype(np.int64)
-    c1 = np.clip(c0 + 1, 0, w - 1)
-    r1 = np.clip(r0 + 1, 0, h - 1)
-    fc = np.clip(col_safe - c0, 0, 1)
-    fr = np.clip(row_safe - r0, 0, 1)
-    v00 = src[r0, c0]
-    v10 = src[r0, c1]
-    v01 = src[r1, c0]
-    v11 = src[r1, c1]
-    sampled = (
-        v00 * (1 - fc) * (1 - fr)
-        + v10 * fc * (1 - fr)
-        + v01 * (1 - fc) * fr
-        + v11 * fc * fr
-    )
+    cc = np.clip(np.floor(col_safe), 0, w - 1).astype(np.int64)
+    rr = np.clip(np.floor(row_safe), 0, h - 1).astype(np.int64)
+    sampled = src[rr, cc]
     return np.where(inside, sampled, 0.0)
 
 
@@ -300,7 +317,7 @@ def write_fold_tile_pyramid(
                 src_col = a * src_x + b * src_y + c
                 src_row = d * src_x + e * src_y + f
 
-                sampled = _bilinear_sample(fold, src_col, src_row)
+                sampled = _nearest_sample(fold, src_col, src_row)
 
                 norm = (sampled - float(vmin)) / scale
                 norm = np.clip(norm, 0.0, 1.0)

@@ -10,6 +10,7 @@ import type {
 } from "@/components/features/project/project-gis-viewer";
 import { ViewportPlaceholder } from "@/components/features/project/viewport-placeholder";
 import { GisViewerViewport } from "@/components/features/project/gis-viewer-viewport";
+import { FoldColormapLegend } from "@/components/features/project/fold-colormap-legend";
 import { appIcons, Icon } from "@/components/ui/icon";
 import type { FileCategory } from "@/services/api/project-files";
 import { foldTilesUrlTemplate } from "@/services/api/project-fold";
@@ -158,6 +159,16 @@ export function DesignGridViewport({
               bounds: [bbox.west, bbox.south, bbox.east, bbox.north],
               opacity: 0.65,
               pickable: false,
+              // Crisp bin edges at every zoom — fold values are
+              // discrete counts, so the default ``linear`` texture
+              // filter would smear adjacent bins together when zoomed
+              // past the tile pyramid's max zoom (matches the
+              // server-side nearest sampler and the Files-page
+              // viewport's ``raster-resampling: nearest``).
+              textureParameters: {
+                minFilter: "nearest",
+                magFilter: "nearest",
+              },
             });
           },
         }),
@@ -262,13 +273,13 @@ export function DesignGridViewport({
   }
 
   const legendItems = [
-    ...(foldMeta
+    ...(sPts && sPts.points.length > 0
       ? [{
-          key: "fold",
-          color: "#8b5cf6",
-          label: `Fold ${foldMeta.value_min}–${foldMeta.value_max} (${foldMeta.colormap})`,
-          visible: foldVisible,
-          onToggle: () => setFoldVisible((v) => !v),
+          key: "s",
+          color: "#f97316",
+          label: `Sources (${sPts.count})`,
+          visible: sVisible,
+          onToggle: () => setSVisible((v) => !v),
         }]
       : []),
     ...(rPts && rPts.points.length > 0
@@ -280,15 +291,6 @@ export function DesignGridViewport({
           onToggle: () => setRVisible((v) => !v),
         }]
       : []),
-    ...(sPts && sPts.points.length > 0
-      ? [{
-          key: "s",
-          color: "#f97316",
-          label: `Sources (${sPts.count})`,
-          visible: sVisible,
-          onToggle: () => setSVisible((v) => !v),
-        }]
-      : []),
     ...regionPolygons.map((stem, i) => ({
       key: `region-${stem}`,
       color: REGION_PALETTE[i % REGION_PALETTE.length],
@@ -297,6 +299,18 @@ export function DesignGridViewport({
       onToggle: () =>
         setRegionVisible((prev) => ({ ...prev, [stem]: !(prev[stem] ?? true) })),
     })),
+    ...(foldMeta
+      ? [
+          { key: "fold-sep", color: "", label: "", separator: true },
+          {
+            key: "fold",
+            color: "#8b5cf6",
+            label: `Fold ${foldMeta.value_min}–${foldMeta.value_max} (${foldMeta.colormap})`,
+            visible: foldVisible,
+            onToggle: () => setFoldVisible((v) => !v),
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -308,6 +322,15 @@ export function DesignGridViewport({
       }}
       extraLayers={extraLayers}
       legendItems={legendItems}
+      legendExtra={
+        foldMeta && foldVisible ? (
+          <FoldColormapLegend
+            colormap={foldMeta.colormap}
+            valueMin={foldMeta.value_min}
+            valueMax={foldMeta.value_max}
+          />
+        ) : null
+      }
       fitBounds={stationBounds}
       viewStateKey={projectId != null ? `grid:${projectId}` : undefined}
     />

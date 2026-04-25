@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { ArcLayer, ScatterplotLayer } from "@deck.gl/layers";
+import { ArcLayer, BitmapLayer, ScatterplotLayer } from "@deck.gl/layers";
+import { TileLayer } from "@deck.gl/geo-layers";
 
 import type {
   VisibleFile,
@@ -9,10 +10,13 @@ import type {
 } from "@/components/features/project/project-gis-viewer";
 import { ViewportPlaceholder } from "@/components/features/project/viewport-placeholder";
 import { GisViewerViewport } from "@/components/features/project/gis-viewer-viewport";
+import { FoldColormapLegend } from "@/components/features/project/fold-colormap-legend";
 import { appIcons, Icon } from "@/components/ui/icon";
 import type { FileCategory } from "@/services/api/project-files";
+import { foldTilesUrlTemplate } from "@/services/api/project-fold";
 import type { OffsetArtifactResponse } from "@/services/api/project-offset-artifacts";
 import { useOffsetStations } from "@/services/query/project-offset-artifacts";
+import { useFoldMeta } from "@/services/query/project-fold";
 
 const R_OFFSET_COLOR: [number, number, number, number] = [29, 78, 216, 220]; // blue-700
 const R_LEFT_COLOR: [number, number, number, number] = [147, 197, 253, 220]; // blue-300
@@ -61,6 +65,15 @@ export function OffsetsGridViewport({
 }: OffsetsGridViewportProps) {
   const rQuery = useOffsetStations(projectId, "r");
   const sQuery = useOffsetStations(projectId, "s");
+  const foldQuery = useFoldMeta(projectId, "offsets");
+  const foldMeta = foldQuery.data ?? null;
+  // Tile URL carries a version string so a Process-fold re-run flushes
+  // both the browser's HTTP cache and deck.gl's internal tile cache —
+  // the backend overwrites tiles at the same paths otherwise.
+  const foldTileVersion = foldMeta
+    ? `${foldMeta.option_name}:offsets:${foldMeta.colormap}:${foldMeta.value_max}:${foldMeta.params.offset_min}:${foldMeta.params.offset_max}`
+    : null;
+  const [foldVisible, setFoldVisible] = React.useState(true);
 
   // Per-category + per-region visibility. Default on; the legend renders a
   // checkbox for each entry so the user can toggle any layer independently.
@@ -114,6 +127,60 @@ export function OffsetsGridViewport({
 
   const extraLayers = React.useMemo(() => {
     const layers: unknown[] = [];
+
+    // Offsets-fold overlay first so station dots and arcs draw on top.
+    // Mirrors the design-grid viewport's fold layer, except the tiles
+    // come from the ``offsets-fold`` endpoint (raster built from the
+    // post-offset stations).
+    if (foldMeta && foldTileVersion && projectId !== null) {
+      const tileUrl = foldTilesUrlTemplate(projectId, foldTileVersion, "offsets");
+      const [west, south, east, north] = foldMeta.bounds;
+      layers.push(
+        new TileLayer({
+          id: `offsets-fold-tiles:${foldTileVersion}`,
+          visible: foldVisible,
+          data: tileUrl,
+          loadOptions: {
+            fetch: { credentials: "include" },
+          },
+          minZoom: foldMeta.min_zoom,
+          maxZoom: foldMeta.max_zoom,
+          tileSize: 256,
+          extent: [west, south, east, north],
+          pickable: false,
+          renderSubLayers: (props) => {
+            const data = props.data as
+              | ImageBitmap
+              | HTMLImageElement
+              | null;
+            if (!data) return null;
+            const bbox = props.tile.bbox as {
+              west: number;
+              south: number;
+              east: number;
+              north: number;
+            };
+            return new BitmapLayer({
+              id: props.id,
+              image: data,
+              bounds: [bbox.west, bbox.south, bbox.east, bbox.north],
+              opacity: 0.65,
+              pickable: false,
+              // Crisp bin edges at every zoom — fold values are
+              // discrete counts, so the default ``linear`` texture
+              // filter would smear adjacent bins together when zoomed
+              // past the tile pyramid's max zoom (matches the
+              // server-side nearest sampler and the Files-page
+              // viewport's ``raster-resampling: nearest``).
+              textureParameters: {
+                minFilter: "nearest",
+                magFilter: "nearest",
+              },
+            });
+          },
+        }),
+      );
+    }
 
     const pushSide = (
       data: OffsetArtifactResponse | null,
@@ -228,7 +295,7 @@ export function OffsetsGridViewport({
     pushSide(sPts, "offs-s", "s-left", "s-offs", "s-skp", S_LEFT_COLOR, S_OFFSET_COLOR);
     pushSide(rPts, "offs-r", "r-left", "r-offs", "r-skp", R_LEFT_COLOR, R_OFFSET_COLOR);
     return layers;
-  }, [rPts, sPts, categoryVisible, useSnapped]);
+  }, [rPts, sPts, categoryVisible, useSnapped, foldMeta, foldTileVersion, foldVisible, projectId]);
 
   const hasStations =
     (rPts?.points.length ?? 0) + (sPts?.points.length ?? 0) > 0;
@@ -361,6 +428,21 @@ export function OffsetsGridViewport({
     legendItems.push({ key: "hd-regions", color: "", label: "Regions", separator: true });
     legendItems.push(...regionItems);
   }
+  if (foldMeta) {
+    legendItems.push({
+      key: "hd-fold",
+      color: "",
+      label: "Fold",
+      separator: true,
+    });
+    legendItems.push({
+      key: "fold",
+      color: "#7c3aed",
+      label: `Offsets fold (max ${foldMeta.value_max})`,
+      visible: foldVisible,
+      onToggle: () => setFoldVisible((v) => !v),
+    });
+  }
 
   // Per-side denominators: left + skip + offset partitions the side's
   // total count exactly, so each KPI percentage sums to 100 per side.
@@ -460,6 +542,15 @@ export function OffsetsGridViewport({
         }}
         extraLayers={extraLayers}
         legendItems={legendItems}
+        legendExtra={
+          foldMeta && foldVisible ? (
+            <FoldColormapLegend
+              colormap={foldMeta.colormap}
+              valueMin={foldMeta.value_min}
+              valueMax={foldMeta.value_max}
+            />
+          ) : null
+        }
         fitBounds={stationBounds}
         viewStateKey={projectId != null ? `offsets:${projectId}` : undefined}
       />

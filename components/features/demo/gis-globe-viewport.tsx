@@ -248,6 +248,10 @@ const BASE_SOURCE_ID = "base-tiles";
 const LABELS_SOURCE_ID = "labels-tiles";
 const BASE_LAYER_ID = "base-layer";
 const LABELS_LAYER_ID = "labels-layer";
+// Fold raster overlay (Files page picker). Hoisted so the base-tile and
+// labels effects can anchor against it without redefining the literal.
+const FOLD_SOURCE_ID = "fold-overlay-source";
+const FOLD_LAYER_ID = "fold-overlay-layer";
 
 const FEATURES_SOURCE_ID = "features-source";
 const FEATURES_FILL_LAYER = "features-fill";
@@ -3637,6 +3641,39 @@ export type LayerStyle = {
   group?: string;
 };
 
+/** One chunk of a fold overlay — the source raster's UTM extent is
+ *  subdivided into a grid of small chunks, each rendered as its own
+ *  MapLibre ``image`` source anchored at four UTM-projected WGS84
+ *  corners. Per-chunk anchoring keeps the cells UTM-aligned in the
+ *  rendered map (matching the grid mesh's polylines) and limits
+ *  MapLibre's linear-interpolation error to sub-meter inside any one
+ *  chunk — a single-quad placement breaks down on multi-tens-of-km
+ *  surveys (~18 m mid-quad error at lat 56°). */
+export type FoldOverlayChunk = {
+  chunkId: string;
+  imageUrl: string;
+  /** TL/TR/BR/BL pixel order. */
+  corners: [
+    [number, number],
+    [number, number],
+    [number, number],
+    [number, number],
+  ];
+};
+
+/** Single rendered fold to overlay on the globe — supplied by the Files
+ *  page picker. Composed of many small ``chunks`` rather than one big
+ *  raster (see ``FoldOverlayChunk``). */
+export type FoldOverlaySpec = {
+  /** Stable id used for the MapLibre sources + layers; should change
+   *  whenever the overlay's content does so the map fully resets. */
+  id: string;
+  /** All chunks for this fold. Empty chunks are skipped server-side. */
+  chunks: FoldOverlayChunk[];
+  /** Defaults to 0.65 to match the grid + offsets viewports. */
+  opacity?: number;
+};
+
 export function GisGlobeViewport({
   data,
   layers,
@@ -3694,6 +3731,8 @@ export function GisGlobeViewport({
   alignToGridNorth,
   onAlignToGridNorthChange,
   viewStateKey,
+  foldOverlay,
+  legendExtra,
 }: {
   data: GeoJSONFeatureCollection | null;
   layers?: ReadonlyArray<LayerStyle>;
@@ -3770,6 +3809,19 @@ export function GisGlobeViewport({
    * the view. Cache miss falls through to the normal fit-to-data path.
    */
   viewStateKey?: string;
+  /**
+   * Optional fold raster overlay rendered as a MapLibre raster layer
+   * above the gpkg features. ``null`` / undefined removes any
+   * previously-attached overlay. Single-active by design — the Files
+   * page picker behaves as a radio.
+   */
+  foldOverlay?: FoldOverlaySpec | null;
+  /**
+   * Extra content rendered at the bottom of the legend panel — used by
+   * the Files page to slot in the fold colormap ramp without wiring
+   * fold-specific UI into this viewport.
+   */
+  legendExtra?: React.ReactNode;
 }) {
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -3785,13 +3837,20 @@ export function GisGlobeViewport({
   const [zoomDisplay, setZoomDisplay] = React.useState(DEFAULT_ZOOM);
   const [pitchDisplay, setPitchDisplay] = React.useState(0);
   // Origin of the project backend — any map-internal request (raster-dem
-  // tiles, image sources) to this origin needs the session cookie, which
-  // MapLibre doesn't send by default. Derived from ``demManifestUrl`` or
-  // ``demTileUrlTemplate`` at mount; updated via ref so the map's
-  // ``transformRequest`` (set once at construction) stays in sync.
+  // tiles, image sources, fold overlay) to this origin needs the
+  // session cookie, which MapLibre doesn't send by default. Picks up
+  // any URL passed in (DEM or fold) so the cookie attaches even when
+  // the user hasn't loaded a DEM yet — without this, fold-overlay tile
+  // requests 403 on the FastAPI auth check.
   const backendOriginRef = React.useRef<string | null>(null);
+  const firstFoldChunkUrl = foldOverlay?.chunks[0]?.imageUrl;
   React.useEffect(() => {
-    const src = demManifestUrl || demTileUrlTemplate || demFileUrl || "";
+    const src =
+      demManifestUrl
+      || demTileUrlTemplate
+      || demFileUrl
+      || firstFoldChunkUrl
+      || "";
     if (src.startsWith("http://") || src.startsWith("https://")) {
       try {
         backendOriginRef.current = new URL(src).origin;
@@ -3801,7 +3860,7 @@ export function GisGlobeViewport({
     } else {
       backendOriginRef.current = null;
     }
-  }, [demManifestUrl, demTileUrlTemplate, demFileUrl]);
+  }, [demManifestUrl, demTileUrlTemplate, demFileUrl, firstFoldChunkUrl]);
   // When non-null, new features committed by add/freehand are stamped with
   // `properties.fclass = activeFclass`. Only one can be active at a time;
   // the pencil button next to each fclass in the legend toggles it.
@@ -4458,15 +4517,22 @@ export function GisGlobeViewport({
     }
 
     map.addSource(BASE_SOURCE_ID, rasterSourceFor(tile));
-    // Insert base below any existing overlay: DEM first (always lowest
-    // overlay), then vector features, otherwise top of stack. Without the
-    // DEM-overlay check, switching tiles while a DEM is displayed dropped
-    // the new base on top of the stack and hid the DEM.
+    // Insert base below every existing overlay so the new tiles never
+    // cover something the user is intentionally viewing. Priority is
+    // lowest-overlay-first: DEM, then the fold raster, then labels,
+    // then vector features. Picking the lowest present overlay as
+    // ``beforeId`` keeps base at the bottom of the stack regardless of
+    // which overlays happen to be active when the user switches
+    // providers.
     const baseBeforeId = map.getLayer(DEM_OVERLAY_LAYER)
       ? DEM_OVERLAY_LAYER
-      : map.getLayer(FEATURES_FILL_LAYER)
-        ? FEATURES_FILL_LAYER
-        : undefined;
+      : map.getLayer(FOLD_LAYER_ID)
+        ? FOLD_LAYER_ID
+        : map.getLayer(LABELS_LAYER_ID)
+          ? LABELS_LAYER_ID
+          : map.getLayer(FEATURES_FILL_LAYER)
+            ? FEATURES_FILL_LAYER
+            : undefined;
     map.addLayer(
       {
         id: BASE_LAYER_ID,
@@ -8668,6 +8734,69 @@ export function GisGlobeViewport({
     };
   }, [terrainOn, terrainExaggeration, demFile, demManifestUrl, demTileUrlTemplate, styleReady]);
 
+  // Fold overlay: one MapLibre ``image`` source + raster layer per
+  // chunk, all replaced together whenever the overlay spec id changes.
+  // Anchoring each chunk at four UTM-projected WGS84 corners keeps the
+  // cells UTM-aligned in the rendered map (matching the grid mesh).
+  // The single-quad alternative had ~18 m mid-raster placement drift
+  // at lat 56°; chunking caps it at sub-meter per chunk.
+  // Auth on the PNG fetches rides through the existing
+  // ``transformRequest`` (same path used by DEM tiles).
+  const attachedChunkIdsRef = React.useRef<string[]>([]);
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleReady) return;
+
+    const sourceIdFor = (chunkId: string) => `${FOLD_SOURCE_ID}__${chunkId}`;
+    const layerIdFor = (chunkId: string) => `${FOLD_LAYER_ID}__${chunkId}`;
+
+    const removeAll = () => {
+      for (const chunkId of attachedChunkIdsRef.current) {
+        const layerId = layerIdFor(chunkId);
+        const sourceId = sourceIdFor(chunkId);
+        if (map.getLayer(layerId)) map.removeLayer(layerId);
+        if (map.getSource(sourceId)) map.removeSource(sourceId);
+      }
+      attachedChunkIdsRef.current = [];
+    };
+    removeAll();
+
+    if (!foldOverlay || foldOverlay.chunks.length === 0) return;
+
+    const opacity = foldOverlay.opacity ?? 0.65;
+    const beforeId = map.getLayer(LABELS_LAYER_ID)
+      ? LABELS_LAYER_ID
+      : map.getLayer(FEATURES_FILL_LAYER)
+        ? FEATURES_FILL_LAYER
+        : undefined;
+
+    for (const chunk of foldOverlay.chunks) {
+      const sourceId = sourceIdFor(chunk.chunkId);
+      const layerId = layerIdFor(chunk.chunkId);
+      map.addSource(sourceId, {
+        type: "image",
+        url: chunk.imageUrl,
+        coordinates: chunk.corners,
+      });
+      map.addLayer(
+        {
+          id: layerId,
+          type: "raster",
+          source: sourceId,
+          paint: {
+            "raster-opacity": opacity,
+            "raster-fade-duration": 0,
+            "raster-resampling": "nearest",
+          },
+        },
+        beforeId,
+      );
+      attachedChunkIdsRef.current.push(chunk.chunkId);
+    }
+
+    return removeAll;
+  }, [foldOverlay, styleReady]);
+
   // Cursor readout: lng/lat under the pointer plus a queryTerrainElevation
   // sample when 3D terrain is active. Throttled to one update per animation
   // frame so a fast mouse drag doesn't flood React with state churn.
@@ -8982,6 +9111,7 @@ export function GisGlobeViewport({
               items.push(renderLayer(l));
               return items;
             })}
+            {legendExtra}
           </div>
         );
       })()}

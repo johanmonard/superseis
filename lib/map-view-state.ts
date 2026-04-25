@@ -19,11 +19,26 @@ export type MapCameraState = {
   pitch: number;
 };
 
+/** Files-page fold-overlay selection — null/absent means no overlay. */
+export type FoldOverlaySelection = {
+  /** Canonical grid-option name (post-slug-resolution). */
+  option: string;
+  source: "grid" | "offsets";
+  omin: number;
+  omax: number;
+};
+
 export type MapSessionState = {
   camera?: MapCameraState;
   tileIndex?: number;
   selectedFiles?: string[];
   alignToGridNorth?: boolean;
+  /** Single rendered fold currently overlayed in the Files viewport. */
+  activeFold?: FoldOverlaySelection | null;
+  /** Files-page section ids that are currently collapsed. Each section
+   *  in the left panel registers a stable id; persisting the set means
+   *  collapse state survives nav. */
+  collapsedSections?: string[];
 };
 
 const cache = new Map<string, MapSessionState>();
