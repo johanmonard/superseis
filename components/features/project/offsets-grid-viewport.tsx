@@ -517,10 +517,10 @@ export function OffsetsGridViewport({
                     </span>
                   </div>
                   <div className="text-sm font-semibold tabular-nums text-[var(--color-text-primary)]">
-                    {formatCount(it.count)}
+                    {formatPct(it.count, it.denom)}
                   </div>
                   <div className="text-[11px] tabular-nums text-[var(--color-text-secondary)]">
-                    {formatPct(it.count, it.denom)}
+                    {formatCount(it.count)}
                   </div>
                 </div>
               ))}
