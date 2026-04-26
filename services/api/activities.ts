@@ -1,58 +1,65 @@
 /**
- * In-memory activities store — swap for real API calls when backend is ready.
+ * Activity types — the runtime store now lives in `services/query/activities.ts`,
+ * persisted per-project via `useSectionData` into `config.json` under
+ * the `activities` section.
  */
 
-export type Activity = {
-  id: number
-  name: string
-  slug: string
-  created_at: string
+export interface ActivityTimeEntry {
+  id: string;
+  from: string;
+  to: string;
+  returnToBase: boolean;
 }
+
+export interface ActivityStripDef {
+  id: string;
+  label: string;
+  regions: string[];
+  design: string;
+  stripType: string;
+  grouping: string;
+  start: string;
+}
+
+export interface ActivitySequenceDef extends ActivityStripDef {
+  clusterType: string;
+  target: string;
+  startCluster: string;
+}
+
+export interface ActivityMotion {
+  gid_ttype_shift: string;
+  gid_swath_shift: string;
+  buffer_len_min: string;
+  buffer_len_max: string;
+  gid_sub_shift: string;
+}
+
+/** Mirror of the local-state shape inside `activity-parameters.tsx`. */
+export interface ActivityParameters {
+  description: string;
+  pType: "s" | "r";
+  baseMap: string;
+  allocation: Record<string, string | null>;
+  slipTimes: Record<string, Record<string, string>>;
+  timetables: Record<string, ActivityTimeEntry[]>;
+  designOption: string;
+  masterDesign: string;
+  sequenceRegioning: string;
+  strips: ActivityStripDef[];
+  sequences: ActivitySequenceDef[];
+  motion: ActivityMotion;
+  dynamicMappingKw: string;
+}
+
+export type Activity = {
+  id: number;
+  name: string;
+  slug: string;
+  created_at: string;
+  parameters?: ActivityParameters;
+};
 
 export type ActivityCreate = {
-  name: string
-}
-
-function slugify(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/[^\w\s-]/g, '')
-    .replace(/[\s_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
-
-let nextId = 1
-const store: Activity[] = []
-
-export async function fetchActivities(): Promise<Activity[]> {
-  return [...store].reverse()
-}
-
-export async function fetchActivity(slug: string): Promise<Activity> {
-  const activity = store.find((a) => a.slug === slug)
-  if (!activity) throw new Error('Activity not found')
-  return activity
-}
-
-export async function createActivity(payload: ActivityCreate): Promise<Activity> {
-  const name = payload.name.trim()
-  const slug = slugify(name)
-  if (!slug) throw new Error('Name produces an empty slug')
-  if (store.some((a) => a.slug === slug)) throw new Error(`Activity "${slug}" already exists`)
-
-  const activity: Activity = {
-    id: nextId++,
-    name,
-    slug,
-    created_at: new Date().toISOString(),
-  }
-  store.push(activity)
-  return activity
-}
-
-export async function deleteActivity(slug: string): Promise<void> {
-  const idx = store.findIndex((a) => a.slug === slug)
-  if (idx === -1) throw new Error('Activity not found')
-  store.splice(idx, 1)
-}
+  name: string;
+};

@@ -11,129 +11,327 @@ import { EditableMatrix } from "./editable-matrix";
 import { InlineTagSelect } from "./inline-tag-select";
 import { Section } from "./section";
 import { TabbedPanel } from "./tabbed-panel";
+import type {
+  Activity,
+  ActivityParameters,
+  ActivitySequenceDef,
+  ActivityStripDef,
+  ActivityTimeEntry,
+} from "@/services/api/activities";
+import { useActiveProject } from "@/lib/use-active-project";
+import { useSectionData } from "@/lib/use-autosave";
 
 /* -------------------------------------------------------------------------- */
-/*  Dummy option data — replace with real queries when backend is ready       */
+/*  Live data sources — pulled from sibling sections of the same project      */
 /* -------------------------------------------------------------------------- */
 
-const DUMMY_MAPS = ["Base Map A", "Base Map B", "Topographic"];
-const DUMMY_LAYERS = ["Roads", "Rivers", "Exclusion Zones", "Elevation"];
-const DUMMY_RESOURCES = ["Crew 1", "Crew 2", "Crew 3"];
+interface ActivitiesSectionData {
+  items: Activity[];
+  nextId: number;
+}
+const DEFAULT_ACTIVITIES_SECTION: ActivitiesSectionData = {
+  items: [],
+  nextId: 1,
+};
+
+interface MapsSectionData {
+  maps: Array<{ id: string; name: string; layers: string[] }>;
+  activeId: string;
+}
+const DEFAULT_MAPS_SECTION: MapsSectionData = { maps: [], activeId: "" };
+
+interface CrewSectionData {
+  options: Array<{
+    id: string;
+    name: string;
+    activities: Array<{
+      id: string;
+      name: string;
+      resources: Array<{ name: string }>;
+    }>;
+  }>;
+  activeId: string;
+}
+const DEFAULT_CREW_SECTION: CrewSectionData = { options: [], activeId: "" };
+
+/* -------------------------------------------------------------------------- */
+/*  Dummy option data — to be replaced incrementally as the form gets wired   */
+/* -------------------------------------------------------------------------- */
+
 const DUMMY_DESIGN_GROUPS = ["Design Group A", "Design Group B"];
 const DUMMY_MASTER_DESIGNS = ["Master 1", "Master 2", "Master 3"];
 const DUMMY_REGIONING_GROUPS = ["Region Group North", "Region Group South"];
 const DUMMY_POLYGONS = ["Polygon A", "Polygon B", "Polygon C", "Polygon D"];
 
 /* -------------------------------------------------------------------------- */
-/*  Types                                                                     */
+/*  Defaults                                                                  */
 /* -------------------------------------------------------------------------- */
 
-type TimeEntry = {
-  id: string;
-  from: string;
-  to: string;
-  returnToBase: boolean;
-};
+function defaultStrip(): ActivityStripDef {
+  return {
+    id: crypto.randomUUID(),
+    label: "Strip 1",
+    regions: [],
+    design: "",
+    stripType: "inline",
+    grouping: "",
+    start: "highest",
+  };
+}
 
-type StripDef = {
-  id: string;
-  label: string;
-  regions: string[];
-  design: string;
-  stripType: string;
-  grouping: string;
-  start: string;
-};
+function defaultSequence(): ActivitySequenceDef {
+  return {
+    id: crypto.randomUUID(),
+    label: "Seq 1",
+    regions: [],
+    design: "",
+    stripType: "inline",
+    grouping: "",
+    start: "highest",
+    clusterType: "weight",
+    target: "",
+    startCluster: "highest",
+  };
+}
 
-type SequenceDef = StripDef & {
-  clusterType: string;
-  target: string;
-  startCluster: string;
-};
+function defaultParameters(): ActivityParameters {
+  return {
+    description: "",
+    pType: "s",
+    baseMap: "",
+    allocation: {},
+    slipTimes: {},
+    timetables: {},
+    designOption: "",
+    masterDesign: "",
+    sequenceRegioning: "",
+    strips: [defaultStrip()],
+    sequences: [defaultSequence()],
+    motion: {
+      gid_ttype_shift: "",
+      gid_swath_shift: "",
+      buffer_len_min: "",
+      buffer_len_max: "",
+      gid_sub_shift: "",
+    },
+    dynamicMappingKw: "",
+  };
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Component                                                                 */
 /* -------------------------------------------------------------------------- */
 
-export function ActivityParameters({ activityName }: { activityName: string }) {
+export function ActivityParameters({
+  activityName,
+  activitySlug,
+}: {
+  activityName: string;
+  /** Optional — if set, parameters are persisted to this activity's registry entry. */
+  activitySlug?: string;
+}) {
+  // ──────────────────────────────────────────────────────────────────────
+  // State strategy: same as the Settings pages (project-crew.tsx, etc.).
+  // `useSectionData` IS the source of truth — no local React.useState,
+  // no separate persist effect. Every field setter writes the patched
+  // entry back through `update`, which optimistically refreshes the
+  // cache and debounce-saves to the backend.
+  // ──────────────────────────────────────────────────────────────────────
+  const { activeProject } = useActiveProject();
+  const projectId = activeProject?.id ?? null;
+
+  const { data: activitiesSection, update: updateActivitiesSection } =
+    useSectionData<ActivitiesSectionData>(
+      projectId,
+      "activities",
+      DEFAULT_ACTIVITIES_SECTION,
+    );
+  const entry = activitySlug
+    ? activitiesSection.items.find((a) => a.slug === activitySlug)
+    : undefined;
+
+  const { data: mapsSection } = useSectionData<MapsSectionData>(
+    projectId,
+    "maps",
+    DEFAULT_MAPS_SECTION,
+  );
+  const availableMaps = mapsSection.maps;
+  const { data: crewSection } = useSectionData<CrewSectionData>(
+    projectId,
+    "crew",
+    DEFAULT_CREW_SECTION,
+  );
+
+  // Parameters live in the section. We compute a defaults-merged view per
+  // render so every field always has a defined initial value even if the
+  // entry's stored params predate a newly-added field.
+  const parameters: ActivityParameters = React.useMemo(
+    () => ({ ...defaultParameters(), ...(entry?.parameters ?? {}) }),
+    [entry?.parameters],
+  );
+
+  // Patch helper — applies an update to a single key, writes the new
+  // entry back into the section, and lets `useSectionData` debounce the
+  // save. Reads `live` data directly from the React Query cache (rather
+  // than the closed-over render snapshot) so back-to-back edits within a
+  // single render stack correctly.
+  const setParameters = React.useCallback(
+    (updater: React.SetStateAction<ActivityParameters>) => {
+      if (!activitySlug) return;
+      const live = activitiesSection;
+      const target = live.items.find((a) => a.slug === activitySlug);
+      if (!target) return;
+      const prev: ActivityParameters = {
+        ...defaultParameters(),
+        ...(target.parameters ?? {}),
+      };
+      const next =
+        typeof updater === "function"
+          ? (updater as (v: ActivityParameters) => ActivityParameters)(prev)
+          : updater;
+      updateActivitiesSection({
+        ...live,
+        items: live.items.map((a) =>
+          a.slug === activitySlug ? { ...a, parameters: next } : a,
+        ),
+      });
+    },
+    [activitySlug, activitiesSection, updateActivitiesSection],
+  );
+
+  // Helper: per-key setter that supports both bare values and the React
+  // functional updater form. Keeps the JSX below identical to the previous
+  // useState-based version.
+  function field<K extends keyof ActivityParameters>(
+    key: K,
+  ): [
+    ActivityParameters[K],
+    (value: React.SetStateAction<ActivityParameters[K]>) => void,
+  ] {
+    return [
+      parameters[key],
+      (updater) =>
+        setParameters((prev) => ({
+          ...prev,
+          [key]:
+            typeof updater === "function"
+              ? (
+                  updater as (
+                    v: ActivityParameters[K],
+                  ) => ActivityParameters[K]
+                )(prev[key])
+              : updater,
+        })),
+    ];
+  }
+
   // General Information
   const [name, setName] = React.useState(activityName);
-  const [description, setDescription] = React.useState("");
-  const [pType, setPType] = React.useState("s");
+  React.useEffect(() => setName(activityName), [activityName]);
+  const [description, setDescription] = field("description");
+  const [pType, setPType] = field("pType");
 
   // Resources
-  const [baseMap, setBaseMap] = React.useState("");
-  const [allocation, setAllocation] = React.useState<Record<string, string | null>>({});
+  const [baseMap, setBaseMap] = field("baseMap");
+  const [allocation, setAllocation] = field("allocation");
 
   // Slip Times
-  const [slipTimes, setSlipTimes] = React.useState<Record<string, Record<string, string>>>({});
+  const [slipTimes, setSlipTimes] = field("slipTimes");
 
   // Timetables
-  const [timetables, setTimetables] = React.useState<Record<string, TimeEntry[]>>(() =>
-    Object.fromEntries(DUMMY_RESOURCES.map((r) => [r, []]))
+  const [timetables, setTimetables] = field("timetables");
+
+  // Derived option lists. `layerOptions` follows the selected base map;
+  // `resourceOptions` lists all resources whose `parameters.activity`
+  // matches the activity name we're editing.
+  const selectedMap = React.useMemo(
+    () => availableMaps.find((m) => m.name === parameters.baseMap),
+    [availableMaps, parameters.baseMap],
   );
-  const [expandedResource, setExpandedResource] = React.useState<string | null>(DUMMY_RESOURCES[0]);
+  const layerOptions = selectedMap?.layers ?? [];
+  // Resources for this activity come from the active crew option — that's
+  // the canonical mapping. (We deliberately don't filter the registry by
+  // any per-resource `activity` field; the crew page is the source of truth.)
+  const resourceOptions = React.useMemo(() => {
+    const opt =
+      crewSection.options.find((o) => o.id === crewSection.activeId) ??
+      crewSection.options[0];
+    if (!opt) return [];
+    const act = opt.activities.find((a) => a.name === activityName);
+    return act ? act.resources.map((r) => r.name) : [];
+  }, [crewSection, activityName]);
+
+  const [expandedResource, setExpandedResource] = React.useState<string | null>(
+    null,
+  );
+  React.useEffect(() => {
+    setExpandedResource((prev) =>
+      prev && resourceOptions.includes(prev) ? prev : resourceOptions[0] ?? null,
+    );
+  }, [resourceOptions]);
 
   // Sequencing
-  const [designOption, setDesignOption] = React.useState("");
-  const [masterDesign, setMasterDesign] = React.useState("");
-  const [sequenceRegioning, setSequenceRegioning] = React.useState("");
+  const [designOption, setDesignOption] = field("designOption");
+  const [masterDesign, setMasterDesign] = field("masterDesign");
+  const [sequenceRegioning, setSequenceRegioning] = field("sequenceRegioning");
 
   // Base Strips
-  const [strips, setStrips] = React.useState<StripDef[]>([
-    { id: crypto.randomUUID(), label: "Strip 1", regions: [], design: "", stripType: "inline", grouping: "", start: "highest" },
-  ]);
-  const [activeStripId, setActiveStripId] = React.useState<string | null>(strips[0].id);
+  const [strips, setStrips] = field("strips");
+  const [activeStripId, setActiveStripId] = React.useState<string | null>(
+    parameters.strips[0]?.id ?? null,
+  );
 
   // Sequences
-  const [sequences, setSequences] = React.useState<SequenceDef[]>([
-    { id: crypto.randomUUID(), label: "Seq 1", regions: [], design: "", stripType: "inline", grouping: "", start: "highest", clusterType: "weight", target: "", startCluster: "highest" },
-  ]);
-  const [activeSeqId, setActiveSeqId] = React.useState<string | null>(sequences[0].id);
+  const [sequences, setSequences] = field("sequences");
+  const [activeSeqId, setActiveSeqId] = React.useState<string | null>(
+    parameters.sequences[0]?.id ?? null,
+  );
 
   // Motion
-  const [motion, setMotion] = React.useState({
-    gid_ttype_shift: "",
-    gid_swath_shift: "",
-    buffer_len_min: "",
-    buffer_len_max: "",
-    gid_sub_shift: "",
-  });
+  const [motion, setMotion] = field("motion");
 
   // Dynamic
-  const [dynamicMappingKw, setDynamicMappingKw] = React.useState("");
+  const [dynamicMappingKw, setDynamicMappingKw] = field("dynamicMappingKw");
 
   /* Helpers */
   const addTimeEntry = (resource: string) => {
     setTimetables((prev) => ({
       ...prev,
       [resource]: [
-        ...prev[resource],
+        ...(prev[resource] ?? []),
         { id: crypto.randomUUID(), from: "", to: "", returnToBase: false },
       ],
     }));
   };
 
-  const updateTimeEntry = (resource: string, id: string, patch: Partial<TimeEntry>) => {
+  const updateTimeEntry = (
+    resource: string,
+    id: string,
+    patch: Partial<ActivityTimeEntry>,
+  ) => {
     setTimetables((prev) => ({
       ...prev,
-      [resource]: prev[resource].map((e) => (e.id === id ? { ...e, ...patch } : e)),
+      [resource]: (prev[resource] ?? []).map((e) =>
+        e.id === id ? { ...e, ...patch } : e,
+      ),
     }));
   };
 
   const removeTimeEntry = (resource: string, id: string) => {
     setTimetables((prev) => ({
       ...prev,
-      [resource]: prev[resource].filter((e) => e.id !== id),
+      [resource]: (prev[resource] ?? []).filter((e) => e.id !== id),
     }));
   };
 
-  const updateStrip = (id: string, patch: Partial<StripDef>) => {
+  const updateStrip = (id: string, patch: Partial<ActivityStripDef>) => {
     setStrips((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
   };
 
-  const updateSequence = (id: string, patch: Partial<SequenceDef>) => {
-    setSequences((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  const updateSequence = (id: string, patch: Partial<ActivitySequenceDef>) => {
+    setSequences((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, ...patch } : s)),
+    );
   };
 
   return (
@@ -176,33 +374,52 @@ export function ActivityParameters({ activityName }: { activityName: string }) {
         <Field label="Base Map" htmlFor="act-basemap" layout="horizontal">
           <Select id="act-basemap" value={baseMap} onChange={(e) => setBaseMap(e.target.value)}>
             <option value="">Select...</option>
-            {DUMMY_MAPS.map((m) => (
-              <option key={m} value={m}>{m}</option>
+            {availableMaps.map((m) => (
+              <option key={m.id} value={m.name}>{m.name}</option>
             ))}
           </Select>
         </Field>
         <Field label="Allocation" layout="horizontal">
-          <CheckboxMatrix
-            rows={DUMMY_LAYERS}
-            columns={DUMMY_RESOURCES}
-            value={allocation}
-            onChange={setAllocation}
-          />
+          {layerOptions.length === 0 || resourceOptions.length === 0 ? (
+            <p className="text-xs text-[var(--color-text-muted)]">
+              {layerOptions.length === 0
+                ? "Select a Base Map to populate rows."
+                : "No resources point to this activity."}
+            </p>
+          ) : (
+            <CheckboxMatrix
+              rows={layerOptions}
+              columns={resourceOptions}
+              value={allocation}
+              onChange={setAllocation}
+            />
+          )}
         </Field>
       </Section>
 
       {/* ── Slip Times ────────────────────────────────────────────────── */}
       <Section title="Slip Times" defaultOpen={false}>
-        <EditableMatrix
-          labels={DUMMY_RESOURCES}
-          value={slipTimes}
-          onChange={setSlipTimes}
-        />
+        {resourceOptions.length === 0 ? (
+          <p className="text-xs text-[var(--color-text-muted)]">
+            No resources point to this activity.
+          </p>
+        ) : (
+          <EditableMatrix
+            labels={resourceOptions}
+            value={slipTimes}
+            onChange={setSlipTimes}
+          />
+        )}
       </Section>
 
       {/* ── Timetables ────────────────────────────────────────────────── */}
       <Section title="Timetables" defaultOpen={false}>
-        {DUMMY_RESOURCES.map((resource) => (
+        {resourceOptions.length === 0 ? (
+          <p className="text-xs text-[var(--color-text-muted)]">
+            No resources point to this activity.
+          </p>
+        ) : null}
+        {resourceOptions.map((resource) => (
           <div key={resource}>
             <button
               type="button"

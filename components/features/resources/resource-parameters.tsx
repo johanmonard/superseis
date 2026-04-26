@@ -9,119 +9,256 @@ import { Select } from "@/components/ui/select";
 import { InlineTagSelect } from "../activities/inline-tag-select";
 import { Section } from "../activities/section";
 import { TabbedPanel } from "../activities/tabbed-panel";
+import type {
+  MotionMode,
+  Resource,
+  ResourceCampMappingEntry,
+  ResourceParameters,
+  ResourceSequenceDef,
+  ResourceTimeMapDef,
+} from "@/services/api/resources";
+import { useActiveProject } from "@/lib/use-active-project";
+import { useSectionData } from "@/lib/use-autosave";
 
 /* -------------------------------------------------------------------------- */
-/*  Dummy option data — replace with real queries when backend is ready       */
+/*  Live data sources — pulled from sibling sections of the same project      */
 /* -------------------------------------------------------------------------- */
 
-const DUMMY_ACTIVITIES = ["Acquisition", "Drilling", "Surveying"];
+interface ResourcesSectionData {
+  items: Resource[];
+  nextId: number;
+}
+const DEFAULT_RESOURCES_SECTION: ResourcesSectionData = {
+  items: [],
+  nextId: 1,
+};
+
+interface CrewSectionData {
+  options: Array<{
+    id: string;
+    name: string;
+    activities: Array<{
+      id: string;
+      name: string;
+      resources: Array<{ name: string }>;
+    }>;
+  }>;
+  activeId: string;
+}
+const DEFAULT_CREW_SECTION: CrewSectionData = { options: [], activeId: "" };
+
+/* -------------------------------------------------------------------------- */
+/*  Dummy option data — to be replaced incrementally as the form gets wired   */
+/* -------------------------------------------------------------------------- */
+
 const DUMMY_MAPS = ["Base Map A", "Base Map B", "Topographic"];
 const DUMMY_LAYERS = ["Roads", "Rivers", "Exclusion Zones", "Elevation"];
 const DUMMY_POLYGONS = ["Polygon A", "Polygon B", "Polygon C", "Polygon D"];
 
 const MOTION_MODES = ["MOVE", "TRAV", "WORK"] as const;
-type MotionMode = (typeof MOTION_MODES)[number];
 
 const MAPPING_MODE_KEYS = ["BASE", "CGRP", "CPRG", "CURRENT", "SWITCH"] as const;
 
 /* -------------------------------------------------------------------------- */
-/*  Types                                                                     */
+/*  Defaults                                                                  */
 /* -------------------------------------------------------------------------- */
 
-type RandShapeEntry = { low: string; mode: string; high: string };
+function defaultSequence(): ResourceSequenceDef {
+  return {
+    id: crypto.randomUUID(),
+    label: "Seq 1",
+    regions: [],
+    designRegion: "",
+    stripType: "inline",
+    stripGrouping: "",
+    clusterType: "weight",
+    clusterTarget: "",
+    stripStart: "highest",
+    clusterStart: "highest",
+  };
+}
 
-type SequenceDef = {
-  id: string;
-  label: string;
-  regions: string[];
-  designRegion: string;
-  stripType: "inline" | "crossline";
-  stripGrouping: string;
-  clusterType: "weight" | "number" | "size";
-  clusterTarget: string;
-  stripStart: "highest" | "lowest";
-  clusterStart: "highest" | "lowest";
-};
-
-type CampMappingEntry = { key: string; value: string };
-
-type TimeMapDef = { mapper: string; mapping: Record<string, string> };
+function defaultParameters(): ResourceParameters {
+  return {
+    designation: "",
+    activity: "",
+    greedy: false,
+    abtb: false,
+    mttf: "",
+    mtbd: "",
+    btbBuffer: "",
+    randShape: {
+      MOVE: { low: "", mode: "", high: "" },
+      TRAV: { low: "", mode: "", high: "" },
+      WORK: { low: "", mode: "", high: "" },
+    },
+    sequences: [defaultSequence()],
+    campMapper: "",
+    campMappingEntries: [{ key: "", value: "" }],
+    campStart: "",
+    mappingModes: Object.fromEntries(
+      MAPPING_MODE_KEYS.map((k) => [k, "MOVE" as MotionMode]),
+    ),
+    workMapping: Object.fromEntries(DUMMY_LAYERS.map((l) => [l, ""])),
+    timeMapMove: {
+      mapper: "",
+      mapping: Object.fromEntries(DUMMY_LAYERS.map((l) => [l, ""])),
+    },
+    timeMapTrav: {
+      mapper: "",
+      mapping: Object.fromEntries(DUMMY_LAYERS.map((l) => [l, ""])),
+    },
+  };
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Component                                                                 */
 /* -------------------------------------------------------------------------- */
 
-export function ResourceParameters({ resourceName }: { resourceName: string }) {
+export function ResourceParameters({
+  resourceName,
+  resourceSlug,
+}: {
+  resourceName: string;
+  /** Optional — if set, parameters are persisted to this resource's registry entry. */
+  resourceSlug?: string;
+}) {
+  // ──────────────────────────────────────────────────────────────────────
+  // Same direct-`useSectionData` pattern as the Settings pages: the
+  // section IS the source of truth, no local React.useState, no separate
+  // persist effect. Field setters write the patched entry back through
+  // `update`, which optimistically refreshes the cache and debounce-saves.
+  // ──────────────────────────────────────────────────────────────────────
+  const { activeProject } = useActiveProject();
+  const projectId = activeProject?.id ?? null;
+
+  const { data: resourcesSection, update: updateResourcesSection } =
+    useSectionData<ResourcesSectionData>(
+      projectId,
+      "resources",
+      DEFAULT_RESOURCES_SECTION,
+    );
+  const entry = resourceSlug
+    ? resourcesSection.items.find((r) => r.slug === resourceSlug)
+    : undefined;
+
+  const { data: crewSection } = useSectionData<CrewSectionData>(
+    projectId,
+    "crew",
+    DEFAULT_CREW_SECTION,
+  );
+  const owningActivities = React.useMemo(() => {
+    const opt =
+      crewSection.options.find((o) => o.id === crewSection.activeId) ??
+      crewSection.options[0];
+    if (!opt) return [];
+    return opt.activities
+      .filter((a) => a.resources.some((r) => r.name === resourceName))
+      .map((a) => a.name);
+  }, [crewSection, resourceName]);
+  const owningActivityLabel = owningActivities.length
+    ? owningActivities.join(", ")
+    : "—";
+
+  const parameters: ResourceParameters = React.useMemo(
+    () => ({ ...defaultParameters(), ...(entry?.parameters ?? {}) }),
+    [entry?.parameters],
+  );
+
+  const setParameters = React.useCallback(
+    (updater: React.SetStateAction<ResourceParameters>) => {
+      if (!resourceSlug) return;
+      const live = resourcesSection;
+      const target = live.items.find((r) => r.slug === resourceSlug);
+      if (!target) return;
+      const prev: ResourceParameters = {
+        ...defaultParameters(),
+        ...(target.parameters ?? {}),
+      };
+      const next =
+        typeof updater === "function"
+          ? (updater as (v: ResourceParameters) => ResourceParameters)(prev)
+          : updater;
+      updateResourcesSection({
+        ...live,
+        items: live.items.map((r) =>
+          r.slug === resourceSlug ? { ...r, parameters: next } : r,
+        ),
+      });
+    },
+    [resourceSlug, resourcesSection, updateResourcesSection],
+  );
+
+  function field<K extends keyof ResourceParameters>(
+    key: K,
+  ): [
+    ResourceParameters[K],
+    (value: React.SetStateAction<ResourceParameters[K]>) => void,
+  ] {
+    return [
+      parameters[key],
+      (updater) =>
+        setParameters((prev) => ({
+          ...prev,
+          [key]:
+            typeof updater === "function"
+              ? (
+                  updater as (
+                    v: ResourceParameters[K],
+                  ) => ResourceParameters[K]
+                )(prev[key])
+              : updater,
+        })),
+    ];
+  }
+
   /* ── General Information ─────────────────────────────────────────────── */
   const [name, setName] = React.useState(resourceName);
-  const [designation, setDesignation] = React.useState("");
-  const [activity, setActivity] = React.useState("");
+  React.useEffect(() => setName(resourceName), [resourceName]);
+  const [designation, setDesignation] = field("designation");
 
   /* ── Motion ──────────────────────────────────────────────────────────── */
-  const [greedy, setGreedy] = React.useState(false);
-  const [abtb, setAbtb] = React.useState(false);
-  const [mttf, setMttf] = React.useState("");
-  const [mtbd, setMtbd] = React.useState("");
-  const [btbBuffer, setBtbBuffer] = React.useState("");
-  const [randShape, setRandShape] = React.useState<Record<MotionMode, RandShapeEntry>>({
-    MOVE: { low: "", mode: "", high: "" },
-    TRAV: { low: "", mode: "", high: "" },
-    WORK: { low: "", mode: "", high: "" },
-  });
+  const [greedy, setGreedy] = field("greedy");
+  const [abtb, setAbtb] = field("abtb");
+  const [mttf, setMttf] = field("mttf");
+  const [mtbd, setMtbd] = field("mtbd");
+  const [btbBuffer, setBtbBuffer] = field("btbBuffer");
+  const [randShape, setRandShape] = field("randShape");
 
   /* ── Sequencing ──────────────────────────────────────────────────────── */
-  const [sequences, setSequences] = React.useState<SequenceDef[]>([
-    {
-      id: crypto.randomUUID(),
-      label: "Seq 1",
-      regions: [],
-      designRegion: "",
-      stripType: "inline",
-      stripGrouping: "",
-      clusterType: "weight",
-      clusterTarget: "",
-      stripStart: "highest",
-      clusterStart: "highest",
-    },
-  ]);
-  const [activeSeqId, setActiveSeqId] = React.useState<string | null>(sequences[0].id);
+  const [sequences, setSequences] = field("sequences");
+  const [activeSeqId, setActiveSeqId] = React.useState<string | null>(
+    parameters.sequences[0]?.id ?? null,
+  );
 
   /* ── Terrain ─────────────────────────────────────────────────────────── */
-  const [campMapper, setCampMapper] = React.useState("");
-  const [campMappingEntries, setCampMappingEntries] = React.useState<CampMappingEntry[]>([
-    { key: "", value: "" },
-  ]);
-  const [campStart, setCampStart] = React.useState("");
-  const [mappingModes, setMappingModes] = React.useState<Record<string, MotionMode>>(() =>
-    Object.fromEntries(MAPPING_MODE_KEYS.map((k) => [k, "MOVE" as MotionMode]))
-  );
-  const [workMapping, setWorkMapping] = React.useState<Record<string, string>>(() =>
-    Object.fromEntries(DUMMY_LAYERS.map((l) => [l, ""]))
-  );
-  const [timeMapMove, setTimeMapMove] = React.useState<TimeMapDef>({
-    mapper: "",
-    mapping: Object.fromEntries(DUMMY_LAYERS.map((l) => [l, ""])),
-  });
-  const [timeMapTrav, setTimeMapTrav] = React.useState<TimeMapDef>({
-    mapper: "",
-    mapping: Object.fromEntries(DUMMY_LAYERS.map((l) => [l, ""])),
-  });
+  const [campMapper, setCampMapper] = field("campMapper");
+  const [campMappingEntries, setCampMappingEntries] = field("campMappingEntries");
+  const [campStart, setCampStart] = field("campStart");
+  const [mappingModes, setMappingModes] = field("mappingModes");
+  const [workMapping, setWorkMapping] = field("workMapping");
+  const [timeMapMove, setTimeMapMove] = field("timeMapMove");
+  const [timeMapTrav, setTimeMapTrav] = field("timeMapTrav");
 
   /* ── Helpers ─────────────────────────────────────────────────────────── */
-  const updateRandShape = (mode: MotionMode, field: keyof RandShapeEntry, value: string) => {
+  const updateRandShape = (
+    mode: MotionMode,
+    fieldName: keyof (typeof randShape)["MOVE"],
+    value: string,
+  ) => {
     setRandShape((prev) => ({
       ...prev,
-      [mode]: { ...prev[mode], [field]: value },
+      [mode]: { ...prev[mode], [fieldName]: value },
     }));
   };
 
-  const updateSequence = (id: string, patch: Partial<SequenceDef>) => {
+  const updateSequence = (id: string, patch: Partial<ResourceSequenceDef>) => {
     setSequences((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
   };
 
-  const updateCampEntry = (idx: number, patch: Partial<CampMappingEntry>) => {
+  const updateCampEntry = (idx: number, patch: Partial<ResourceCampMappingEntry>) => {
     setCampMappingEntries((prev) =>
-      prev.map((e, i) => (i === idx ? { ...e, ...patch } : e))
+      prev.map((e, i) => (i === idx ? { ...e, ...patch } : e)),
     );
   };
 
@@ -134,8 +271,8 @@ export function ResourceParameters({ resourceName }: { resourceName: string }) {
   };
 
   const updateTimeMap = (
-    setter: React.Dispatch<React.SetStateAction<TimeMapDef>>,
-    patch: Partial<TimeMapDef> | { layer: string; value: string }
+    setter: (v: React.SetStateAction<ResourceTimeMapDef>) => void,
+    patch: Partial<ResourceTimeMapDef> | { layer: string; value: string },
   ) => {
     if ("layer" in patch) {
       setter((prev) => ({
@@ -167,17 +304,13 @@ export function ResourceParameters({ resourceName }: { resourceName: string }) {
             maxLength={25}
           />
         </Field>
-        <Field label="Activity" htmlFor="res-activity" layout="horizontal">
-          <Select
-            id="res-activity"
-            value={activity}
-            onChange={(e) => setActivity(e.target.value)}
+        <Field label="Activity" layout="horizontal">
+          <p
+            className="text-sm text-[var(--color-text-secondary)]"
+            title="Defined in the Crew page"
           >
-            <option value="">Select...</option>
-            {DUMMY_ACTIVITIES.map((a) => (
-              <option key={a} value={a}>{a}</option>
-            ))}
-          </Select>
+            {owningActivityLabel}
+          </p>
         </Field>
       </Section>
 
@@ -226,13 +359,13 @@ export function ResourceParameters({ resourceName }: { resourceName: string }) {
             <div key={mode} className="space-y-[var(--space-2)]">
               <p className="text-xs font-medium text-[var(--color-text-secondary)]">{mode}</p>
               <div className="flex items-center gap-[var(--space-2)]">
-                {(["low", "mode", "high"] as const).map((field) => (
-                  <Field key={field} label={field} htmlFor={`rs-${mode}-${field}`} layout="vertical">
+                {(["low", "mode", "high"] as const).map((f) => (
+                  <Field key={f} label={f} htmlFor={`rs-${mode}-${f}`} layout="vertical">
                     <Input
-                      id={`rs-${mode}-${field}`}
+                      id={`rs-${mode}-${f}`}
                       type="number"
-                      value={randShape[mode][field]}
-                      onChange={(e) => updateRandShape(mode, field, e.target.value)}
+                      value={randShape[mode][f]}
+                      onChange={(e) => updateRandShape(mode, f, e.target.value)}
                       className="w-20"
                     />
                   </Field>
@@ -444,7 +577,7 @@ export function ResourceParameters({ resourceName }: { resourceName: string }) {
             <Field key={layer} label={layer} htmlFor={`wm-${layer}`} layout="horizontal">
               <Input
                 id={`wm-${layer}`}
-                value={workMapping[layer]}
+                value={workMapping[layer] ?? ""}
                 onChange={(e) =>
                   setWorkMapping((prev) => ({ ...prev, [layer]: e.target.value }))
                 }

@@ -25,7 +25,7 @@ export default function ActivityPage() {
 
   return (
     <ProjectSettingsPage title={activity.name} panelTitle={activity.name}>
-      <ActivityParameters activityName={activity.name} />
+      <ActivityParameters key={activity.slug} activityName={activity.name} activitySlug={activity.slug} />
     </ProjectSettingsPage>
   );
 }

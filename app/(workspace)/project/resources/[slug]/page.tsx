@@ -25,7 +25,7 @@ export default function ResourcePage() {
 
   return (
     <ProjectSettingsPage title={resource.name} panelTitle={resource.name}>
-      <ResourceParameters resourceName={resource.name} />
+      <ResourceParameters key={resource.slug} resourceName={resource.name} resourceSlug={resource.slug} />
     </ProjectSettingsPage>
   );
 }
