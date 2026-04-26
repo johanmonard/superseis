@@ -787,7 +787,7 @@ function PointTypePanel({
         </Select>
       </Field>
 
-      <Field label="Snapper Max Dist." layout="horizontal" labelWidth="5.5rem">
+      <Field label="Snap distance" layout="horizontal" labelWidth="5.5rem">
         <Input
           type="number"
           value={config.snapperMaxDist}
