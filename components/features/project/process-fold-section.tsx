@@ -133,7 +133,10 @@ export function ProcessFoldSection({
           <div
             role="radiogroup"
             aria-label="Colormap"
-            className="flex flex-wrap gap-[var(--space-1)]"
+            // h-[var(--control-height-md)] + items-center so the short
+            // pills (h-3) sit on the same baseline as the Field label,
+            // which is offset by pt-[7px] for input alignment.
+            className="flex h-[var(--control-height-md)] flex-wrap items-center gap-[var(--space-1)]"
           >
             {FOLD_COLORMAPS.map((c) => {
               const selected = c === colormap;
