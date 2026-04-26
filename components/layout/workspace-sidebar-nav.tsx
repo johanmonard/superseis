@@ -37,6 +37,75 @@ import { SidebarProjectToolbar } from "./sidebar-project-toolbar";
 import { SidebarBottomActions } from "./sidebar-bottom-actions";
 import { SidebarSurfaceWave } from "./sidebar-surface-wave";
 
+/**
+ * Renders the children container for an expanded parent nav item plus the
+ * tree-style connector that points at the currently-active child.
+ *
+ * The connector's vertical position is derived by measuring the active
+ * SidebarItem's `offsetTop` rather than computing it from `(idx, rowH)`,
+ * because separators (`separatorAfter`) inject a `<div my-1 h-px>` between
+ * children whose contribution to the row stride depends on margin-collapse
+ * specifics that vary across density tokens. Measuring is density-agnostic
+ * and survives any future spacing changes.
+ */
+function NavSubmenuChildren({
+  hasActive,
+  children,
+}: {
+  hasActive: boolean;
+  children: React.ReactNode;
+}) {
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const [yCenter, setYCenter] = React.useState<number | null>(null);
+
+  React.useLayoutEffect(() => {
+    if (!hasActive) {
+      setYCenter((prev) => (prev === null ? prev : null));
+      return;
+    }
+    const container = containerRef.current;
+    if (!container) return;
+    const activeEl = container.querySelector<HTMLElement>('[data-active="true"]');
+    if (!activeEl) {
+      setYCenter((prev) => (prev === null ? prev : null));
+      return;
+    }
+    const next = activeEl.offsetTop + activeEl.offsetHeight / 2;
+    setYCenter((prev) => (prev === next ? prev : next));
+  });
+
+  // Vertical line X = parent icon center: parent SidebarItem has
+  // px-[var(--space-4)] padding, icon is 16px → center sits at
+  // var(--space-4) + 8.
+  const lineX = "calc(var(--space-4) + 8px)";
+  // Horizontal stub reaches the child icon's left edge: child container
+  // has pl-6 (24px), child SidebarItem has px-[var(--space-3)], so the
+  // child icon's left = 24 + var(--space-3). Subtract the line's X.
+  const stubWidth = "calc(24px + var(--space-3) - var(--space-4) - 8px)";
+
+  return (
+    <div ref={containerRef} className="relative space-y-1 pl-6 pt-1">
+      {yCenter !== null ? (
+        <>
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute w-px bg-[var(--color-border-strong)]"
+            // eslint-disable-next-line template/no-jsx-style-prop -- runtime tree-connector geometry
+            style={{ left: lineX, top: 0, height: `${yCenter}px` }}
+          />
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute h-px bg-[var(--color-border-strong)]"
+            // eslint-disable-next-line template/no-jsx-style-prop -- runtime tree-connector geometry
+            style={{ left: lineX, top: `${yCenter}px`, width: stubWidth }}
+          />
+        </>
+      ) : null}
+      {children}
+    </div>
+  );
+}
+
 export interface WorkspaceSidebarNavProps {
   navigation: NavigationItem[];
   isCollapsed: boolean;
@@ -328,8 +397,12 @@ export function WorkspaceSidebarNav({
                           ) : null}
                           <span className="flex-1 truncate text-left">{sub.label}</span>
                           {slug ? (
-                            <button
-                              type="button"
+                            // role=button instead of <button> — SidebarItem
+                            // is itself a <button>, and nested buttons are
+                            // invalid HTML (causes a hydration error).
+                            <span
+                              role="button"
+                              tabIndex={0}
                               aria-label={`Delete ${sub.label}`}
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -337,10 +410,19 @@ export function WorkspaceSidebarNav({
                                 if (isResources) deleteResourceMutation.mutate(slug);
                                 if (subIsActive) router.push(child.href ?? "/");
                               }}
-                              className="ml-auto flex-shrink-0 opacity-0 transition-opacity group-hover/sub:opacity-100 text-[var(--color-text-muted)] hover:text-[var(--color-status-danger)]"
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  if (isActivities) deleteActivityMutation.mutate(slug);
+                                  if (isResources) deleteResourceMutation.mutate(slug);
+                                  if (subIsActive) router.push(child.href ?? "/");
+                                }
+                              }}
+                              className="ml-auto flex-shrink-0 opacity-0 transition-opacity group-hover/sub:opacity-100 text-[var(--color-text-muted)] hover:text-[var(--color-status-danger)] cursor-pointer"
                             >
                               <Icon icon={appIcons.trash} size={12} />
-                            </button>
+                            </span>
                           ) : null}
                         </span>
                       </SidebarItem>
@@ -661,50 +743,7 @@ export function WorkspaceSidebarNav({
                     : "max-h-0 overflow-hidden opacity-0 transition-all duration-150 ease-out"
                 }
               >
-                <div className="relative space-y-1 pl-6 pt-1">
-                  {(() => {
-                    // Tree-style connector. Geometry, density-aware:
-                    //   - Vertical line X = parent icon center =
-                    //     `var(--space-4) + 8px` (parent SidebarItem has
-                    //     px-[var(--space-4)], icon is 16px → center at
-                    //     var(--space-4) + 8).
-                    //   - Row height is var(--control-height-md) (varies by
-                    //     density: 30/34/38). Container has pt-1 (4px) top
-                    //     padding and space-y-1 (4px) gap between rows.
-                    //     Active child's icon center y =
-                    //       4px + idx*(rowH + 4px) + rowH/2.
-                    //     Computed in CSS calc so it follows density.
-                    //   - Horizontal stub width reaches the child icon's
-                    //     left edge: child SidebarItem px-[var(--space-3)]
-                    //     starts at pl-6 (24px), so stub width =
-                    //     24 + var(--space-3) - (var(--space-4) + 8). Across
-                    //     all densities this evaluates to 12px (space-3 −
-                    //     space-4 is consistently −4 in the token table).
-                    const activeIdx = effectiveChildren.findIndex((c) =>
-                      isActiveRoute(c.href),
-                    );
-                    if (activeIdx < 0) return null;
-                    const yCenter = `calc(4px + ${activeIdx} * (var(--control-height-md) + 4px) + var(--control-height-md) / 2)`;
-                    const lineX = "calc(var(--space-4) + 8px)";
-                    const stubWidth =
-                      "calc(24px + var(--space-3) - var(--space-4) - 8px)";
-                    return (
-                      <>
-                        <div
-                          aria-hidden="true"
-                          className="pointer-events-none absolute w-px bg-[var(--color-border-strong)]"
-                          // eslint-disable-next-line template/no-jsx-style-prop -- runtime tree-connector geometry
-                          style={{ left: lineX, top: 0, height: yCenter }}
-                        />
-                        <div
-                          aria-hidden="true"
-                          className="pointer-events-none absolute h-px bg-[var(--color-border-strong)]"
-                          // eslint-disable-next-line template/no-jsx-style-prop -- runtime tree-connector geometry
-                          style={{ left: lineX, top: yCenter, width: stubWidth }}
-                        />
-                      </>
-                    );
-                  })()}
+                <NavSubmenuChildren hasActive={hasActiveChild}>
                   {isDynamic
                     ? effectiveChildren.map((sub) => {
                         const subIsActive = isActiveRoute(sub.href);
@@ -734,8 +773,12 @@ export function WorkspaceSidebarNav({
                               ) : null}
                               <span className="flex-1 truncate text-left">{sub.label}</span>
                               {slug ? (
-                                <button
-                                  type="button"
+                                // role=button instead of <button> — SidebarItem
+                                // is itself a <button>, and nested buttons are
+                                // invalid HTML (causes a hydration error).
+                                <span
+                                  role="button"
+                                  tabIndex={0}
                                   aria-label={`Delete ${sub.label}`}
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -743,10 +786,19 @@ export function WorkspaceSidebarNav({
                                     if (isResources) deleteResourceMutation.mutate(slug);
                                     if (subIsActive) router.push(item.href ?? "/");
                                   }}
-                                  className="ml-auto flex-shrink-0 opacity-0 transition-opacity group-hover/sub:opacity-100 text-[var(--color-text-muted)] hover:text-[var(--color-status-danger)]"
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      if (isActivities) deleteActivityMutation.mutate(slug);
+                                      if (isResources) deleteResourceMutation.mutate(slug);
+                                      if (subIsActive) router.push(item.href ?? "/");
+                                    }
+                                  }}
+                                  className="ml-auto flex-shrink-0 opacity-0 transition-opacity group-hover/sub:opacity-100 text-[var(--color-text-muted)] hover:text-[var(--color-status-danger)] cursor-pointer"
                                 >
                                   <Icon icon={appIcons.trash} size={12} />
-                                </button>
+                                </span>
                               ) : null}
                             </span>
                           </SidebarItem>
@@ -755,7 +807,7 @@ export function WorkspaceSidebarNav({
                     : renderChildNavigationItems(effectiveChildren, {
                         className: "px-[var(--space-3)]",
                       })}
-                </div>
+                </NavSubmenuChildren>
               </div>
             </div>,
           );

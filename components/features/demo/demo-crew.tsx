@@ -1,7 +1,17 @@
 "use client";
 
+/**
+ * Demo copy of the Crew settings page — preserves the original dummy data
+ * (Permitting / Survey / Dozing / Drilling / Layout / Recording / Pickup /
+ * Green Team) and the full Option / Activity / Resource editor UI.
+ *
+ * Differs from the production component (`components/features/project/project-crew.tsx`)
+ * in that it uses local React state instead of the autosave/active-project
+ * hooks, so it works as a standalone demo with no backend.
+ */
+
 import * as React from "react";
-import { Icon, appIcons } from "@/components/ui/icon";
+import { appIcons } from "@/components/ui/icon";
 
 const { check: Check, pencil: Pencil, plus: Plus, trash: Trash2, x: X } = appIcons;
 
@@ -9,19 +19,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { useToast } from "@/components/ui/toast";
 import { Section } from "@/components/features/activities/section";
 import { cn } from "@/lib/utils";
-import { useActiveProject } from "@/lib/use-active-project";
-import { useSectionData } from "@/lib/use-autosave";
-import {
-  useActivitiesList,
-  useCreateActivity,
-} from "@/services/query/activities";
-import {
-  useCreateResource,
-  useResourcesList,
-} from "@/services/query/resources";
 
 /* ------------------------------------------------------------------
    Tag select (matches Layers source-file picker)
@@ -139,38 +138,81 @@ function createCrewOption(name: string): CrewOption {
   return { id: crypto.randomUUID(), name, activities: [] };
 }
 
+function res(name: string, max: number): Resource {
+  return { id: crypto.randomUUID(), name, max };
+}
+
+function buildDummyOption(): CrewOption {
+  const ids = {
+    permSP: crypto.randomUUID(),
+    permRP: crypto.randomUUID(),
+    survSP: crypto.randomUUID(),
+    survRP: crypto.randomUUID(),
+    dozing: crypto.randomUUID(),
+    drilling: crypto.randomUUID(),
+    layout: crypto.randomUUID(),
+    recording: crypto.randomUUID(),
+    pickup: crypto.randomUUID(),
+    green: crypto.randomUUID(),
+  };
+
+  return {
+    id: crypto.randomUUID(),
+    name: "Option 1",
+    activities: [
+      {
+        id: ids.permSP, name: "Permitting SP", pointType: "SP", predecessors: [],
+        resources: [res("Permit", 5)],
+      },
+      {
+        id: ids.permRP, name: "Permitting RP", pointType: "RP", predecessors: [],
+        resources: [res("Permit", 5)],
+      },
+      {
+        id: ids.survSP, name: "Survey SP", pointType: "SP", predecessors: [ids.permSP],
+        resources: [res("RTK", 10), res("TC", 5), res("Inertial Station", 1)],
+      },
+      {
+        id: ids.survRP, name: "Survey RP", pointType: "RP", predecessors: [ids.permRP],
+        resources: [res("RTK", 10), res("TC", 5), res("Inertial Station", 1)],
+      },
+      {
+        id: ids.dozing, name: "Dozing", pointType: "SP", predecessors: [ids.survSP],
+        resources: [res("D8", 4), res("D9", 2)],
+      },
+      {
+        id: ids.drilling, name: "Drilling", pointType: "SP", predecessors: [ids.survSP],
+        resources: [res("B200P", 8), res("TD40", 6), res("B500T", 4)],
+      },
+      {
+        id: ids.layout, name: "Layout", pointType: "RP",
+        predecessors: [ids.dozing, ids.drilling, ids.survRP],
+        resources: [res("Land Nodes", 10), res("SW Nodes", 10)],
+      },
+      {
+        id: ids.recording, name: "Recording", pointType: "SP", predecessors: [ids.layout],
+        resources: [res("Vibrator M26", 10), res("Mini-vibe", 2), res("Shooters", 6), res("Gun boat", 2), res("Mini-gun", 1)],
+      },
+      {
+        id: ids.pickup, name: "Pickup", pointType: "RP", predecessors: [ids.recording],
+        resources: [res("Land Nodes", 10), res("SW Nodes", 10)],
+      },
+      {
+        id: ids.green, name: "Green Team", pointType: "SP", predecessors: [ids.pickup],
+        resources: [res("Cleaner", 10)],
+      },
+    ],
+  };
+}
+
 interface CrewData {
   options: CrewOption[];
   activeId: string;
 }
-const DEFAULT_CREW: CrewData = {
-  options: [],
-  activeId: "",
-};
 
-/* ------------------------------------------------------------------
-   Bootstrap helpers — mirror the slugify rule used by the Activities
-   and Resources stores so we can pre-skip names that would collide
-   with an existing item before sending the create request.
-   ------------------------------------------------------------------ */
-
-function slugify(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/[^\w\s-]/g, "")
-    .replace(/[\s_-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function summarize(kind: "activity" | "resource", created: number, skipped: number): string {
-  const noun = kind === "activity" ? "activities" : "resources";
-  const singular = kind === "activity" ? "activity" : "resource";
-  const createdLabel = created === 1 ? singular : noun;
-  if (created === 0 && skipped === 0) return `No ${noun} to create`;
-  if (created === 0) return `All ${skipped} ${noun} already exist`;
-  if (skipped === 0) return `Created ${created} ${createdLabel}`;
-  return `Created ${created} ${createdLabel}, skipped ${skipped}`;
+function buildDefaultCrew(): CrewData {
+  const opt = buildDummyOption();
+  return { options: [opt], activeId: opt.id };
 }
 
 /* ------------------------------------------------------------------
@@ -323,15 +365,13 @@ export interface CrewActivityInfo {
   resources: CrewResourceInfo[];
 }
 
-export function ProjectCrew({
+export function DemoCrew({
   onActivitiesChange,
 }: {
   onActivitiesChange?: (activities: CrewActivityInfo[]) => void;
 } = {}) {
-  const { activeProject } = useActiveProject();
-  const projectId = activeProject?.id ?? null;
-
-  const { data, update } = useSectionData<CrewData>(projectId, "crew", DEFAULT_CREW);
+  const [data, setData] = React.useState<CrewData>(() => buildDefaultCrew());
+  const update = React.useCallback((next: CrewData) => setData(next), []);
 
   const options = data.options;
   const activeId = data.activeId || options[0]?.id || "";
@@ -340,87 +380,14 @@ export function ProjectCrew({
   const [expandedActivityId, setExpandedActivityId] = React.useState<string | null>(null);
   const pendingExpandRef = React.useRef<string | null>(null);
 
-  /* ── Bootstrap into Activities / Resources stores ──────────────── */
-
-  const { toast } = useToast();
-  const { data: existingActivities = [] } = useActivitiesList();
-  const { data: existingResources = [] } = useResourcesList();
-  const createActivityMutation = useCreateActivity();
-  const createResourceMutation = useCreateResource();
-  const [creatingActivities, setCreatingActivities] = React.useState(false);
-  const [creatingResources, setCreatingResources] = React.useState(false);
-
-  const handleCreateActivities = React.useCallback(async () => {
-    if (!active || creatingActivities) return;
-    setCreatingActivities(true);
-    const seen = new Set(existingActivities.map((a) => a.slug));
-    let created = 0;
-    let skipped = 0;
-    for (const activity of active.activities) {
-      const name = activity.name.trim();
-      const slug = slugify(name);
-      if (!slug || seen.has(slug)) {
-        skipped++;
-        continue;
-      }
-      try {
-        await createActivityMutation.mutateAsync({ name });
-        seen.add(slug);
-        created++;
-      } catch {
-        skipped++;
-      }
-    }
-    setCreatingActivities(false);
-    toast(summarize("activity", created, skipped), created > 0 ? "success" : "default");
-  }, [active, creatingActivities, existingActivities, createActivityMutation, toast]);
-
-  const handleCreateResources = React.useCallback(async () => {
-    if (!active || creatingResources) return;
-    setCreatingResources(true);
-    const uniqueNames: string[] = [];
-    const namesSeen = new Set<string>();
-    for (const activity of active.activities) {
-      for (const r of activity.resources) {
-        const name = r.name.trim();
-        const slug = slugify(name);
-        if (!slug || namesSeen.has(slug)) continue;
-        namesSeen.add(slug);
-        uniqueNames.push(name);
-      }
-    }
-    const seen = new Set(existingResources.map((r) => r.slug));
-    let created = 0;
-    let skipped = 0;
-    for (const name of uniqueNames) {
-      const slug = slugify(name);
-      if (seen.has(slug)) {
-        skipped++;
-        continue;
-      }
-      try {
-        await createResourceMutation.mutateAsync({ name });
-        seen.add(slug);
-        created++;
-      } catch {
-        skipped++;
-      }
-    }
-    setCreatingResources(false);
-    toast(summarize("resource", created, skipped), created > 0 ? "success" : "default");
-  }, [active, creatingResources, existingResources, createResourceMutation, toast]);
-
   const toggleActivity = React.useCallback((id: string, isOpen: boolean) => {
     if (!isOpen) {
-      // Closing the current one
       setExpandedActivityId(null);
       return;
     }
     if (expandedActivityId === null) {
-      // Nothing open, just open directly
       setExpandedActivityId(id);
     } else {
-      // Collapse current first, then expand new after animation
       pendingExpandRef.current = id;
       setExpandedActivityId(null);
       setTimeout(() => {
@@ -430,20 +397,17 @@ export function ProjectCrew({
     }
   }, [expandedActivityId]);
 
-  // Notify parent of activity changes for the graph
   React.useEffect(() => {
     onActivitiesChange?.(
-      active
-        ? active.activities.map((a) => ({
-            id: a.id,
-            name: a.name,
-            pointType: a.pointType,
-            predecessors: a.predecessors,
-            resources: a.resources.map((r) => ({ name: r.name, max: r.max })),
-          }))
-        : []
+      active.activities.map((a) => ({
+        id: a.id,
+        name: a.name,
+        pointType: a.pointType,
+        predecessors: a.predecessors,
+        resources: a.resources.map((r) => ({ name: r.name, max: r.max })),
+      }))
     );
-  }, [active, onActivitiesChange]);
+  }, [active.activities, onActivitiesChange]);
 
   /* ── Option CRUD ───────────────────────────────────────────────── */
 
@@ -571,6 +535,10 @@ export function ProjectCrew({
 
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Crew</h2>
+      </div>
+
       {/* Option selector */}
       <OptionSelector
         options={options}
@@ -583,11 +551,6 @@ export function ProjectCrew({
 
       <div className="h-px bg-[var(--color-border-subtle)]" />
 
-      {!active ? (
-        <p className="text-xs text-[var(--color-text-muted)]">
-          Add a crew option to start defining activities and resources.
-        </p>
-      ) : (<>
       {/* Active option content */}
       <div className="flex flex-col gap-[var(--space-4)]">
         {/* Activities list */}
@@ -708,47 +671,6 @@ export function ProjectCrew({
           Activity
         </Button>
       </div>
-
-      {/* Bootstrap into the global Activities / Resources stores —
-          equivalent to clicking "+ Add" once for each item the active
-          crew option declares, while skipping anything already present. */}
-      <div className="h-px bg-[var(--color-border-subtle)]" />
-
-      <div className="flex flex-col gap-[var(--space-2)]">
-        <p className="text-xs text-[var(--color-text-muted)]">
-          Push this crew option into the top-level Activities and Resources
-          menus. Existing items are left untouched.
-        </p>
-        <div className="flex flex-wrap justify-end gap-[var(--space-2)]">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleCreateActivities}
-            disabled={creatingActivities || active.activities.length === 0}
-          >
-            {creatingActivities ? (
-              <Icon icon={appIcons.loader} size={12} className="mr-[var(--space-1)] animate-spin" />
-            ) : (
-              <Plus size={12} className="mr-[var(--space-1)]" />
-            )}
-            Create activities
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleCreateResources}
-            disabled={creatingResources || active.activities.every((a) => a.resources.length === 0)}
-          >
-            {creatingResources ? (
-              <Icon icon={appIcons.loader} size={12} className="mr-[var(--space-1)] animate-spin" />
-            ) : (
-              <Plus size={12} className="mr-[var(--space-1)]" />
-            )}
-            Create resources
-          </Button>
-        </div>
-      </div>
-      </>)}
     </div>
   );
 }

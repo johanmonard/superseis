@@ -68,7 +68,10 @@ export const navigation: NavigationItem[] = [
     module: "project",
     icon: "users",
     section: "main",
-    href: "/project/crew",
+    children: [
+      { label: "Configuration", href: "/project/crew/configuration", icon: "settings" },
+      { label: "Assignments", href: "/project/crew/assignments", icon: "listChecks" },
+    ],
   },
   {
     label: "Activities",
@@ -123,4 +126,5 @@ export const DEMO_LINKS: DemoLink[] = [
   { label: "Animate 3D v2", href: "/demo/animate-v2", icon: "activity" },
   { label: "Workflow", href: "/demo/workflow", icon: "blocks" },
   { label: "Raster", href: "/demo/raster", icon: "grid" },
+  { label: "Crew", href: "/demo/crew", icon: "users" },
 ];

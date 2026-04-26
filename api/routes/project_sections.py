@@ -52,6 +52,9 @@ VALID_SECTIONS = frozenset([
     "partitioning",
     "offsetters",
     "crew",
+    "crew_assignments",
+    "activities",
+    "resources",
     "gis_styles",
 ])
 
@@ -130,6 +133,9 @@ def _read_section(section: str, dojo_svc: ProjectService, project_id: int) -> di
         "maps": "maps_ui",
         "offsetters": "offsetters_ui",
         "crew": "crew_ui",
+        "crew_assignments": "crew_assignments_ui",
+        "activities": "activities_ui",
+        "resources": "resources_ui",
         "osm": "osm_ui",
     }
     attr = _ui_section_map.get(section)
@@ -723,6 +729,9 @@ def _write_section(section: str, data: dict[str, Any], dojo_svc: ProjectService,
     _ui_section_map = {
         "offsetters": "offsetters_ui",
         "crew": "crew_ui",
+        "crew_assignments": "crew_assignments_ui",
+        "activities": "activities_ui",
+        "resources": "resources_ui",
         "osm": "osm_ui",
     }
     attr = _ui_section_map.get(section)

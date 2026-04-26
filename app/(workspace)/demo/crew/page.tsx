@@ -1,8 +1,16 @@
 "use client";
 
+/**
+ * Demo crew page — preserves the original Crew settings layout (parameters
+ * panel + activity-graph viewport) populated with the legacy dummy data
+ * (Permitting / Survey / Dozing / Drilling / Layout / Recording / Pickup /
+ * Green Team). Kept as a reference snapshot before the production crew
+ * page is wired to live data.
+ */
+
 import * as React from "react";
 import { ProjectSettingsPage } from "@/components/features/project/project-settings-page";
-import { ProjectCrew, type CrewActivityInfo } from "@/components/features/project/project-crew";
+import { DemoCrew, type CrewActivityInfo } from "@/components/features/demo/demo-crew";
 import {
   CrewActivityGraph,
   DEFAULT_GRAPH_CONFIG,
@@ -133,7 +141,7 @@ function GraphSettingsPanel({
   );
 }
 
-export default function CrewPage() {
+export default function DemoCrewPage() {
   const [activities, setActivities] = React.useState<CrewActivityInfo[]>([]);
   const [graphConfig, setGraphConfig] = React.useState<GraphConfig>(DEFAULT_GRAPH_CONFIG);
 
@@ -152,11 +160,11 @@ export default function CrewPage() {
 
   return (
     <ProjectSettingsPage
-      title="Crew"
+      title="Crew (demo)"
       panelTitle="Crew Options"
       viewport={viewport}
     >
-      <ProjectCrew onActivitiesChange={setActivities} />
+      <DemoCrew onActivitiesChange={setActivities} />
     </ProjectSettingsPage>
   );
 }
