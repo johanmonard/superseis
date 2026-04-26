@@ -1024,7 +1024,7 @@ function DraggableToolbar({
 
 // deck.gl imports for GPU-accelerated point rendering
 import { MapboxOverlay } from "@deck.gl/mapbox";
-import { ScatterplotLayer } from "@deck.gl/layers";
+import { ScatterplotLayer, PathLayer } from "@deck.gl/layers";
 
 // Flat Float64Array stride: [time, lon, lat, elevation] per entry
 const STRIDE = 4;
@@ -1069,6 +1069,11 @@ interface EntityStyle {
 
 type AcquEntry = { position: [number, number, number]; entityIdx: number };
 type TrailPoint = { position: [number, number, number]; progress: number; entityIdx: number };
+type CometSegment = {
+  path: [[number, number, number], [number, number, number]];
+  progress: number; // average age along segment, 0 = oldest, 1 = head
+  entityIdx: number;
+};
 
 function hexToRgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
@@ -1093,14 +1098,43 @@ function formatTime(cs: number): string {
 
 const SPEED_OPTIONS = [1, 10, 50, 100, 500, 1000, 5000, 10000, 100000];
 
+// Measure rendering FPS via requestAnimationFrame deltas, updating ~2×/s.
+function useFps(): number {
+  const [fps, setFps] = React.useState(0);
+  React.useEffect(() => {
+    let frames = 0;
+    let lastTs = performance.now();
+    let raf = requestAnimationFrame(function tick() {
+      frames++;
+      const now = performance.now();
+      const dt = now - lastTs;
+      if (dt >= 500) {
+        setFps(Math.round((frames * 1000) / dt));
+        frames = 0;
+        lastTs = now;
+      }
+      raf = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return fps;
+}
+
 export function Animate3DViewport({
   trajectories,
+  trailStyle = "dots",
 }: {
   trajectories?: Trajectory[];
+  trailStyle?: "dots" | "comet";
 }) {
+  const trailStyleRef = React.useRef(trailStyle);
+  React.useEffect(() => {
+    trailStyleRef.current = trailStyle;
+  }, [trailStyle]);
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<MLMap | null>(null);
+  const fps = useFps();
   const [tileIndex, setTileIndex] = React.useState(() =>
     defaultTileIndex(TILE_SOURCES),
   );
@@ -1546,7 +1580,7 @@ export function Animate3DViewport({
 
     const styles = entityStylesRef.current;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const layers: ScatterplotLayer<any>[] = [
+    const layers: any[] = [
       new ScatterplotLayer({
         id: "acqu-marks",
         data: acquDataRef.current,
@@ -1576,52 +1610,119 @@ export function Animate3DViewport({
         return flat * (1 - tTaper) + tapered * tTaper;
       };
 
-      // Soft glow layer (larger, more transparent) — intensity driven by tGlow
-      if (tGlow > 0) {
+      if (trailStyleRef.current === "comet") {
+        // Build per-entity continuous segments — head→tail. A single
+        // PathLayer renders the ribbon, tapering from full head diameter
+        // (entity dot size) at the head to near-zero at the tail.
+        const cometSegs: CometSegment[] = [];
+        const byEntity = new Map<number, TrailPoint[]>();
+        for (const tp of trailData) {
+          let arr = byEntity.get(tp.entityIdx);
+          if (!arr) {
+            arr = [];
+            byEntity.set(tp.entityIdx, arr);
+          }
+          arr.push(tp);
+        }
+        byEntity.forEach((pts, entityIdx) => {
+          if (pts.length < 2) return;
+          pts.sort((a, b) => a.progress - b.progress);
+          for (let k = 0; k < pts.length - 1; k++) {
+            cometSegs.push({
+              path: [pts[k].position, pts[k + 1].position],
+              progress: (pts[k].progress + pts[k + 1].progress) / 2,
+              entityIdx,
+            });
+          }
+        });
+
+        // Linear head→tail taper, blended with flat by tTaper (0=uniform, 1=needle)
+        const cometWidth = (p: number, base: number) => {
+          const tapered = base * p;
+          return base * (1 - tTaper) + tapered * tTaper;
+        };
+
+        if (cometSegs.length > 0) {
+          layers.push(
+            new PathLayer({
+              id: "entity-trail-comet",
+              data: cometSegs,
+              getPath: (d: CometSegment) => d.path,
+              getWidth: (d: CometSegment) => {
+                const s = styles[d.entityIdx];
+                const base = s ? s.dotSize : 6;
+                return cometWidth(d.progress, base);
+              },
+              getColor: (d: CometSegment) => {
+                const s = styles[d.entityIdx];
+                const rgb: [number, number, number] = s
+                  ? hexToRgb(s.color)
+                  : [200, 200, 200];
+                // Alpha tapers linearly with progress: opaque at the head,
+                // fully transparent at the tail end.
+                const a = Math.max(0, Math.min(1, d.progress * tOp));
+                return [rgb[0], rgb[1], rgb[2], Math.round(a * 255)];
+              },
+              widthUnits: "pixels" as const,
+              widthMinPixels: 0,
+              widthMaxPixels: 32,
+              capRounded: false,
+              jointRounded: false,
+              updateTriggers: {
+                getColor: styleVersionRef.current,
+                getWidth: styleVersionRef.current,
+              },
+            }),
+          );
+        }
+      } else {
+        // Soft glow layer (larger, more transparent) — intensity driven by tGlow
+        if (tGlow > 0) {
+          layers.push(
+            new ScatterplotLayer({
+              id: "entity-trail-glow",
+              data: trailData,
+              getPosition: (d: TrailPoint) => d.position,
+              getFillColor: (d: TrailPoint) => {
+                const s = styles[d.entityIdx];
+                const rgb = s ? hexToRgb(s.color) : [200, 200, 200];
+                const a = d.progress * d.progress * d.progress;
+                return [...rgb, Math.round(a * 100 * tOp * tGlow)] as [number, number, number, number];
+              },
+              getRadius: (d: TrailPoint) => {
+                const s = styles[d.entityIdx];
+                const base = s ? s.dotSize * (0.5 + 0.5 * tGlow) : 6;
+                return taperSize(d.progress, base);
+              },
+              radiusUnits: "pixels" as const,
+              radiusMinPixels: 2,
+              radiusMaxPixels: 30,
+            }),
+          );
+        }
+        // Core trail dots (smaller, more opaque)
         layers.push(
           new ScatterplotLayer({
-            id: "entity-trail-glow",
+            id: "entity-trail",
             data: trailData,
             getPosition: (d: TrailPoint) => d.position,
             getFillColor: (d: TrailPoint) => {
               const s = styles[d.entityIdx];
               const rgb = s ? hexToRgb(s.color) : [200, 200, 200];
-              const a = d.progress * d.progress * d.progress;
-              return [...rgb, Math.round(a * 100 * tOp * tGlow)] as [number, number, number, number];
+              const a = d.progress * d.progress;
+              return [...rgb, Math.round(a * 255 * tOp)] as [number, number, number, number];
             },
             getRadius: (d: TrailPoint) => {
               const s = styles[d.entityIdx];
-              const base = s ? s.dotSize * (0.5 + 0.5 * tGlow) : 6;
+              const base = s ? s.dotSize * 0.35 : 3;
               return taperSize(d.progress, base);
             },
             radiusUnits: "pixels" as const,
-            radiusMinPixels: 2,
-            radiusMaxPixels: 30,
+            radiusMinPixels: 1,
+            radiusMaxPixels: 16,
           }),
         );
       }
-      // Core trail dots (smaller, more opaque)
-      layers.push(
-        new ScatterplotLayer({
-          id: "entity-trail",
-          data: trailData,
-          getPosition: (d: TrailPoint) => d.position,
-          getFillColor: (d: TrailPoint) => {
-            const s = styles[d.entityIdx];
-            const rgb = s ? hexToRgb(s.color) : [200, 200, 200];
-            const a = d.progress * d.progress;
-            return [...rgb, Math.round(a * 255 * tOp)] as [number, number, number, number];
-          },
-          getRadius: (d: TrailPoint) => {
-            const s = styles[d.entityIdx];
-            const base = s ? s.dotSize * 0.35 : 3;
-            return taperSize(d.progress, base);
-          },
-          radiusUnits: "pixels" as const,
-          radiusMinPixels: 1,
-          radiusMaxPixels: 16,
-        }),
-      );
     }
 
     overlay.setProps({ layers });
@@ -1755,6 +1856,13 @@ export function Animate3DViewport({
       className="relative h-full w-full overflow-hidden rounded-[var(--radius-md)]"
     >
       <div ref={containerRef} className="h-full w-full" />
+
+      <div
+        className="pointer-events-none absolute right-2 top-2 z-10 rounded bg-[rgba(0,0,0,0.55)] px-2 py-1 font-mono text-[11px] tabular-nums text-[rgba(255,255,255,0.9)] shadow"
+        title="Render FPS"
+      >
+        {fps} FPS
+      </div>
 
       <DraggableToolbar wrapperRef={wrapperRef} resetKey={isFullscreen}>
         <select

@@ -120,6 +120,7 @@ export const DEMO_LINKS: DemoLink[] = [
   { label: "GIS Globe", href: "/demo/gis-globe", icon: "map" },
   { label: "OSM info", href: "/demo/osm-info", icon: "mapPin" },
   { label: "Animate 3D", href: "/demo/animate", icon: "activity" },
+  { label: "Animate 3D v2", href: "/demo/animate-v2", icon: "activity" },
   { label: "Workflow", href: "/demo/workflow", icon: "blocks" },
   { label: "Raster", href: "/demo/raster", icon: "grid" },
 ];
