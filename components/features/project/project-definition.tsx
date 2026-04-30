@@ -6,6 +6,7 @@ import { appIcons } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 
 const {
+  chevronDown: ChevronDown,
   chevronLeft: ChevronLeft,
   chevronRight: ChevronRight,
   info: InfoIcon,
@@ -29,7 +30,12 @@ import {
 import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
 import { cn } from "@/lib/utils";
-import { fetchCrsInfo, type CrsInfoResponse } from "@/services/api/crs";
+import {
+  fetchCrsByCountry,
+  fetchCrsInfo,
+  type CrsByCountryEntry,
+  type CrsInfoResponse,
+} from "@/services/api/crs";
 import { useQuery } from "@tanstack/react-query";
 
 /* ------------------------------------------------------------------
@@ -301,6 +307,17 @@ export function ProjectDefinition() {
     () => (data.epsg ? parseIntOrNull(data.epsg) : null),
   );
   const [showCrsPanel, setShowCrsPanel] = React.useState(false);
+  const [epsgDropdownOpen, setEpsgDropdownOpen] = React.useState(false);
+  // Search text drives the dropdown filter; it diverges from `data.epsg`
+  // when the user *picks* an entry (we want the full list to stay
+  // visible) but tracks it 1:1 while the user is typing.
+  const [epsgSearchText, setEpsgSearchText] = React.useState("");
+  // EPSG entry currently under the mouse in the dropdown — used to live-
+  // preview its area-of-use bbox on the country map before the user
+  // commits a pick. null means "no preview, fall back to the chosen CRS".
+  const [hoveredEpsgEntry, setHoveredEpsgEntry] =
+    React.useState<CrsByCountryEntry | null>(null);
+  const epsgComboRef = React.useRef<HTMLDivElement>(null);
 
   // Keep committedEpsg in sync when section data reloads (fresh project,
   // reload from disk, etc.) — only when the user isn't mid-edit.
@@ -319,6 +336,100 @@ export function ProjectDefinition() {
     staleTime: Infinity,
     retry: false,
   });
+
+  // CRS list filtered by the selected country — only fired once a country
+  // is set, otherwise the whole EPSG control is disabled below.
+  const countryCrsQuery = useQuery<CrsByCountryEntry[], Error>({
+    queryKey: ["crs-by-country", data.country],
+    queryFn: ({ signal }) => fetchCrsByCountry(data.country, signal),
+    enabled: !!data.country,
+    staleTime: Infinity,
+    retry: false,
+  });
+
+  // Outside-click closes the EPSG dropdown — same pattern as
+  // SearchableSelect above. The chevron button toggles `epsgDropdownOpen`,
+  // the input itself stays focusable while the panel is open.
+  React.useEffect(() => {
+    if (!epsgDropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (
+        epsgComboRef.current &&
+        !epsgComboRef.current.contains(e.target as Node)
+      ) {
+        setEpsgDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [epsgDropdownOpen]);
+
+  // Drop the hover preview whenever the dropdown closes so a row whose
+  // mouseleave never fired (panel unmounted before the cursor exited it)
+  // doesn't leave the map stuck on a stale extent.
+  React.useEffect(() => {
+    if (!epsgDropdownOpen) setHoveredEpsgEntry(null);
+  }, [epsgDropdownOpen]);
+
+  // Country-scoped CRS list filtered by what the user is *currently
+  // typing*. After a pick, `epsgSearchText` is reset to "" so the list
+  // stays full (with the chosen entry highlighted) — the user can browse
+  // the alternatives without clearing the input first. Typing again
+  // resumes filtering from the new query.
+  const epsgDropdownEntries = React.useMemo(() => {
+    const list = countryCrsQuery.data ?? [];
+    const q = epsgSearchText.trim().toLowerCase();
+    if (!q) return list.slice(0, 200);
+    return list
+      .filter(
+        (e) =>
+          String(e.epsg).startsWith(q) ||
+          e.name.toLowerCase().includes(q) ||
+          e.area_name.toLowerCase().includes(q),
+      )
+      .slice(0, 200);
+  }, [countryCrsQuery.data, epsgSearchText]);
+
+  const epsgDisabled = !data.country;
+
+  // Bounding boxes of every CRS the country lookup returned — fed to the
+  // CountryMap so the user can see at a glance how each candidate
+  // projection covers the country. Filter out entries with no area_of_use
+  // bbox (unusual but possible for poorly-defined records).
+  const candidateBounds = React.useMemo<
+    ReadonlyArray<[number, number, number, number]>
+  >(() => {
+    const list = countryCrsQuery.data ?? [];
+    const out: [number, number, number, number][] = [];
+    for (const e of list) {
+      if (
+        e.area_west == null ||
+        e.area_south == null ||
+        e.area_east == null ||
+        e.area_north == null
+      ) {
+        continue;
+      }
+      out.push([e.area_west, e.area_south, e.area_east, e.area_north]);
+    }
+    return out;
+  }, [countryCrsQuery.data]);
+
+  // Clear the EPSG/CRS-name fields whenever the user picks a different
+  // country — the previous code is almost certainly invalid for the new
+  // region and silently keeping it would hide the mismatch behind the
+  // CRS info panel. The ref guard skips the initial hydration so a
+  // project loaded from storage keeps its saved EPSG.
+  const prevCountryRef = React.useRef(data.country);
+  React.useEffect(() => {
+    if (prevCountryRef.current === data.country) return;
+    const wasInitialHydration = prevCountryRef.current === "";
+    prevCountryRef.current = data.country;
+    if (wasInitialHydration) return;
+    setEpsgSearchText("");
+    if (data.epsg === "" && data.crsName === "") return;
+    update({ ...data, epsg: "", crsName: "" });
+  }, [data, update]);
 
   // Auto-fill crsName from a successful lookup. User is not expected to
   // edit crsName manually, so we always overwrite.
@@ -356,6 +467,24 @@ export function ProjectDefinition() {
     }
     return [info.area_west, info.area_south, info.area_east, info.area_north];
   }, [crsQuery.data]);
+
+  // Hovered-entry bbox takes precedence over the chosen CRS bbox so the
+  // user can preview each option's extent on the map before clicking.
+  // Falls back to `crsAreaBounds` when nothing is hovered.
+  const previewedCrsBounds: [number, number, number, number] | null =
+    React.useMemo(() => {
+      const e = hoveredEpsgEntry;
+      if (
+        e &&
+        e.area_west != null &&
+        e.area_south != null &&
+        e.area_east != null &&
+        e.area_north != null
+      ) {
+        return [e.area_west, e.area_south, e.area_east, e.area_north];
+      }
+      return crsAreaBounds;
+    }, [hoveredEpsgEntry, crsAreaBounds]);
 
   const crsPanelState: CrsPanelState | null = React.useMemo(() => {
     if (committedEpsg == null) return null;
@@ -491,31 +620,121 @@ export function ProjectDefinition() {
               htmlFor="def-epsg"
               layout="horizontal"
               hint={
-                crsQuery.isError && committedEpsg
-                  ? `EPSG:${committedEpsg} not found`
-                  : undefined
+                epsgDisabled
+                  ? "Pick a country first"
+                  : crsQuery.isError && committedEpsg
+                    ? `EPSG:${committedEpsg} not found`
+                    : undefined
               }
             >
               <div className="flex items-center gap-[var(--space-1)]">
-                <Input
-                  id="def-epsg"
-                  type="number"
-                  value={data.epsg}
-                  onChange={(e) => setField("epsg", e.target.value)}
-                  onBlur={commitEpsg}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      commitEpsg();
+                <div ref={epsgComboRef} className="relative flex-1">
+                  <Input
+                    id="def-epsg"
+                    type="number"
+                    value={data.epsg}
+                    onChange={(e) => {
+                      setField("epsg", e.target.value);
+                      setEpsgSearchText(e.target.value);
+                      if (!epsgDropdownOpen) setEpsgDropdownOpen(true);
+                    }}
+                    onFocus={() => {
+                      if (!epsgDisabled) setEpsgDropdownOpen(true);
+                    }}
+                    onBlur={commitEpsg}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        commitEpsg();
+                        setEpsgDropdownOpen(false);
+                      } else if (e.key === "Escape") {
+                        setEpsgDropdownOpen(false);
+                      }
+                    }}
+                    placeholder={
+                      epsgDisabled ? "Select a country first" : "e.g. 4326"
                     }
-                  }}
-                  placeholder="e.g. 4326"
-                  className={cn(
-                    crsQuery.isError && committedEpsg != null
-                      ? "border-[var(--color-status-danger)] focus-visible:ring-[var(--color-status-danger)]"
-                      : undefined,
-                  )}
-                />
+                    disabled={epsgDisabled}
+                    className={cn(
+                      "pr-7",
+                      crsQuery.isError && committedEpsg != null
+                        ? "border-[var(--color-status-danger)] focus-visible:ring-[var(--color-status-danger)]"
+                        : undefined,
+                    )}
+                  />
+                  <button
+                    type="button"
+                    aria-label="Browse country CRS"
+                    aria-expanded={epsgDropdownOpen}
+                    disabled={epsgDisabled}
+                    onClick={() => setEpsgDropdownOpen((v) => !v)}
+                    className={cn(
+                      "absolute right-1 top-1/2 -translate-y-1/2 flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]",
+                      "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-[var(--color-text-muted)]",
+                    )}
+                  >
+                    <ChevronDown size={14} />
+                  </button>
+                  {epsgDropdownOpen && !epsgDisabled ? (
+                    <div className="absolute left-0 right-0 z-20 mt-1 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] shadow-[0_4px_12px_var(--color-shadow-alpha)]">
+                      <div className="max-h-64 overflow-y-auto p-[var(--space-1)]">
+                        {countryCrsQuery.isLoading ? (
+                          <p className="px-[var(--space-3)] py-[var(--space-2)] text-xs text-[var(--color-text-muted)]">
+                            Loading projected CRS for {data.country}…
+                          </p>
+                        ) : countryCrsQuery.isError ? (
+                          <p className="px-[var(--space-3)] py-[var(--space-2)] text-xs text-[var(--color-status-danger)]">
+                            {countryCrsQuery.error?.message ?? "Lookup failed"}
+                          </p>
+                        ) : epsgDropdownEntries.length === 0 ? (
+                          <p className="px-[var(--space-3)] py-[var(--space-2)] text-xs text-[var(--color-text-muted)]">
+                            No projected CRS match
+                          </p>
+                        ) : (
+                          epsgDropdownEntries.map((entry) => {
+                            const epsgStr = String(entry.epsg);
+                            const isSelected = data.epsg === epsgStr;
+                            return (
+                              <button
+                                key={entry.epsg}
+                                type="button"
+                                onMouseEnter={() => setHoveredEpsgEntry(entry)}
+                                onFocus={() => setHoveredEpsgEntry(entry)}
+                                onMouseLeave={() => setHoveredEpsgEntry(null)}
+                                onBlur={() => setHoveredEpsgEntry(null)}
+                                onClick={() => {
+                                  setField("epsg", epsgStr);
+                                  setCommittedEpsg(entry.epsg);
+                                  setEpsgSearchText("");
+                                  setEpsgDropdownOpen(false);
+                                  setHoveredEpsgEntry(null);
+                                }}
+                                className={cn(
+                                  "flex w-full items-baseline gap-[var(--space-2)] rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-2)] text-left text-xs transition-colors",
+                                  isSelected
+                                    ? "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] text-[var(--color-accent)]"
+                                    : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)]",
+                                  entry.deprecated && "opacity-60",
+                                )}
+                                title={entry.area_name}
+                              >
+                                <span className="font-mono font-medium text-[var(--color-text-primary)]">
+                                  {entry.epsg}
+                                </span>
+                                <span className="truncate">{entry.name}</span>
+                                {entry.deprecated ? (
+                                  <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">
+                                    deprecated
+                                  </span>
+                                ) : null}
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
                 {crsQuery.isLoading && committedEpsg != null ? (
                   <Loader
                     size={14}
@@ -652,7 +871,20 @@ export function ProjectDefinition() {
       <div className="relative min-w-0 flex-1 overflow-hidden border rounded-[var(--radius-md)] border-[var(--color-panel-edge)] bg-[var(--color-bg-surface)]">
         <div className="flex h-full flex-col items-center justify-center">
           {data.country ? (
-            <CountryMap country={data.country} crsBounds={crsAreaBounds} />
+            <CountryMap
+              country={data.country}
+              crsBounds={previewedCrsBounds}
+              candidateBounds={candidateBounds}
+              onCountrySelect={(picked) => {
+                // Only accept countries that exist in the dropdown list —
+                // clicks on others (Antarctica, micro-states, etc.) would
+                // leave the field in a state the SearchableSelect couldn't
+                // re-display. Same `setField` path as the dropdown change.
+                if (COUNTRIES.includes(picked) && picked !== data.country) {
+                  setField("country", picked);
+                }
+              }}
+            />
           ) : (
             <ViewportPlaceholder variant="globe" message="Select a country" />
           )}

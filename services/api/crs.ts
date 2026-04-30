@@ -42,3 +42,24 @@ export function fetchCrsInfo(
     authMode: "hybrid",
   });
 }
+
+export interface CrsByCountryEntry {
+  epsg: number;
+  name: string;
+  area_name: string;
+  deprecated: boolean;
+  area_west: number | null;
+  area_south: number | null;
+  area_east: number | null;
+  area_north: number | null;
+}
+
+export function fetchCrsByCountry(
+  country: string,
+  signal?: AbortSignal,
+): Promise<CrsByCountryEntry[]> {
+  return requestJson<CrsByCountryEntry[]>(
+    `/crs/by-country/${encodeURIComponent(country)}`,
+    { signal, authMode: "hybrid" },
+  );
+}

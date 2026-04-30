@@ -34,6 +34,17 @@ function getGeoName(appName: string): string {
   return NAME_OVERRIDES[appName] ?? appName;
 }
 
+// Reverse of `NAME_OVERRIDES` so a click on the map (which exposes the
+// world-atlas country name) can be turned back into the app's canonical
+// name in the COUNTRIES dropdown.
+const GEO_TO_APP_NAME: Record<string, string> = Object.fromEntries(
+  Object.entries(NAME_OVERRIDES).map(([app, geo]) => [geo, app]),
+);
+
+function getAppName(geoName: string): string {
+  return GEO_TO_APP_NAME[geoName] ?? geoName;
+}
+
 const SENSITIVITY = 0.4;
 const VIEWBOX = 500;
 const SCALE_RATIO = 0.46; // globe radius relative to viewBox
@@ -45,6 +56,13 @@ interface CountryMapProps {
   country: string;
   /** Optional CRS area-of-use bounds [west, south, east, north] in degrees. */
   crsBounds?: [number, number, number, number] | null;
+  /** Extents (area-of-use bboxes) of every CRS in the country list — drawn
+   *  in faint grey behind `crsBounds` so the chosen one stays prominent. */
+  candidateBounds?: ReadonlyArray<[number, number, number, number]>;
+  /** Click handler that fires with the canonical app country name (already
+   *  mapped through NAME_OVERRIDES). Caller decides whether the name is in
+   *  its dropdown list. */
+  onCountrySelect?: (country: string) => void;
 }
 
 /** Densify a lat/lon edge so it follows the globe's curvature cleanly. */
@@ -108,7 +126,39 @@ function crsBoundsGeoJson(
   };
 }
 
-export function CountryMap({ country, crsBounds }: CountryMapProps) {
+/** Build a FeatureCollection with one Feature per candidate bbox so they
+ *  can all be rendered in a single Geographies layer. Same antimeridian
+ *  handling as `crsBoundsGeoJson`. */
+function candidateBoundsGeoJson(
+  bounds: ReadonlyArray<[number, number, number, number]>,
+): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = bounds.map((b, idx) => {
+    const [w, s, e, n] = b;
+    const rings: [number, number][][] = [];
+    if (w > e) {
+      rings.push(boundsRing(w, s, 180, n));
+      rings.push(boundsRing(-180, s, e, n));
+    } else {
+      rings.push(boundsRing(w, s, e, n));
+    }
+    return {
+      type: "Feature",
+      properties: { __candidateIdx: idx },
+      geometry: {
+        type: "MultiPolygon",
+        coordinates: rings.map((r) => [r]),
+      },
+    };
+  });
+  return { type: "FeatureCollection", features };
+}
+
+export function CountryMap({
+  country,
+  crsBounds,
+  candidateBounds,
+  onCountrySelect,
+}: CountryMapProps) {
   const targetName = getGeoName(country);
   const [rotation, setRotation] = React.useState<[number, number, number]>([0, 0, 0]);
   const [initialized, setInitialized] = React.useState(false);
@@ -200,16 +250,43 @@ export function CountryMap({ country, crsBounds }: CountryMapProps) {
     }
   }, [country]);
 
+  // Drag is "armed" on pointerdown but only promoted to a real drag (with
+  // pointer capture) once the cursor actually moves past DRAG_THRESHOLD
+  // pixels. Without this gate, capturing on pointerdown redirects the
+  // subsequent click event to the SVG root, which suppresses the Geography
+  // `onClick` handlers used for picking a country.
+  const DRAG_THRESHOLD = 4;
+  const pendingPointer = React.useRef<{
+    id: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+
   const handlePointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     cancelAnimationFrame(animFrame.current);
-    dragging.current = true;
-    setIsDragging(true);
+    pendingPointer.current = {
+      id: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+    };
     lastPos.current = { x: e.clientX, y: e.clientY };
-    e.currentTarget.setPointerCapture(e.pointerId);
   };
 
   const handlePointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
-    if (!dragging.current) return;
+    if (!dragging.current) {
+      const pending = pendingPointer.current;
+      if (!pending || pending.id !== e.pointerId) return;
+      const dx = e.clientX - pending.startX;
+      const dy = e.clientY - pending.startY;
+      if (Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return;
+      // Promote to drag — capture so the cursor can leave the SVG without
+      // dropping the rotation gesture.
+      dragging.current = true;
+      setIsDragging(true);
+      e.currentTarget.setPointerCapture(e.pointerId);
+      lastPos.current = { x: e.clientX, y: e.clientY };
+      return;
+    }
     const dx = e.clientX - lastPos.current.x;
     const dy = e.clientY - lastPos.current.y;
     lastPos.current = { x: e.clientX, y: e.clientY };
@@ -221,6 +298,7 @@ export function CountryMap({ country, crsBounds }: CountryMapProps) {
   };
 
   const handlePointerUp = () => {
+    pendingPointer.current = null;
     dragging.current = false;
     setIsDragging(false);
   };
@@ -296,6 +374,7 @@ export function CountryMap({ country, crsBounds }: CountryMapProps) {
               const name = geo.properties.name;
               const isSelected = name === targetName;
               const isHovered = !isSelected && name === hovered;
+              const clickable = !!onCountrySelect;
               return (
                 <Geography
                   key={geo.rsmKey}
@@ -311,9 +390,27 @@ export function CountryMap({ country, crsBounds }: CountryMapProps) {
                   strokeWidth={0.5}
                   onMouseEnter={() => setHovered(name)}
                   onMouseLeave={() => setHovered("")}
+                  onClick={
+                    clickable
+                      ? (e: React.MouseEvent) => {
+                          // The globe drag handler sits on the parent SVG;
+                          // suppress click bubbling so a quick drag doesn't
+                          // register as a country pick.
+                          e.stopPropagation();
+                          onCountrySelect?.(getAppName(name));
+                        }
+                      : undefined
+                  }
                   style={{
-                    default: { outline: "none", transition: "fill 0.15s" },
-                    hover: { outline: "none" },
+                    default: {
+                      outline: "none",
+                      transition: "fill 0.15s",
+                      cursor: clickable ? "pointer" : undefined,
+                    },
+                    hover: {
+                      outline: "none",
+                      cursor: clickable ? "pointer" : undefined,
+                    },
                     pressed: { outline: "none" },
                   }}
                 />
@@ -321,6 +418,40 @@ export function CountryMap({ country, crsBounds }: CountryMapProps) {
             });
           }}
         </Geographies>
+
+        {/* Candidate CRS extents — every CRS in the country's list, rendered
+            in faint grey so the user gets a sense of which projections cover
+            which sub-region. Drawn before the highlighted bbox so the chosen
+            one stays prominent on top. */}
+        {candidateBounds && candidateBounds.length > 0 && (
+          <Geographies geography={candidateBoundsGeoJson(candidateBounds)}>
+            {({ geographies }) =>
+              geographies.map((geo) => (
+                <Geography
+                  key={geo.rsmKey}
+                  geography={geo}
+                  fill="none"
+                  // currentColor lets the stroke flip with theme via the
+                  // text-color className below — the `--color-text-primary`
+                  // token resolves to near-black in light themes and
+                  // near-white in dark mode.
+                  stroke="currentColor"
+                  strokeWidth={0.1}
+                  // Vector-effect keeps the stroke at a constant pixel
+                  // width regardless of the orthographic projection's
+                  // scaling, so it stays hairline even when zoomed in.
+                  vectorEffect="non-scaling-stroke"
+                  className="text-[var(--color-text-primary)]"
+                  style={{
+                    default: { outline: "none", pointerEvents: "none" },
+                    hover: { outline: "none", pointerEvents: "none" },
+                    pressed: { outline: "none", pointerEvents: "none" },
+                  }}
+                />
+              ))
+            }
+          </Geographies>
+        )}
 
         {/* CRS area-of-use boundary overlay */}
         {crsBounds && (

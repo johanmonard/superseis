@@ -10,6 +10,7 @@ The route is public (CRS definitions aren't user- or project-specific).
 
 from __future__ import annotations
 
+import functools
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -21,6 +22,25 @@ from api.db.engine import get_db
 from api.db.models import CrsInfo
 
 router = APIRouter(prefix="/crs", tags=["crs"])
+
+
+# Aliases the EPSG database may use for the country names listed in the
+# frontend dropdown. Lookup is case-insensitive substring against each
+# CRS' area_of_use name, so listing alternative spellings catches CRS
+# defined for sub-regions or political variants.
+COUNTRY_ALIASES: dict[str, list[str]] = {
+    "Bosnia and Herzegovina": ["Bosnia"],
+    "Congo": ["Democratic Republic of the Congo", "DRC"],
+    "Czech Republic": ["Czechia"],
+    "South Korea": ["Korea, Republic of", "Republic of Korea"],
+    "North Korea": ["Korea, Democratic", "DPRK"],
+    "UAE": ["United Arab Emirates"],
+    "UK": ["United Kingdom", "Great Britain", "England", "Scotland", "Wales"],
+    "United States": ["USA", "United States of America"],
+    "Russia": ["Russian Federation"],
+    "Vietnam": ["Viet Nam"],
+    "Ivory Coast": ["Cote d'Ivoire", "Côte d'Ivoire"],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +259,79 @@ def _resolve_with_pyproj(epsg: int) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Route
 # ---------------------------------------------------------------------------
+
+
+class CrsByCountryEntry(BaseModel):
+    epsg: int
+    name: str
+    area_name: str
+    deprecated: bool
+    area_west: Optional[float] = None
+    area_south: Optional[float] = None
+    area_east: Optional[float] = None
+    area_north: Optional[float] = None
+
+
+@functools.lru_cache(maxsize=1)
+def _all_projected_crs_index() -> list[tuple]:
+    """Snapshot of every projected EPSG CRS, including its area_of_use bbox.
+
+    Tuple shape: (epsg, name, area_name, deprecated, west, south, east, north)
+    pyproj's `query_crs_info` walks the bundled SQLite DB; cache the result
+    per-process so subsequent country lookups are pure in-memory filters.
+    """
+    from pyproj.database import query_crs_info
+
+    out: list[tuple] = []
+    for info in query_crs_info(auth_name="EPSG", pj_types=["PROJECTED_CRS"]):
+        try:
+            epsg = int(info.code)
+        except (TypeError, ValueError):
+            continue
+        area_name = ""
+        west = south = east = north = None
+        if info.area_of_use is not None:
+            area_name = info.area_of_use.name or ""
+            west = info.area_of_use.west
+            south = info.area_of_use.south
+            east = info.area_of_use.east
+            north = info.area_of_use.north
+        out.append(
+            (epsg, info.name or "", area_name, bool(info.deprecated), west, south, east, north)
+        )
+    return out
+
+
+@router.get("/by-country/{country}", response_model=list[CrsByCountryEntry])
+def list_projected_crs_by_country(country: str) -> list[CrsByCountryEntry]:
+    """Return every projected EPSG CRS whose area_of_use mentions ``country``.
+
+    Match is case-insensitive substring against the CRS' area_of_use name,
+    expanded with `COUNTRY_ALIASES` to catch alternative spellings (e.g.
+    "United States" → "USA"). Non-deprecated CRS are returned first. Each
+    entry carries its area_of_use bbox so the UI can sketch every option's
+    extent on the country map.
+    """
+    needles = [country.lower()] + [a.lower() for a in COUNTRY_ALIASES.get(country, [])]
+    results: list[CrsByCountryEntry] = []
+    for epsg, name, area_name, deprecated, west, south, east, north in _all_projected_crs_index():
+        haystack = area_name.lower()
+        if not any(n in haystack for n in needles):
+            continue
+        results.append(
+            CrsByCountryEntry(
+                epsg=epsg,
+                name=name,
+                area_name=area_name,
+                deprecated=deprecated,
+                area_west=west,
+                area_south=south,
+                area_east=east,
+                area_north=north,
+            )
+        )
+    results.sort(key=lambda r: (r.deprecated, r.epsg))
+    return results
 
 
 @router.get("/{epsg}", response_model=CrsInfoResponse)
