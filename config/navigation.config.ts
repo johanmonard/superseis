@@ -47,7 +47,7 @@ export function getNavigationIconForPathname(pathname: string): AppIconKey | nul
 
 export const navigation: NavigationItem[] = [
   {
-    label: "Settings",
+    label: "Project",
     module: "project",
     icon: "settings",
     section: "main",
@@ -60,7 +60,8 @@ export const navigation: NavigationItem[] = [
       { label: "Grid", href: "/project/grid", icon: "grid" },
       { label: "Layers", href: "/project/layers", icon: "layers" },
       { label: "Maps", href: "/project/maps", icon: "mapPin" },
-      { label: "Offsets", href: "/project/offsets", icon: "sliders" },
+      { label: "Offsets", href: "/project/offsets", icon: "sliders", separatorAfter: true },
+      { label: "Scenarios", href: "/project/options", icon: "braces" },
     ],
   },
   {
@@ -70,24 +71,20 @@ export const navigation: NavigationItem[] = [
     section: "main",
     children: [
       { label: "Configuration", href: "/project/crew/configuration", icon: "settings" },
-      { label: "Assignments", href: "/project/crew/assignments", icon: "listChecks" },
+      { label: "Motion", href: "/project/crew/motion", icon: "listChecks" },
+      { label: "Activities", href: "/project/crew/activities", icon: "activity" },
+      { label: "Resources", href: "/project/crew/resources", icon: "blocks" },
     ],
   },
   {
-    label: "Activities",
+    label: "Simulations",
     module: "project",
-    icon: "activity",
+    icon: "play",
     section: "main",
-    href: "/project/activities",
-    children: [],
-  },
-  {
-    label: "Resources",
-    module: "project",
-    icon: "blocks",
-    section: "main",
-    href: "/project/resources",
-    children: [],
+    children: [
+      { label: "Manual", href: "/project/simulator/manual", icon: "pencil" },
+      { label: "Auto", href: "/project/simulator/auto", icon: "play" },
+    ],
   },
   // [new-module:insert-navigation]
   {

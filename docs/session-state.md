@@ -6,24 +6,24 @@
 -->
 
 ```yaml
-active_work: landing auth flow fixes verified; project list now waits for session before fetching
-stage: sign-in and project-list loading fixes complete; broader worktree still mixed
-updated: 2026-04-22
+active_work: crew resources Maps table units added; broader worktree still mixed
+stage: resource Maps table now uses compact value/unit controls
+updated: 2026-04-28
 
 recent_decisions:
+  - Resource Maps table rows are the unique union of Travel Map, Moving Map, and allocated resource layers
+  - Work time cells use time units s/mn/h/d; moving/travel speed cells use kmph/kts
+  - Camps Definition labels were shortened to Map, POI vs Region, and POI Start
+  - Work time is editable only for layers allocated to the active resource in crew_motion
+  - Move speed and Travel speed are editable only when the selected Moving/Travel map contains that layer
   - Landing login now syncs autofilled DOM credentials immediately on reveal/focus so one-click sign-in works
-  - Added a frontend regression test covering autofilled credentials on the landing login hover card
-  - The first sign-in click now re-reads live input DOM values so browser-restored credentials work without clicking the username first
-  - Project list queries now stay disabled until auth session resolution/login completes, preventing stale empty state after sign-in
 
 open_constraints:
-  - Wider landing/auth rewrite is still in progress in the worktree (`home-overview`, auth route deletions, layout updates)
-  - Wider project-section persistence work is still in progress in the worktree
+  - Worktree has pre-existing uncommitted changes, including resource-parameters.tsx
+  - Changes for this task were not committed to avoid staging unrelated same-file work
   - Auth flow is a local-development stub — replace before deploying
-  - Database is SQLite — swap DATABASE_URL for production
 
 next_action: >
-  Decide whether to isolate and commit the remaining landing/auth rewrite or split
-  it into smaller commits; unrelated full frontend tests still fail in
-  `tests/lib/use-autosave.test.tsx`.
+  Review the mixed worktree, then commit this resources Maps slice separately
+  or split the older resource-form changes first.
 ```

@@ -42,7 +42,7 @@ export const workspacePageIdentities: WorkspacePageIdentity[] = [
   },
   {
     href: "/project",
-    title: "Settings",
+    title: "Project",
     subtitle: "Project settings and configuration.",
   },
   {
