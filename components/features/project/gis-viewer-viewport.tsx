@@ -419,9 +419,15 @@ interface GisViewerViewportProps {
    * miss) the fit-to-content paths run as usual.
    */
   viewStateKey?: string;
+  /**
+   * Suppress the built-in layers legend entirely. Use when the caller
+   * wants to render its own legend overlay (e.g. the Crew/Assignments
+   * page, where the legend is grouped by activity and collapsible).
+   */
+  hideLegend?: boolean;
 }
 
-export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extraLayers, legendExtra, legendItems, addPolygonOptions, onAddPolygon, removableKeys, onRemoveFile, fitBounds, viewStateKey }: GisViewerViewportProps) {
+export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extraLayers, legendExtra, legendItems, addPolygonOptions, onAddPolygon, removableKeys, onRemoveFile, fitBounds, viewStateKey, hideLegend }: GisViewerViewportProps) {
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const mapContainerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<MLMap | null>(null);
@@ -946,7 +952,7 @@ export function GisViewerViewport({ projectId, visibleFiles, onStyleChange, extr
       <div ref={mapContainerRef} style={{ position: "absolute", inset: 0 }} />
 
       {/* Legend */}
-      {(legendItems && legendItems.length > 0) ? (
+      {hideLegend ? null : (legendItems && legendItems.length > 0) ? (
         <div className="gis-legend">
           <div className="gis-legend__header">
             <span className="gis-legend__title">Layers</span>

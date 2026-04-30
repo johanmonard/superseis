@@ -8,8 +8,14 @@ import { CreateActivityDialog } from "../features/activities/create-activity-dia
 import { useActivityNavChildren } from "../features/activities/use-activity-nav-children";
 import { CreateResourceDialog } from "../features/resources/create-resource-dialog";
 import { useResourceNavChildren } from "../features/resources/use-resource-nav-children";
-import { useDeleteActivity } from "../../services/query/activities";
-import { useDeleteResource } from "../../services/query/resources";
+import {
+  useDeleteActivity,
+  useRenameActivity,
+} from "../../services/query/activities";
+import {
+  useDeleteResource,
+  useRenameResource,
+} from "../../services/query/resources";
 import type {
   NavigationChildItem,
   NavigationItem,
@@ -133,6 +139,50 @@ export function WorkspaceSidebarNav({
   const [createResourceOpen, setCreateResourceOpen] = React.useState(false);
   const deleteActivityMutation = useDeleteActivity();
   const deleteResourceMutation = useDeleteResource();
+  const renameActivityMutation = useRenameActivity();
+  const renameResourceMutation = useRenameResource();
+
+  // Inline-rename state for dynamic Activities / Resources sidebar rows.
+  // `editingSlug` is the slug of the item currently being renamed (across
+  // both Activities and Resources — never both at once); `editValue` is
+  // the live input text. `commitRename` / `cancelRename` close the editor.
+  const [editingSlug, setEditingSlug] = React.useState<string | null>(null);
+  const [editingKind, setEditingKind] = React.useState<"activity" | "resource" | null>(
+    null,
+  );
+  const [editValue, setEditValue] = React.useState("");
+  const editInputRef = React.useRef<HTMLInputElement | null>(null);
+  React.useEffect(() => {
+    if (editingSlug && editInputRef.current) {
+      editInputRef.current.focus();
+      editInputRef.current.select();
+    }
+  }, [editingSlug]);
+  const startRename = React.useCallback(
+    (kind: "activity" | "resource", slug: string, currentName: string) => {
+      setEditingKind(kind);
+      setEditingSlug(slug);
+      setEditValue(currentName);
+    },
+    [],
+  );
+  const cancelRename = React.useCallback(() => {
+    setEditingSlug(null);
+    setEditingKind(null);
+    setEditValue("");
+  }, []);
+  const commitRename = React.useCallback(() => {
+    if (!editingSlug || !editingKind) return;
+    const trimmed = editValue.trim();
+    if (trimmed) {
+      if (editingKind === "activity") {
+        renameActivityMutation.mutate(editingSlug, trimmed);
+      } else {
+        renameResourceMutation.mutate(editingSlug, trimmed);
+      }
+    }
+    cancelRename();
+  }, [editingSlug, editingKind, editValue, renameActivityMutation, renameResourceMutation, cancelRename]);
 
   const [expandedParentLabel, setExpandedParentLabel] = React.useState<string | null>(null);
   const [expandedSubParents, setExpandedSubParents] = React.useState<Set<string>>(new Set());
@@ -146,6 +196,40 @@ export function WorkspaceSidebarNav({
     React.useState(false);
   const [collapsedTooltipSuppressionToken, setCollapsedTooltipSuppressionToken] =
     React.useState(0);
+
+  // Hover-open behaviour for collapsed nav items with sub-menus.
+  //
+  // Design: per-item wrappers fire `onMouseEnter` (which sets the open
+  // menu); the *parent* `SidebarContent` and `PopoverContent` are the only
+  // things that schedule a close, on `onMouseLeave`. That way moving
+  // between adjacent triggers fires only `mouseEnter(new)` — there is no
+  // per-wrapper `mouseLeave(old)` racing to close the popover that
+  // `mouseEnter(new)` just opened. The grace timer survives the trip
+  // across the seam between sidebar and portaled popover content (entering
+  // the popover cancels it before it fires).
+  const collapsedHoverCloseTimerRef = React.useRef<number | null>(null);
+  const cancelCollapsedHoverClose = React.useCallback(() => {
+    if (collapsedHoverCloseTimerRef.current !== null) {
+      window.clearTimeout(collapsedHoverCloseTimerRef.current);
+      collapsedHoverCloseTimerRef.current = null;
+    }
+  }, []);
+  const scheduleCollapsedHoverClose = React.useCallback(() => {
+    cancelCollapsedHoverClose();
+    collapsedHoverCloseTimerRef.current = window.setTimeout(() => {
+      setOpenCollapsedMenuLabel(null);
+      collapsedHoverCloseTimerRef.current = null;
+    }, 150);
+  }, [cancelCollapsedHoverClose]);
+  const openCollapsedHoverMenu = React.useCallback(
+    (label: string) => {
+      cancelCollapsedHoverClose();
+      setOpenCollapsedMenuLabel(label);
+      setOpenCollapsedTooltipLabel(null);
+    },
+    [cancelCollapsedHoverClose]
+  );
+  React.useEffect(() => () => cancelCollapsedHoverClose(), [cancelCollapsedHoverClose]);
 
   const mainNavigation = React.useMemo(
     () => navigation.filter((item) => item.section === "main"),
@@ -560,48 +644,73 @@ export function WorkspaceSidebarNav({
             }
           }}
         >
-          <Tooltip
-            open={
-              !collapsedTooltipsSuppressed &&
-              !isOpen &&
-              openCollapsedTooltipLabel === item.label
-            }
-            onOpenChange={(nextOpen) => {
-              if (collapsedTooltipsSuppressed) {
-                setOpenCollapsedTooltipLabel(null);
-                return;
-              }
-
-              setOpenCollapsedTooltipLabel(nextOpen && !isOpen ? item.label : null);
-            }}
-          >
-            <TooltipTrigger asChild>
-              <PopoverTrigger asChild>
-                <SidebarItem
-                  collapsed
-                  active={isActive || isOpen}
-                  aria-label={item.label}
-                  aria-expanded={isOpen}
-                >
-                  <Icon
-                    icon={appIcons[item.icon]}
-                    className={isActive || isOpen ? "text-[var(--color-accent)]" : undefined}
-                  />
-                </SidebarItem>
-              </PopoverTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="right" sideOffset={10}>
-              {item.label}
-            </TooltipContent>
-          </Tooltip>
+          {/* No per-wrapper mouse handlers — hover routing is delegated to
+              SidebarContent's `onMouseOver` (see the JSX below). The
+              `data-collapsed-trigger` attribute is the lookup key the
+              delegated handler uses to decide which menu the cursor is on.
+              Two reasons for delegation rather than per-wrapper handlers:
+              (a) it sidesteps any event-composition quirks around Radix
+              Slot's `asChild` on the trigger; (b) `mouseover` bubbles, so a
+              single listener on the parent reliably catches transitions
+              between sibling triggers regardless of cursor speed. */}
+          <div data-collapsed-trigger={item.label}>
+            <PopoverTrigger asChild>
+              <SidebarItem
+                collapsed
+                active={isActive || isOpen}
+                aria-label={item.label}
+                aria-expanded={isOpen}
+              >
+                <Icon
+                  icon={appIcons[item.icon]}
+                  className={isActive || isOpen ? "text-[var(--color-accent)]" : undefined}
+                />
+              </SidebarItem>
+            </PopoverTrigger>
+          </div>
           <PopoverContent
             side="right"
             align="start"
-            sideOffset={12}
-            className="w-64 p-[var(--space-2)]"
+            // `sideOffset={0}` flush-mounts the modal against the sidebar's
+            // right edge so they read as one continuous surface (matching the
+            // sidebar background already does the rest of the job).
+            sideOffset={0}
+            // Re-entering the popover from the sidebar (or from the small
+            // sliver of overlap between the two) cancels the pending close
+            // scheduled by SidebarContent's onMouseLeave.
+            onMouseEnter={cancelCollapsedHoverClose}
+            onMouseLeave={scheduleCollapsedHoverClose}
+            // Visual: the modal reads as a continuation of the sidebar.
+            //  - `!bg-...` overrides PopoverContent's default surface bg so
+            //    it matches the sidebar.
+            //  - Border on the top/right/bottom uses the same token as the
+            //    sidebar's own right border (`--color-border-subtle`); the
+            //    *left* edge is borderless (`!border-l-0`) because that side
+            //    butts up flush against the sidebar — a left border there
+            //    would double the sidebar's right border.
+            //  - `!p-0` removes the default padding so we can give the
+            //    header its own row whose height matches the sidebar item —
+            //    that way the title baseline sits on the same line as the
+            //    trigger icon.
+            // Width: 65% of the previous w-64 (16rem) = 10.4rem.
+            className="w-[10.4rem] !border-[var(--color-border-subtle)] !border-l-0 !bg-[var(--color-sidebar-bg,var(--color-bg-canvas))] !p-0"
           >
-            <div className="flex items-center justify-between border-b border-[var(--color-sidebar-divider)] px-[var(--space-2)] pb-[var(--space-2)]">
-              <span className="text-xs font-medium text-[var(--color-text-muted)]">
+            {/* Header row: same height as the collapsed sidebar item so the
+                title aligns vertically with the menu icon to its left. */}
+            <div className="flex h-[var(--control-height-md)] items-center justify-between border-b border-[var(--color-sidebar-divider)] px-[var(--space-3)]">
+              <span
+                className={cn(
+                  "text-xs uppercase tracking-wide",
+                  // Match SidebarItem's own active styling for labels:
+                  // primary text colour + semibold weight (the accent is
+                  // reserved for the icon). When `isActive` (this menu's
+                  // own route or any descendant route is current), the
+                  // title brightens; otherwise it stays muted.
+                  isActive
+                    ? "font-semibold text-[var(--color-text-primary)]"
+                    : "font-medium text-[var(--color-text-muted)]",
+                )}
+              >
                 {item.label}
               </span>
               {isDynamic ? (
@@ -620,7 +729,7 @@ export function WorkspaceSidebarNav({
                 </button>
               ) : null}
             </div>
-            <div className="space-y-1 pt-[var(--space-2)]">
+            <div className="space-y-1 p-[var(--space-2)]">
               {renderChildNavigationItems(effectiveChildren ?? [], {
                 onSelect: () => {
                   setOpenCollapsedMenuLabel(null);
@@ -636,12 +745,15 @@ export function WorkspaceSidebarNav({
     [
       activityNavChildren,
       resourceNavChildren,
+      cancelCollapsedHoverClose,
       collapsedTooltipsSuppressed,
       isActiveRoute,
+      openCollapsedHoverMenu,
       openCollapsedMenuLabel,
       openCollapsedTooltipLabel,
       renderChildNavigationItems,
       router,
+      scheduleCollapsedHoverClose,
       setCreateActivityOpen,
       setCreateResourceOpen,
       suppressCollapsedTooltips,
@@ -748,6 +860,58 @@ export function WorkspaceSidebarNav({
                     ? effectiveChildren.map((sub) => {
                         const subIsActive = isActiveRoute(sub.href);
                         const slug = sub.href ? sub.href.split("/").pop() : null;
+                        const kind: "activity" | "resource" | null = isActivities
+                          ? "activity"
+                          : isResources
+                            ? "resource"
+                            : null;
+                        // Inline rename mode for this row — render an input
+                        // instead of a button (since SidebarItem is itself a
+                        // <button>, nesting one would be invalid HTML).
+                        if (slug && kind && editingSlug === slug && editingKind === kind) {
+                          return (
+                            <div
+                              key={sub.href ?? sub.label}
+                              className="flex h-[var(--control-height-md)] items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] px-[var(--space-3)]"
+                            >
+                              <input
+                                ref={editInputRef}
+                                value={editValue}
+                                onChange={(e) => setEditValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    commitRename();
+                                  }
+                                  if (e.key === "Escape") {
+                                    e.preventDefault();
+                                    cancelRename();
+                                  }
+                                }}
+                                onBlur={commitRename}
+                                className="h-6 min-w-0 flex-1 rounded-[var(--radius-sm)] border border-[var(--color-accent)] bg-[var(--color-bg-surface)] px-[var(--space-2)] text-sm text-[var(--color-text-primary)] outline-none"
+                              />
+                              <button
+                                type="button"
+                                aria-label="Save rename"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={commitRename}
+                                className="flex h-5 w-5 items-center justify-center text-[var(--color-status-success)] hover:opacity-80"
+                              >
+                                <Icon icon={appIcons.check} size={12} />
+                              </button>
+                              <button
+                                type="button"
+                                aria-label="Cancel rename"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={cancelRename}
+                                className="flex h-5 w-5 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                              >
+                                <Icon icon={appIcons.x} size={12} />
+                              </button>
+                            </div>
+                          );
+                        }
                         return (
                           <SidebarItem
                             key={sub.href ?? sub.label}
@@ -772,33 +936,54 @@ export function WorkspaceSidebarNav({
                                 />
                               ) : null}
                               <span className="flex-1 truncate text-left">{sub.label}</span>
-                              {slug ? (
-                                // role=button instead of <button> — SidebarItem
-                                // is itself a <button>, and nested buttons are
-                                // invalid HTML (causes a hydration error).
-                                <span
-                                  role="button"
-                                  tabIndex={0}
-                                  aria-label={`Delete ${sub.label}`}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (isActivities) deleteActivityMutation.mutate(slug);
-                                    if (isResources) deleteResourceMutation.mutate(slug);
-                                    if (subIsActive) router.push(item.href ?? "/");
-                                  }}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter" || e.key === " ") {
-                                      e.preventDefault();
+                              {slug && kind ? (
+                                <>
+                                  {/* role=button instead of <button> — SidebarItem
+                                      is itself a <button>, and nested buttons are
+                                      invalid HTML (causes a hydration error). */}
+                                  <span
+                                    role="button"
+                                    tabIndex={0}
+                                    aria-label={`Rename ${sub.label}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      startRename(kind, slug, sub.label);
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter" || e.key === " ") {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        startRename(kind, slug, sub.label);
+                                      }
+                                    }}
+                                    className="ml-auto flex-shrink-0 opacity-0 transition-opacity group-hover/sub:opacity-100 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer"
+                                  >
+                                    <Icon icon={appIcons.pencil} size={12} />
+                                  </span>
+                                  <span
+                                    role="button"
+                                    tabIndex={0}
+                                    aria-label={`Delete ${sub.label}`}
+                                    onClick={(e) => {
                                       e.stopPropagation();
                                       if (isActivities) deleteActivityMutation.mutate(slug);
                                       if (isResources) deleteResourceMutation.mutate(slug);
                                       if (subIsActive) router.push(item.href ?? "/");
-                                    }
-                                  }}
-                                  className="ml-auto flex-shrink-0 opacity-0 transition-opacity group-hover/sub:opacity-100 text-[var(--color-text-muted)] hover:text-[var(--color-status-danger)] cursor-pointer"
-                                >
-                                  <Icon icon={appIcons.trash} size={12} />
-                                </span>
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter" || e.key === " ") {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        if (isActivities) deleteActivityMutation.mutate(slug);
+                                        if (isResources) deleteResourceMutation.mutate(slug);
+                                        if (subIsActive) router.push(item.href ?? "/");
+                                      }
+                                    }}
+                                    className="flex-shrink-0 opacity-0 transition-opacity group-hover/sub:opacity-100 text-[var(--color-text-muted)] hover:text-[var(--color-status-danger)] cursor-pointer"
+                                  >
+                                    <Icon icon={appIcons.trash} size={12} />
+                                  </span>
+                                </>
                               ) : null}
                             </span>
                           </SidebarItem>
@@ -837,14 +1022,20 @@ export function WorkspaceSidebarNav({
     [
       activityNavChildren,
       resourceNavChildren,
+      cancelRename,
+      commitRename,
       deleteActivityMutation,
       deleteResourceMutation,
+      editValue,
+      editingKind,
+      editingSlug,
       expandedParentLabel,
       isActiveRoute,
       renderChildNavigationItems,
       router,
       setCreateActivityOpen,
       setCreateResourceOpen,
+      startRename,
       suppressCollapsedTooltips,
     ]
   );
@@ -898,7 +1089,35 @@ export function WorkspaceSidebarNav({
             </span>
           </button>
         </SidebarHeader>
-        <SidebarContent className="flex flex-col space-y-1">
+        <SidebarContent
+          className="flex flex-col space-y-1"
+          // Centralised hover routing for the collapsed-mode popover.
+          //
+          // `onMouseOver` (which bubbles, unlike `mouseenter`) catches every
+          // pointer movement over any descendant — including transitions
+          // between adjacent triggers — and resolves to a popover label via
+          // the nearest `data-collapsed-trigger` ancestor. If that label
+          // differs from the currently open one, we cancel any pending close
+          // and switch instantly. No per-wrapper handlers means no race
+          // between `mouseLeave(old)` and `mouseEnter(new)`.
+          //
+          // `onMouseLeave` only fires when the cursor truly leaves the
+          // sidebar (not when moving between children); it schedules the
+          // grace-delayed close. The popover content (rendered to a portal)
+          // owns its own enter/leave handlers so the seam between sidebar
+          // and popover stays stable.
+          onMouseOver={(event) => {
+            if (!isCollapsed) return;
+            const target = event.target as HTMLElement | null;
+            const trigger = target?.closest<HTMLElement>("[data-collapsed-trigger]");
+            const label = trigger?.dataset.collapsedTrigger ?? null;
+            if (label && label !== openCollapsedMenuLabel) {
+              openCollapsedHoverMenu(label);
+            }
+          }}
+          onMouseLeave={scheduleCollapsedHoverClose}
+          onMouseEnter={cancelCollapsedHoverClose}
+        >
           <SidebarProjectToolbar isCollapsed={isCollapsed} />
           {isCollapsed
             ? mainNavigation.map(renderCollapsedNavigationItem)

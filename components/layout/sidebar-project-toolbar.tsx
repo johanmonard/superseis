@@ -42,7 +42,7 @@ export function SidebarProjectToolbar({ isCollapsed }: Props) {
           aria-label="Project files"
           onClick={() => setShowFilesDialog(true)}
         >
-          <Icon icon={appIcons.folderOpen} />
+          <Icon icon={appIcons.files} />
         </Button>
       </TooltipTrigger>
       <TooltipContent side={isCollapsed ? "right" : "bottom"}>
@@ -87,14 +87,14 @@ export function SidebarProjectToolbar({ isCollapsed }: Props) {
             {exitBtn}
           </div>
         ) : (
-          <div className="flex flex-col items-center gap-[var(--space-1)]">
+          <div className="flex items-center justify-between gap-[var(--space-2)]">
             <span
-              className="max-w-full truncate px-[var(--space-1)] text-center text-sm font-semibold text-[var(--color-accent)]"
+              className="min-w-0 flex-1 truncate pl-[calc((var(--space-4)+16px)/2-3px)] text-left text-sm font-semibold text-[var(--color-accent)]"
               title={activeProject.name}
             >
               {activeProject.name}
             </span>
-            <div className="flex items-center justify-center gap-[var(--space-1)]">
+            <div className="flex shrink-0 items-center gap-[var(--space-1)]">
               <GisPreloadToggle projectId={activeProject.id} />
               {filesBtn}
               {exitBtn}

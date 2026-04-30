@@ -27,6 +27,7 @@ const MIN_LEFT_FRACTION = 0.15;
 const MAX_LEFT_FRACTION = 0.85;
 const DEFAULT_LEFT_FRACTION = 1 / 4;
 const COLLAPSED_WIDTH = 36; // px — just enough for the rotated title + chevron
+const COLLAPSED_STORAGE_KEY = "superseis:project-settings-panel-collapsed";
 
 export function ProjectSettingsPage({
   title,
@@ -48,7 +49,19 @@ export function ProjectSettingsPage({
   const PageIcon = iconKey ? appIcons[iconKey] : null;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [leftFraction, setLeftFraction] = React.useState(defaultLeftFraction);
+  // Collapsed state persists across page navigations: reads from
+  // localStorage on mount, writes back on every change. SSR-safe (starts
+  // uncollapsed, hydrates after mount).
   const [collapsed, setCollapsed] = React.useState(false);
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem(COLLAPSED_STORAGE_KEY);
+    if (stored === "1") setCollapsed(true);
+  }, []);
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
+  }, [collapsed]);
   const isDragging = React.useRef(false);
   const [isResizing, setIsResizing] = React.useState(false);
   const [headerSlot, setHeaderSlot] = React.useState<HTMLDivElement | null>(
@@ -106,14 +119,29 @@ export function ProjectSettingsPage({
         }
       >
         {collapsed ? (
-          /* Collapsed: just the expand chevron */
+          /* Collapsed: chevron + vertically-written page title near the
+             top so users can still see which page they're on. The whole
+             strip remains clickable to expand. */
           <button
             type="button"
             aria-label="Expand panel"
             onClick={() => setCollapsed(false)}
-            className="flex h-full w-full items-start justify-center py-[var(--space-3)] text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-primary)]"
+            className="flex h-full w-full flex-col items-center justify-center gap-[var(--space-2)] py-[var(--space-3)] text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-primary)]"
           >
             <ChevronRight size={14} />
+            <span
+              className="rotate-180 text-xs font-semibold text-[var(--color-text-primary)] [writing-mode:vertical-rl]"
+            >
+              {title}
+            </span>
+            {PageIcon ? (
+              <PageIcon
+                size={16}
+                strokeWidth={1.75}
+                className="shrink-0 text-[var(--color-text-secondary)]"
+                aria-hidden="true"
+              />
+            ) : null}
           </button>
         ) : (
           /* Expanded: full panel */
