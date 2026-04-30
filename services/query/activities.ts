@@ -161,6 +161,33 @@ export function useDeleteActivity() {
 }
 
 /**
+ * Rename an activity entry by slug. The slug stays stable so existing
+ * routes / sidebar links keep working — only the displayed `name` changes.
+ */
+export function useRenameActivity() {
+  const { update, getLive, projectId } = useStore();
+
+  const mutate = React.useCallback(
+    (slug: string, newName: string) => {
+      if (!projectId) return;
+      const trimmed = newName.trim();
+      if (!trimmed) return;
+      const live = getLive();
+      if (!live.items.some((a) => a.slug === slug)) return;
+      update({
+        ...live,
+        items: live.items.map((a) =>
+          a.slug === slug ? { ...a, name: trimmed } : a,
+        ),
+      });
+    },
+    [projectId, update, getLive],
+  );
+
+  return { mutate } as const;
+}
+
+/**
  * Update the `parameters` blob on a single activity. Called from
  * `activity-parameters.tsx` whenever any field changes — relies on
  * `useSectionData`'s built-in 2 s debounce, so chatty field-by-field

@@ -4,13 +4,6 @@
  * the `activities` section.
  */
 
-export interface ActivityTimeEntry {
-  id: string;
-  from: string;
-  to: string;
-  returnToBase: boolean;
-}
-
 export interface ActivityStripDef {
   id: string;
   label: string;
@@ -35,6 +28,15 @@ export interface ActivityMotion {
   gid_sub_shift: string;
 }
 
+/** Sequencing data scoped to a (Grid Option, Partition) pair. Stored per
+ *  pair in `ActivityParameters.scenarios`, keyed by
+ *  `${designOption}|${sequenceRegioning}`. */
+export interface ActivityScenarioBucket {
+  masterDesign: string;
+  strips: ActivityStripDef[];
+  sequences: ActivitySequenceDef[];
+}
+
 /** Mirror of the local-state shape inside `activity-parameters.tsx`. */
 export interface ActivityParameters {
   description: string;
@@ -42,12 +44,10 @@ export interface ActivityParameters {
   baseMap: string;
   allocation: Record<string, string | null>;
   slipTimes: Record<string, Record<string, string>>;
-  timetables: Record<string, ActivityTimeEntry[]>;
   designOption: string;
-  masterDesign: string;
   sequenceRegioning: string;
-  strips: ActivityStripDef[];
-  sequences: ActivitySequenceDef[];
+  /** Per-(Grid option, Partition) buckets — see `ActivityScenarioBucket`. */
+  scenarios: Record<string, ActivityScenarioBucket>;
   motion: ActivityMotion;
   dynamicMappingKw: string;
 }

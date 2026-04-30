@@ -36,22 +36,30 @@ export function InlineTagSelect({
           </button>
         </span>
       ))}
-      {available.length > 0 && (
-        <select
-          value=""
-          onChange={(e) => {
-            if (e.target.value) onChange([...value, e.target.value]);
-          }}
-          className="h-6 appearance-none border-none bg-transparent px-1 text-xs text-[var(--color-text-muted)] outline-none"
-        >
-          <option value="">{placeholder}</option>
-          {available.map((o) => (
-            <option key={o} value={o}>
-              {o}
-            </option>
-          ))}
-        </select>
-      )}
+      {/* Always render the selector — even when there's nothing to add —
+          so consumers (e.g. the Regions row in activity strips/sequences)
+          show a visible "in front of the field" affordance regardless of
+          whether the upstream pool is empty. When `available` is empty
+          the dropdown disables itself and shows a contextual placeholder
+          ("None available") so the user understands why nothing's
+          there. */}
+      <select
+        value=""
+        disabled={available.length === 0}
+        onChange={(e) => {
+          if (e.target.value) onChange([...value, e.target.value]);
+        }}
+        className="h-6 appearance-none border-none bg-transparent px-1 text-xs text-[var(--color-text-muted)] outline-none disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        <option value="">
+          {available.length === 0 ? "None available" : placeholder}
+        </option>
+        {available.map((o) => (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

@@ -4,22 +4,24 @@ import * as React from "react";
 
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
+import { Icon, appIcons } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { CheckboxMatrix } from "./checkbox-matrix";
 import { EditableMatrix } from "./editable-matrix";
 import { InlineTagSelect } from "./inline-tag-select";
 import { Section } from "./section";
-import { TabbedPanel } from "./tabbed-panel";
+import { StripColumnHeader } from "./strip-column-header";
 import type {
   Activity,
   ActivityParameters,
+  ActivityScenarioBucket,
   ActivitySequenceDef,
   ActivityStripDef,
-  ActivityTimeEntry,
 } from "@/services/api/activities";
 import { useActiveProject } from "@/lib/use-active-project";
 import { useSectionData } from "@/lib/use-autosave";
+import { useSectionOpenStates } from "@/lib/use-section-open-states";
+import { cn } from "@/lib/utils";
 
 /* -------------------------------------------------------------------------- */
 /*  Live data sources — pulled from sibling sections of the same project      */
@@ -33,12 +35,6 @@ const DEFAULT_ACTIVITIES_SECTION: ActivitiesSectionData = {
   items: [],
   nextId: 1,
 };
-
-interface MapsSectionData {
-  maps: Array<{ id: string; name: string; layers: string[] }>;
-  activeId: string;
-}
-const DEFAULT_MAPS_SECTION: MapsSectionData = { maps: [], activeId: "" };
 
 interface CrewSectionData {
   options: Array<{
@@ -54,43 +50,61 @@ interface CrewSectionData {
 }
 const DEFAULT_CREW_SECTION: CrewSectionData = { options: [], activeId: "" };
 
-/* -------------------------------------------------------------------------- */
-/*  Dummy option data — to be replaced incrementally as the form gets wired   */
-/* -------------------------------------------------------------------------- */
+/** Mirror of the shape persisted by `project-design-options.tsx`. We only
+ *  read the fields needed to populate the dropdowns / radio list. */
+interface DesignOptionsSectionData {
+  options: Array<{
+    id: string;
+    name: string;
+    rows: Array<{ design: string }>;
+  }>;
+  activeId: string;
+}
+const DEFAULT_DESIGN_OPTIONS_SECTION: DesignOptionsSectionData = {
+  options: [],
+  activeId: "",
+};
 
-const DUMMY_DESIGN_GROUPS = ["Design Group A", "Design Group B"];
-const DUMMY_MASTER_DESIGNS = ["Master 1", "Master 2", "Master 3"];
-const DUMMY_REGIONING_GROUPS = ["Region Group North", "Region Group South"];
-const DUMMY_POLYGONS = ["Polygon A", "Polygon B", "Polygon C", "Polygon D"];
+/** Mirror of the shape persisted by `project-partitions.tsx`. We read the
+ *  group names for the Partitions dropdown and the per-group `polygons`
+ *  list so the strip/sequence Regions selectors can show the regions
+ *  belonging to whichever partition the activity has chosen. */
+interface PartitioningSectionData {
+  groups: Array<{ id: string; name: string; polygons: string[] }>;
+  activeId: string;
+}
+const DEFAULT_PARTITIONING_SECTION: PartitioningSectionData = {
+  groups: [],
+  activeId: "",
+};
+
+/** Mirror of the shape persisted by Project → Scenarios. We narrow the
+ *  Grid option / Partitions selectors here to only the values actually
+ *  used by at least one scenario, so the activity form stays in sync with
+ *  the project's chosen scenarios. */
+interface OptionsSectionData {
+  options: Array<{
+    id: string;
+    name: string;
+    partitionName: string;
+    gridOptionName: string;
+  }>;
+  activeId: string;
+}
+const DEFAULT_OPTIONS_SECTION: OptionsSectionData = {
+  options: [],
+  activeId: "",
+};
 
 /* -------------------------------------------------------------------------- */
 /*  Defaults                                                                  */
 /* -------------------------------------------------------------------------- */
 
-function defaultStrip(): ActivityStripDef {
+function defaultScenarioBucket(): ActivityScenarioBucket {
   return {
-    id: crypto.randomUUID(),
-    label: "Strip 1",
-    regions: [],
-    design: "",
-    stripType: "inline",
-    grouping: "",
-    start: "highest",
-  };
-}
-
-function defaultSequence(): ActivitySequenceDef {
-  return {
-    id: crypto.randomUUID(),
-    label: "Seq 1",
-    regions: [],
-    design: "",
-    stripType: "inline",
-    grouping: "",
-    start: "highest",
-    clusterType: "weight",
-    target: "",
-    startCluster: "highest",
+    masterDesign: "",
+    strips: [],
+    sequences: [],
   };
 }
 
@@ -101,12 +115,9 @@ function defaultParameters(): ActivityParameters {
     baseMap: "",
     allocation: {},
     slipTimes: {},
-    timetables: {},
     designOption: "",
-    masterDesign: "",
     sequenceRegioning: "",
-    strips: [defaultStrip()],
-    sequences: [defaultSequence()],
+    scenarios: {},
     motion: {
       gid_ttype_shift: "",
       gid_swath_shift: "",
@@ -131,7 +142,7 @@ export function ActivityParameters({
   activitySlug?: string;
 }) {
   // ──────────────────────────────────────────────────────────────────────
-  // State strategy: same as the Settings pages (project-crew.tsx, etc.).
+  // State strategy: same as the Project pages (project-crew.tsx, etc.).
   // `useSectionData` IS the source of truth — no local React.useState,
   // no separate persist effect. Every field setter writes the patched
   // entry back through `update`, which optimistically refreshes the
@@ -150,25 +161,71 @@ export function ActivityParameters({
     ? activitiesSection.items.find((a) => a.slug === activitySlug)
     : undefined;
 
-  const { data: mapsSection } = useSectionData<MapsSectionData>(
-    projectId,
-    "maps",
-    DEFAULT_MAPS_SECTION,
-  );
-  const availableMaps = mapsSection.maps;
   const { data: crewSection } = useSectionData<CrewSectionData>(
     projectId,
     "crew",
     DEFAULT_CREW_SECTION,
   );
 
+  const { data: designOptionsSection } = useSectionData<DesignOptionsSectionData>(
+    projectId,
+    "design_options",
+    DEFAULT_DESIGN_OPTIONS_SECTION,
+  );
+
+  const { data: partitioningSection } = useSectionData<PartitioningSectionData>(
+    projectId,
+    "partitioning",
+    DEFAULT_PARTITIONING_SECTION,
+  );
+
+  const { data: optionsSection } = useSectionData<OptionsSectionData>(
+    projectId,
+    "options",
+    DEFAULT_OPTIONS_SECTION,
+  );
+
   // Parameters live in the section. We compute a defaults-merged view per
   // render so every field always has a defined initial value even if the
   // entry's stored params predate a newly-added field.
-  const parameters: ActivityParameters = React.useMemo(
-    () => ({ ...defaultParameters(), ...(entry?.parameters ?? {}) }),
-    [entry?.parameters],
-  );
+  const parameters: ActivityParameters = React.useMemo(() => {
+    const raw = (entry?.parameters ?? {}) as Record<string, unknown>;
+    const merged: ActivityParameters = {
+      ...defaultParameters(),
+      ...(raw as Partial<ActivityParameters>),
+    };
+    // Defensive: stored data may be a partial Record, ensure scenarios is
+    // an object so the lookups below never crash.
+    if (!merged.scenarios || typeof merged.scenarios !== "object") {
+      merged.scenarios = {};
+    }
+    // One-shot migration from the old flat shape. If `scenarios` is empty
+    // but the legacy `masterDesign` / `strips` / `sequences` fields are
+    // present on disk, materialise a single bucket keyed by the current
+    // (designOption|sequenceRegioning) pair so users don't lose their
+    // existing sequencing configuration.
+    if (Object.keys(merged.scenarios).length === 0) {
+      const oldMaster =
+        typeof raw.masterDesign === "string" ? raw.masterDesign : "";
+      const oldStrips = Array.isArray(raw.strips)
+        ? (raw.strips as ActivityStripDef[])
+        : [];
+      const oldSequences = Array.isArray(raw.sequences)
+        ? (raw.sequences as ActivitySequenceDef[])
+        : [];
+      if (oldMaster || oldStrips.length > 0 || oldSequences.length > 0) {
+        const key = `${merged.designOption}|${merged.sequenceRegioning}`;
+        merged.scenarios = {
+          [key]: {
+            masterDesign: oldMaster,
+            strips: oldStrips,
+            sequences: oldSequences,
+          },
+        };
+      }
+    }
+    return merged;
+  }, [entry?.parameters]);
 
   // Patch helper — applies an update to a single key, writes the new
   // entry back into the section, and lets `useSectionData` debounce the
@@ -225,33 +282,54 @@ export function ActivityParameters({
     ];
   }
 
-  // General Information
-  const [name, setName] = React.useState(activityName);
-  React.useEffect(() => setName(activityName), [activityName]);
+  // Helper for fields scoped to the (Grid option, Partition) bucket.
+  // The key composition (`${designOption}|${sequenceRegioning}`) is read at
+  // setter call time via `setParameters((prev) => …)` so writes always land
+  // in the bucket selected by the current dropdowns.
+  function bucketField<K extends keyof ActivityScenarioBucket>(
+    key: K,
+  ): [
+    ActivityScenarioBucket[K],
+    (value: React.SetStateAction<ActivityScenarioBucket[K]>) => void,
+  ] {
+    return [
+      currentBucket[key],
+      (updater) =>
+        setParameters((prev) => {
+          const k = `${prev.designOption}|${prev.sequenceRegioning}`;
+          const prevBucket = prev.scenarios[k] ?? defaultScenarioBucket();
+          const nextValue =
+            typeof updater === "function"
+              ? (
+                  updater as (
+                    v: ActivityScenarioBucket[K],
+                  ) => ActivityScenarioBucket[K]
+                )(prevBucket[key])
+              : updater;
+          return {
+            ...prev,
+            scenarios: {
+              ...prev.scenarios,
+              [k]: { ...prevBucket, [key]: nextValue },
+            },
+          };
+        }),
+    ];
+  }
+
+  // General Information — name lives on the entry (renamed from the
+  // sidebar) and shows up in the page title, so it's not a form field
+  // here anymore.
   const [description, setDescription] = field("description");
   const [pType, setPType] = field("pType");
-
-  // Resources
-  const [baseMap, setBaseMap] = field("baseMap");
-  const [allocation, setAllocation] = field("allocation");
 
   // Slip Times
   const [slipTimes, setSlipTimes] = field("slipTimes");
 
-  // Timetables
-  const [timetables, setTimetables] = field("timetables");
-
-  // Derived option lists. `layerOptions` follows the selected base map;
-  // `resourceOptions` lists all resources whose `parameters.activity`
-  // matches the activity name we're editing.
-  const selectedMap = React.useMemo(
-    () => availableMaps.find((m) => m.name === parameters.baseMap),
-    [availableMaps, parameters.baseMap],
-  );
-  const layerOptions = selectedMap?.layers ?? [];
-  // Resources for this activity come from the active crew option — that's
-  // the canonical mapping. (We deliberately don't filter the registry by
-  // any per-resource `activity` field; the crew page is the source of truth.)
+  // Resources for this activity come from the active crew option — used as
+  // the labels in Slip Times. (Allocation moved to Crew/Motion and
+  // Working Time moved to the per-resource page, since both are intrinsic
+  // to the resource, not the activity.)
   const resourceOptions = React.useMemo(() => {
     const opt =
       crewSection.options.find((o) => o.id === crewSection.activeId) ??
@@ -261,68 +339,137 @@ export function ActivityParameters({
     return act ? act.resources.map((r) => r.name) : [];
   }, [crewSection, activityName]);
 
-  const [expandedResource, setExpandedResource] = React.useState<string | null>(
-    null,
-  );
-  React.useEffect(() => {
-    setExpandedResource((prev) =>
-      prev && resourceOptions.includes(prev) ? prev : resourceOptions[0] ?? null,
-    );
-  }, [resourceOptions]);
+  // Default every Slip-Times cell to "0" so the matrix visually starts at
+  // zero without any user action. Only `null`/`undefined` cells are filled
+  // (`?? "0"` only replaces missing values) — an empty string the user
+  // typed explicitly is preserved. When the user edits any cell, the
+  // matrix's change handler shallow-copies this filled view, so the zeros
+  // for the other cells get persisted alongside the edit.
+  const slipTimesView = React.useMemo<
+    Record<string, Record<string, string>>
+  >(() => {
+    if (resourceOptions.length === 0) return slipTimes;
+    const out: Record<string, Record<string, string>> = {};
+    for (const row of resourceOptions) {
+      const rowVal: Record<string, string> = {};
+      for (const col of resourceOptions) {
+        rowVal[col] = slipTimes[row]?.[col] ?? "0";
+      }
+      out[row] = rowVal;
+    }
+    return out;
+  }, [slipTimes, resourceOptions]);
 
   // Sequencing
   const [designOption, setDesignOption] = field("designOption");
-  const [masterDesign, setMasterDesign] = field("masterDesign");
+  // `sequenceRegioning` is the underlying field; the UI now labels it
+  // "Partitions" and is populated from the project's partitioning section.
   const [sequenceRegioning, setSequenceRegioning] = field("sequenceRegioning");
 
-  // Base Strips
-  const [strips, setStrips] = field("strips");
-  const [activeStripId, setActiveStripId] = React.useState<string | null>(
-    parameters.strips[0]?.id ?? null,
+  // Active sequencing bucket — keyed by the (Grid option, Partition) pair.
+  // Switching either pill swaps in the bucket for the new pair (or the
+  // default bucket if none has been written yet).
+  const currentScenarioKey = `${designOption}|${sequenceRegioning}`;
+  const currentBucket: ActivityScenarioBucket =
+    parameters.scenarios[currentScenarioKey] ?? defaultScenarioBucket();
+  const [masterDesign, setMasterDesign] = bucketField("masterDesign");
+
+  // Names actually used by at least one scenario (Project → Scenarios).
+  // We narrow the Grid option and Partitions pickers to these so the
+  // activity form only offers values the project has committed to.
+  const usedGridOptions = React.useMemo(() => {
+    const set = new Set<string>();
+    for (const o of optionsSection.options) {
+      if (o.gridOptionName) set.add(o.gridOptionName);
+    }
+    return set;
+  }, [optionsSection.options]);
+  const usedPartitions = React.useMemo(() => {
+    const set = new Set<string>();
+    for (const o of optionsSection.options) {
+      if (o.partitionName) set.add(o.partitionName);
+    }
+    return set;
+  }, [optionsSection.options]);
+
+  // Available design-option names — Project → Design Options, filtered
+  // to those used in at least one scenario.
+  const designOptionNames = React.useMemo(
+    () =>
+      designOptionsSection.options
+        .map((o) => o.name)
+        .filter((n) => usedGridOptions.has(n)),
+    [designOptionsSection.options, usedGridOptions],
   );
 
-  // Sequences
-  const [sequences, setSequences] = field("sequences");
-  const [activeSeqId, setActiveSeqId] = React.useState<string | null>(
-    parameters.sequences[0]?.id ?? null,
+  // Designs belonging to the currently-selected design option. Pulled from
+  // that option's `rows[].design`, deduplicated, dropping empty values. The
+  // "Master design" radio list iterates over this.
+  const designsForSelectedOption = React.useMemo(() => {
+    const opt = designOptionsSection.options.find(
+      (o) => o.name === designOption,
+    );
+    if (!opt) return [] as string[];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const row of opt.rows) {
+      const name = row.design?.trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      out.push(name);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization -- `designOption` is a stable string snapshot from `parameters`
+  }, [designOptionsSection, designOption]);
+
+  // Available partition (region group) names — Project → Partitions,
+  // filtered to those used in at least one scenario.
+  const partitionNames = React.useMemo(
+    () =>
+      partitioningSection.groups
+        .map((g) => g.name)
+        .filter((n) => usedPartitions.has(n)),
+    [partitioningSection.groups, usedPartitions],
   );
+
+  // Polygons that belong to the activity's currently-selected partition.
+  // Strip/sequence Regions selectors use this in place of the old dummy
+  // polygons list. If no partition is chosen yet the list is empty —
+  // letting the InlineTagSelect render with no available tags rather than
+  // showing a stale dummy palette.
+  const polygonsForSelectedPartition = React.useMemo(() => {
+    const grp = partitioningSection.groups.find(
+      (g) => g.name === sequenceRegioning,
+    );
+    return grp?.polygons ?? [];
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization -- `sequenceRegioning` is a stable string snapshot from `parameters`
+  }, [partitioningSection, sequenceRegioning]);
+
+  // Auto-select the first design as master whenever the current selection
+  // isn't valid for the chosen design option — covers both "nothing
+  // picked yet" and "design option just changed and the previous master is
+  // no longer in the list". Only writes when the persisted activity entry
+  // exists, so we don't churn the cache on the empty pre-load render.
+  React.useEffect(() => {
+    if (!entry) return;
+    if (designsForSelectedOption.length === 0) return;
+    if (masterDesign && designsForSelectedOption.includes(masterDesign)) return;
+    setMasterDesign(designsForSelectedOption[0]);
+  }, [entry, designsForSelectedOption, masterDesign, setMasterDesign]);
+
+  // Base Strips — scoped to the active scenario bucket. Rendered as a
+  // column-per-area table below so all strips are visible at once.
+  const [strips, setStrips] = bucketField("strips");
+
+  // Sequences — scoped to the active scenario bucket. Rendered as a
+  // column-per-area table below so all sequences are visible at once.
+  const [sequences, setSequences] = bucketField("sequences");
 
   // Motion
   const [motion, setMotion] = field("motion");
 
   // Dynamic
   const [dynamicMappingKw, setDynamicMappingKw] = field("dynamicMappingKw");
-
-  /* Helpers */
-  const addTimeEntry = (resource: string) => {
-    setTimetables((prev) => ({
-      ...prev,
-      [resource]: [
-        ...(prev[resource] ?? []),
-        { id: crypto.randomUUID(), from: "", to: "", returnToBase: false },
-      ],
-    }));
-  };
-
-  const updateTimeEntry = (
-    resource: string,
-    id: string,
-    patch: Partial<ActivityTimeEntry>,
-  ) => {
-    setTimetables((prev) => ({
-      ...prev,
-      [resource]: (prev[resource] ?? []).map((e) =>
-        e.id === id ? { ...e, ...patch } : e,
-      ),
-    }));
-  };
-
-  const removeTimeEntry = (resource: string, id: string) => {
-    setTimetables((prev) => ({
-      ...prev,
-      [resource]: (prev[resource] ?? []).filter((e) => e.id !== id),
-    }));
-  };
 
   const updateStrip = (id: string, patch: Partial<ActivityStripDef>) => {
     setStrips((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
@@ -334,18 +481,21 @@ export function ActivityParameters({
     );
   };
 
+  // Persisted open/closed state for the collapsible sections below — kept
+  // in localStorage so it survives the remount that happens when the user
+  // switches activities (the page passes `key={slug}` to this component).
+  const sectionStates = useSectionOpenStates(
+    "seiseye.activity-parameters.sections",
+  );
+  const sectionProps = (title: string, defaultOpen: boolean) => ({
+    open: sectionStates.isOpen(title, defaultOpen),
+    onToggle: (next: boolean) => sectionStates.setOpen(title, next),
+  });
+
   return (
     <div className="space-y-[var(--space-2)]">
       {/* ── General Information ───────────────────────────────────────── */}
-      <Section title="General Information">
-        <Field label="Name" htmlFor="act-name" layout="horizontal">
-          <Input
-            id="act-name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            maxLength={15}
-          />
-        </Field>
+      <Section title="General Information" {...sectionProps("General Information", true)}>
         <Field label="Description" htmlFor="act-desc" layout="horizontal">
           <Input
             id="act-desc"
@@ -369,36 +519,8 @@ export function ActivityParameters({
         </Field>
       </Section>
 
-      {/* ── Resources ─────────────────────────────────────────────────── */}
-      <Section title="Resources">
-        <Field label="Base Map" htmlFor="act-basemap" layout="horizontal">
-          <Select id="act-basemap" value={baseMap} onChange={(e) => setBaseMap(e.target.value)}>
-            <option value="">Select...</option>
-            {availableMaps.map((m) => (
-              <option key={m.id} value={m.name}>{m.name}</option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Allocation" layout="horizontal">
-          {layerOptions.length === 0 || resourceOptions.length === 0 ? (
-            <p className="text-xs text-[var(--color-text-muted)]">
-              {layerOptions.length === 0
-                ? "Select a Base Map to populate rows."
-                : "No resources point to this activity."}
-            </p>
-          ) : (
-            <CheckboxMatrix
-              rows={layerOptions}
-              columns={resourceOptions}
-              value={allocation}
-              onChange={setAllocation}
-            />
-          )}
-        </Field>
-      </Section>
-
       {/* ── Slip Times ────────────────────────────────────────────────── */}
-      <Section title="Slip Times" defaultOpen={false}>
+      <Section title="Slip Times" {...sectionProps("Slip Times", false)}>
         {resourceOptions.length === 0 ? (
           <p className="text-xs text-[var(--color-text-muted)]">
             No resources point to this activity.
@@ -406,283 +528,481 @@ export function ActivityParameters({
         ) : (
           <EditableMatrix
             labels={resourceOptions}
-            value={slipTimes}
+            value={slipTimesView}
             onChange={setSlipTimes}
           />
         )}
       </Section>
 
-      {/* ── Timetables ────────────────────────────────────────────────── */}
-      <Section title="Timetables" defaultOpen={false}>
-        {resourceOptions.length === 0 ? (
-          <p className="text-xs text-[var(--color-text-muted)]">
-            No resources point to this activity.
-          </p>
-        ) : null}
-        {resourceOptions.map((resource) => (
-          <div key={resource}>
-            <button
-              type="button"
-              onClick={() =>
-                setExpandedResource((prev) => (prev === resource ? null : resource))
-              }
-              className="flex w-full items-center justify-between rounded-[var(--radius-sm)] px-[var(--space-2)] py-[var(--space-1)] text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-elevated)]"
-            >
-              <span>{resource}</span>
-              <span className="text-[var(--color-text-muted)]">
-                {timetables[resource]?.length ?? 0} entries
-              </span>
-            </button>
-            {expandedResource === resource && (
-              <div className="mt-1 space-y-1 pl-[var(--space-2)]">
-                {timetables[resource]?.map((entry) => (
-                  <div key={entry.id} className="flex items-center gap-2">
-                    <Input
-                      type="number"
-                      value={entry.from}
-                      onChange={(e) => updateTimeEntry(resource, entry.id, { from: e.target.value })}
-                      placeholder="From"
-                      maxLength={2}
-                      className="w-16 text-xs"
+      {/* ── Sequencing ────────────────────────────────────────────────── */}
+      <Section title="Sequencing" {...sectionProps("Sequencing", false)}>
+        {/* Grid option — pill-bar selector populated from Project → Design
+            Options. The selection (along with Partitions below) scopes
+            everything else in this section. */}
+        <Field label="Grid option" layout="horizontal">
+          {designOptionNames.length === 0 ? (
+            <p className="text-xs text-[var(--color-text-muted)] pt-[5px]">
+              No grid options used by any scenario. Configure scenarios in Project → Scenarios.
+            </p>
+          ) : (
+            <div className="flex flex-wrap items-center gap-[var(--space-1)] pt-[5px]">
+              {designOptionNames.map((d) => {
+                const isActive = d === designOption;
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setDesignOption(d)}
+                    className={cn(
+                      "rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-1)] text-xs font-medium transition-colors",
+                      isActive
+                        ? "bg-[var(--color-accent)] text-[var(--color-accent-foreground)]"
+                        : "bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
+                    )}
+                  >
+                    {d}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </Field>
+        {/* Partitions — pill-bar selector populated from Project →
+            Partitions. The underlying field is still `sequenceRegioning`
+            so existing saved data continues to round-trip. */}
+        <Field label="Partitions" layout="horizontal">
+          {partitionNames.length === 0 ? (
+            <p className="text-xs text-[var(--color-text-muted)] pt-[5px]">
+              No partitions used by any scenario. Configure scenarios in Project → Scenarios.
+            </p>
+          ) : (
+            <div className="flex flex-wrap items-center gap-[var(--space-1)] pt-[5px]">
+              {partitionNames.map((p) => {
+                const isActive = p === sequenceRegioning;
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setSequenceRegioning(p)}
+                    className={cn(
+                      "rounded-[var(--radius-sm)] px-[var(--space-3)] py-[var(--space-1)] text-xs font-medium transition-colors",
+                      isActive
+                        ? "bg-[var(--color-accent)] text-[var(--color-accent-foreground)]"
+                        : "bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
+                    )}
+                  >
+                    {p}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </Field>
+
+        {/* ── Activity level strip partitioning ───────────────────────── */}
+        <Section
+          title="Activity level strip partitioning"
+          variant="secondary"
+          collapsible={false}
+          className="mt-[var(--space-6)]"
+        >
+          {/* Master design — radio buttons over the designs that belong to
+              the currently-selected grid option (deduped from its rows).
+              Pick one; that name is persisted to `parameters.masterDesign`. */}
+          <Field label="Master design" layout="horizontal" labelWidth="7rem">
+            {designsForSelectedOption.length === 0 ? (
+              <p className="text-xs text-[var(--color-text-muted)]">
+                {designOption
+                  ? "Selected grid option has no designs."
+                  : "Select a grid option to choose its master."}
+              </p>
+            ) : (
+              <div className="flex flex-row flex-wrap items-center gap-x-[var(--space-4)] gap-y-[var(--space-2)] pt-[5px]">
+                {designsForSelectedOption.map((d) => (
+                  <label
+                    key={d}
+                    className="flex items-center gap-[var(--space-2)] text-sm text-[var(--color-text-primary)]"
+                  >
+                    <input
+                      type="radio"
+                      name={`master-design-${activitySlug ?? "_"}`}
+                      value={d}
+                      checked={masterDesign === d}
+                      onChange={() => setMasterDesign(d)}
+                      className="h-3.5 w-3.5 accent-[var(--color-accent)]"
                     />
-                    <Input
-                      type="number"
-                      value={entry.to}
-                      onChange={(e) => updateTimeEntry(resource, entry.id, { to: e.target.value })}
-                      placeholder="To"
-                      maxLength={2}
-                      className="w-16 text-xs"
-                    />
-                    <label className="flex items-center gap-1 text-xs text-[var(--color-text-muted)]">
-                      <Checkbox
-                        checked={entry.returnToBase}
-                        onCheckedChange={(checked) =>
-                          updateTimeEntry(resource, entry.id, { returnToBase: checked === true })
-                        }
-                      />
-                      Return
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => removeTimeEntry(resource, entry.id)}
-                      className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-status-danger)]"
-                    >
-                      &times;
-                    </button>
-                  </div>
+                    {d}
+                  </label>
                 ))}
-                <button
-                  type="button"
-                  onClick={() => addTimeEntry(resource)}
-                  className="text-xs text-[var(--color-accent)] hover:underline"
-                >
-                  + Add entry
-                </button>
               </div>
             )}
-          </div>
-        ))}
-      </Section>
-
-      {/* ── Sequencing ────────────────────────────────────────────────── */}
-      <Section title="Sequencing" defaultOpen={false}>
-        <Field label="Design option" htmlFor="act-design-opt" layout="horizontal">
-          <Select id="act-design-opt" value={designOption} onChange={(e) => setDesignOption(e.target.value)}>
-            <option value="">Select...</option>
-            {DUMMY_DESIGN_GROUPS.map((d) => (
-              <option key={d} value={d}>{d}</option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Master design" htmlFor="act-master" layout="horizontal">
-          <Select id="act-master" value={masterDesign} onChange={(e) => setMasterDesign(e.target.value)}>
-            <option value="">Select...</option>
-            {DUMMY_MASTER_DESIGNS.map((d) => (
-              <option key={d} value={d}>{d}</option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Sequence regioning" htmlFor="act-seq-reg" layout="horizontal">
-          <Select id="act-seq-reg" value={sequenceRegioning} onChange={(e) => setSequenceRegioning(e.target.value)}>
-            <option value="">Select...</option>
-            {DUMMY_REGIONING_GROUPS.map((r) => (
-              <option key={r} value={r}>{r}</option>
-            ))}
-          </Select>
-        </Field>
-
-        {/* ── Base Strips Definition ──────────────────────────────────── */}
-        <Section title="Base Strips Definition" defaultOpen={false} variant="secondary" className="mt-[var(--space-6)]">
-          <TabbedPanel
-            items={strips}
-            activeId={activeStripId}
-            onSelect={setActiveStripId}
-            onAdd={() => {
-              const id = crypto.randomUUID();
+          </Field>
+          {/* One column per area, label column on the left. The whole grid
+              scrolls horizontally if the user keeps adding areas so we
+              never get overflow into the page chrome. */}
+          {(() => {
+            const addStrip = () => {
               setStrips((prev) => [
                 ...prev,
-                { id, label: `Strip ${prev.length + 1}`, regions: [], design: "", stripType: "inline", grouping: "", start: "highest" },
+                {
+                  id: crypto.randomUUID(),
+                  label: `Area ${prev.length + 1}`,
+                  regions: [],
+                  design: "",
+                  stripType: "inline",
+                  grouping: "",
+                  start: "highest",
+                },
               ]);
-              setActiveStripId(id);
-            }}
-            onRemove={(id) => {
-              setStrips((prev) => prev.filter((s) => s.id !== id));
-              setActiveStripId((prev) => (prev === id ? strips[0]?.id ?? null : prev));
-            }}
-          >
-            {(strip) => (
-              <div className="space-y-[var(--space-3)]">
-                <Field label="Regions" layout="horizontal">
-                  <InlineTagSelect
-                    options={DUMMY_POLYGONS}
-                    value={strip.regions}
-                    onChange={(v) => updateStrip(strip.id, { regions: v })}
-                  />
-                </Field>
-                <Field label="Design" htmlFor={`strip-design-${strip.id}`} layout="horizontal">
-                  <Select
-                    id={`strip-design-${strip.id}`}
-                    value={strip.design}
-                    onChange={(e) => updateStrip(strip.id, { design: e.target.value })}
+            };
+            if (strips.length === 0) {
+              return (
+                <button
+                  type="button"
+                  onClick={addStrip}
+                  className="flex items-center gap-1 rounded-[var(--radius-sm)] px-[var(--space-2)] py-[var(--space-1)] text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+                >
+                  <Icon icon={appIcons.plus} size={12} />
+                  Add area
+                </button>
+              );
+            }
+            return (
+              <div className="overflow-x-auto">
+                <div
+                  className="grid items-start gap-x-[var(--space-3)] gap-y-[var(--space-2)]"
+                  // eslint-disable-next-line template/no-jsx-style-prop -- column count is dynamic
+                  style={{
+                    gridTemplateColumns: `7rem repeat(${strips.length}, minmax(60px, 110px)) 1.5rem`,
+                  }}
+                >
+                  {/* Header row: empty label cell + area name per column + add */}
+                  <div />
+                  {strips.map((strip) => (
+                    <StripColumnHeader
+                      key={strip.id}
+                      label={strip.label}
+                      canRemove={strips.length > 1}
+                      onRename={(label) => updateStrip(strip.id, { label })}
+                      onRemove={() =>
+                        setStrips((prev) => prev.filter((s) => s.id !== strip.id))
+                      }
+                    />
+                  ))}
+                  <button
+                    type="button"
+                    onClick={addStrip}
+                    className="mt-[var(--space-1)] flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+                    aria-label="Add area"
                   >
-                    <option value="">Select...</option>
-                    {DUMMY_MASTER_DESIGNS.map((d) => (
-                      <option key={d} value={d}>{d}</option>
-                    ))}
-                  </Select>
-                </Field>
-                <Field label="Strip-type" layout="horizontal">
-                  <Select
-                    value={strip.stripType}
-                    onChange={(e) => updateStrip(strip.id, { stripType: e.target.value })}
-                  >
-                    <option value="inline">inline</option>
-                    <option value="crossline">crossline</option>
-                  </Select>
-                </Field>
-                <Field label="Grouping" htmlFor={`strip-group-${strip.id}`} layout="horizontal">
-                  <Input
-                    id={`strip-group-${strip.id}`}
-                    type="number"
-                    value={strip.grouping}
-                    onChange={(e) => updateStrip(strip.id, { grouping: e.target.value })}
-                  />
-                </Field>
-                <Field label="Start" layout="horizontal">
-                  <Select
-                    value={strip.start}
-                    onChange={(e) => updateStrip(strip.id, { start: e.target.value })}
-                  >
-                    <option value="highest">highest</option>
-                    <option value="lowest">lowest</option>
-                  </Select>
-                </Field>
+                    <Icon icon={appIcons.plus} size={12} />
+                  </button>
+
+                  {/* Regions */}
+                  <label className="pt-[7px] text-xs font-medium text-[var(--color-text-secondary)]">
+                    Regions
+                  </label>
+                  {strips.map((strip) => (
+                    <div key={strip.id} className="min-w-0 pt-[5px]">
+                      <InlineTagSelect
+                        options={polygonsForSelectedPartition}
+                        value={strip.regions}
+                        onChange={(v) => updateStrip(strip.id, { regions: v })}
+                      />
+                    </div>
+                  ))}
+                  <div />
+
+                  {/* Strip type */}
+                  <label className="pt-[7px] text-xs font-medium text-[var(--color-text-secondary)]">
+                    Strip type
+                  </label>
+                  {strips.map((strip) => (
+                    <div key={strip.id} className="min-w-0">
+                      <Select
+                        value={strip.stripType}
+                        onChange={(e) =>
+                          updateStrip(strip.id, { stripType: e.target.value })
+                        }
+                      >
+                        <option value="inline">inline</option>
+                        <option value="crossline">crossline</option>
+                      </Select>
+                    </div>
+                  ))}
+                  <div />
+
+                  {/* Strip grouping */}
+                  <label className="pt-[7px] text-xs font-medium text-[var(--color-text-secondary)]">
+                    Strip grouping
+                  </label>
+                  {strips.map((strip) => (
+                    <div key={strip.id} className="min-w-0">
+                      <Input
+                        id={`strip-group-${strip.id}`}
+                        type="number"
+                        value={strip.grouping}
+                        onChange={(e) =>
+                          updateStrip(strip.id, { grouping: e.target.value })
+                        }
+                      />
+                    </div>
+                  ))}
+                  <div />
+
+                  {/* Strip start */}
+                  <label className="pt-[7px] text-xs font-medium text-[var(--color-text-secondary)]">
+                    Strip start
+                  </label>
+                  {strips.map((strip) => (
+                    <div key={strip.id} className="min-w-0">
+                      <Select
+                        value={strip.start}
+                        onChange={(e) =>
+                          updateStrip(strip.id, { start: e.target.value })
+                        }
+                      >
+                        <option value="highest">highest</option>
+                        <option value="lowest">lowest</option>
+                      </Select>
+                    </div>
+                  ))}
+                  <div />
+                </div>
               </div>
-            )}
-          </TabbedPanel>
+            );
+          })()}
         </Section>
 
-        {/* ── Sequences Definition ────────────────────────────────────── */}
-        <Section title="Sequences Definition" defaultOpen={false} variant="secondary" className="mt-[var(--space-6)]">
-          <TabbedPanel
-            items={sequences}
-            activeId={activeSeqId}
-            onSelect={setActiveSeqId}
-            onAdd={() => {
-              const id = crypto.randomUUID();
+        {/* ── In-strip partitioning ──────────────────────────────────── */}
+        <Section
+          title="Resource level strip/in-strip partitioning"
+          tooltip="Default configuration to be applied at resource level when it does not have its own specific partitioning parameters."
+          variant="secondary"
+          collapsible={false}
+          className="mt-[var(--space-6)]"
+        >
+          {(() => {
+            const addSequence = () => {
               setSequences((prev) => [
                 ...prev,
-                { id, label: `Seq ${prev.length + 1}`, regions: [], design: "", stripType: "inline", grouping: "", start: "highest", clusterType: "weight", target: "", startCluster: "highest" },
+                {
+                  id: crypto.randomUUID(),
+                  label: `Area ${prev.length + 1}`,
+                  regions: [],
+                  design: "",
+                  stripType: "inline",
+                  grouping: "",
+                  start: "highest",
+                  clusterType: "weight",
+                  target: "",
+                  startCluster: "highest",
+                },
               ]);
-              setActiveSeqId(id);
-            }}
-            onRemove={(id) => {
-              setSequences((prev) => prev.filter((s) => s.id !== id));
-              setActiveSeqId((prev) => (prev === id ? sequences[0]?.id ?? null : prev));
-            }}
-          >
-            {(seq) => (
-              <div className="space-y-[var(--space-3)]">
-                <Field label="Regions" layout="horizontal">
-                  <InlineTagSelect
-                    options={DUMMY_POLYGONS}
-                    value={seq.regions}
-                    onChange={(v) => updateSequence(seq.id, { regions: v })}
-                  />
-                </Field>
-                <Field label="Design" htmlFor={`seq-design-${seq.id}`} layout="horizontal">
-                  <Select
-                    id={`seq-design-${seq.id}`}
-                    value={seq.design}
-                    onChange={(e) => updateSequence(seq.id, { design: e.target.value })}
+            };
+            if (sequences.length === 0) {
+              return (
+                <button
+                  type="button"
+                  onClick={addSequence}
+                  className="flex items-center gap-1 rounded-[var(--radius-sm)] px-[var(--space-2)] py-[var(--space-1)] text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+                >
+                  <Icon icon={appIcons.plus} size={12} />
+                  Add area
+                </button>
+              );
+            }
+            return (
+              <div className="overflow-x-auto">
+                <div
+                  className="grid items-start gap-x-[var(--space-3)] gap-y-[var(--space-2)]"
+                  // eslint-disable-next-line template/no-jsx-style-prop -- column count is dynamic
+                  style={{
+                    gridTemplateColumns: `7rem repeat(${sequences.length}, minmax(60px, 110px)) 1.5rem`,
+                  }}
+                >
+                  {/* Header row: empty label cell + area name per column + add */}
+                  <div />
+                  {sequences.map((seq) => (
+                    <StripColumnHeader
+                      key={seq.id}
+                      label={seq.label}
+                      canRemove={sequences.length > 1}
+                      onRename={(label) => updateSequence(seq.id, { label })}
+                      onRemove={() =>
+                        setSequences((prev) => prev.filter((s) => s.id !== seq.id))
+                      }
+                    />
+                  ))}
+                  <button
+                    type="button"
+                    onClick={addSequence}
+                    className="mt-[var(--space-1)] flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+                    aria-label="Add area"
                   >
-                    <option value="">Select...</option>
-                    {DUMMY_MASTER_DESIGNS.map((d) => (
-                      <option key={d} value={d}>{d}</option>
-                    ))}
-                  </Select>
-                </Field>
-                <Field label="Strip-type" layout="horizontal">
-                  <Select
-                    value={seq.stripType}
-                    onChange={(e) => updateSequence(seq.id, { stripType: e.target.value })}
-                  >
-                    <option value="inline">inline</option>
-                    <option value="crossline">crossline</option>
-                  </Select>
-                </Field>
-                <Field label="Grouping" htmlFor={`seq-group-${seq.id}`} layout="horizontal">
-                  <Input
-                    id={`seq-group-${seq.id}`}
-                    type="number"
-                    value={seq.grouping}
-                    onChange={(e) => updateSequence(seq.id, { grouping: e.target.value })}
-                  />
-                </Field>
-                <Field label="Start" layout="horizontal">
-                  <Select
-                    value={seq.start}
-                    onChange={(e) => updateSequence(seq.id, { start: e.target.value })}
-                  >
-                    <option value="highest">highest</option>
-                    <option value="lowest">lowest</option>
-                  </Select>
-                </Field>
-                <Field label="Cluster-type" layout="horizontal">
-                  <Select
-                    value={seq.clusterType}
-                    onChange={(e) => updateSequence(seq.id, { clusterType: e.target.value })}
-                  >
-                    <option value="weight">weight</option>
-                    <option value="number">number</option>
-                    <option value="size">size</option>
-                  </Select>
-                </Field>
-                <Field label="Target" htmlFor={`seq-target-${seq.id}`} layout="horizontal">
-                  <Input
-                    id={`seq-target-${seq.id}`}
-                    type="number"
-                    value={seq.target}
-                    onChange={(e) => updateSequence(seq.id, { target: e.target.value })}
-                  />
-                </Field>
-                <Field label="Start (cluster)" layout="horizontal">
-                  <Select
-                    value={seq.startCluster}
-                    onChange={(e) => updateSequence(seq.id, { startCluster: e.target.value })}
-                  >
-                    <option value="highest">highest</option>
-                    <option value="lowest">lowest</option>
-                  </Select>
-                </Field>
+                    <Icon icon={appIcons.plus} size={12} />
+                  </button>
+
+                  {/* Regions */}
+                  <label className="pt-[7px] text-xs font-medium text-[var(--color-text-secondary)]">
+                    Regions
+                  </label>
+                  {sequences.map((seq) => (
+                    <div key={seq.id} className="min-w-0 pt-[5px]">
+                      <InlineTagSelect
+                        options={polygonsForSelectedPartition}
+                        value={seq.regions}
+                        onChange={(v) => updateSequence(seq.id, { regions: v })}
+                      />
+                    </div>
+                  ))}
+                  <div />
+
+                  {/* Design */}
+                  <label className="pt-[7px] text-xs font-medium text-[var(--color-text-secondary)]">
+                    Design
+                  </label>
+                  {sequences.map((seq) => (
+                    <div key={seq.id} className="min-w-0">
+                      <Select
+                        id={`seq-design-${seq.id}`}
+                        value={seq.design}
+                        onChange={(e) =>
+                          updateSequence(seq.id, { design: e.target.value })
+                        }
+                      >
+                        <option value="">Select...</option>
+                        {designsForSelectedOption.map((d) => (
+                          <option key={d} value={d}>
+                            {d}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                  ))}
+                  <div />
+
+                  {/* Strip type */}
+                  <label className="pt-[7px] text-xs font-medium text-[var(--color-text-secondary)]">
+                    Strip type
+                  </label>
+                  {sequences.map((seq) => (
+                    <div key={seq.id} className="min-w-0">
+                      <Select
+                        value={seq.stripType}
+                        onChange={(e) =>
+                          updateSequence(seq.id, { stripType: e.target.value })
+                        }
+                      >
+                        <option value="inline">inline</option>
+                        <option value="crossline">crossline</option>
+                      </Select>
+                    </div>
+                  ))}
+                  <div />
+
+                  {/* Strips merging */}
+                  <label className="pt-[7px] text-xs font-medium text-[var(--color-text-secondary)]">
+                    Strips merging
+                  </label>
+                  {sequences.map((seq) => (
+                    <div key={seq.id} className="min-w-0">
+                      <Input
+                        id={`seq-group-${seq.id}`}
+                        type="number"
+                        value={seq.grouping}
+                        onChange={(e) =>
+                          updateSequence(seq.id, { grouping: e.target.value })
+                        }
+                      />
+                    </div>
+                  ))}
+                  <div />
+
+                  {/* Strip start */}
+                  <label className="pt-[7px] text-xs font-medium text-[var(--color-text-secondary)]">
+                    Strip start
+                  </label>
+                  {sequences.map((seq) => (
+                    <div key={seq.id} className="min-w-0">
+                      <Select
+                        value={seq.start}
+                        onChange={(e) =>
+                          updateSequence(seq.id, { start: e.target.value })
+                        }
+                      >
+                        <option value="highest">highest</option>
+                        <option value="lowest">lowest</option>
+                      </Select>
+                    </div>
+                  ))}
+                  <div />
+
+                  {/* Grouping type */}
+                  <label className="pt-[7px] text-xs font-medium text-[var(--color-text-secondary)]">
+                    Grouping type
+                  </label>
+                  {sequences.map((seq) => (
+                    <div key={seq.id} className="min-w-0">
+                      <Select
+                        value={seq.clusterType}
+                        onChange={(e) =>
+                          updateSequence(seq.id, { clusterType: e.target.value })
+                        }
+                      >
+                        <option value="weight">weight</option>
+                        <option value="number">number</option>
+                        <option value="size">size</option>
+                      </Select>
+                    </div>
+                  ))}
+                  <div />
+
+                  {/* Grouping target */}
+                  <label className="pt-[7px] text-xs font-medium text-[var(--color-text-secondary)]">
+                    Grouping target
+                  </label>
+                  {sequences.map((seq) => (
+                    <div key={seq.id} className="min-w-0">
+                      <Input
+                        id={`seq-target-${seq.id}`}
+                        type="number"
+                        value={seq.target}
+                        onChange={(e) =>
+                          updateSequence(seq.id, { target: e.target.value })
+                        }
+                      />
+                    </div>
+                  ))}
+                  <div />
+
+                  {/* Group start */}
+                  <label className="pt-[7px] text-xs font-medium text-[var(--color-text-secondary)]">
+                    Group start
+                  </label>
+                  {sequences.map((seq) => (
+                    <div key={seq.id} className="min-w-0">
+                      <Select
+                        value={seq.startCluster}
+                        onChange={(e) =>
+                          updateSequence(seq.id, { startCluster: e.target.value })
+                        }
+                      >
+                        <option value="highest">highest</option>
+                        <option value="lowest">lowest</option>
+                      </Select>
+                    </div>
+                  ))}
+                  <div />
+                </div>
               </div>
-            )}
-          </TabbedPanel>
+            );
+          })()}
         </Section>
       </Section>
 
       {/* ── Motion ────────────────────────────────────────────────────── */}
-      <Section title="Motion" defaultOpen={false}>
+      <Section title="Motion" {...sectionProps("Motion", false)}>
         {(
           [
             ["gid_ttype_shift", "gid_ttype_shift"],
@@ -704,7 +1024,7 @@ export function ActivityParameters({
       </Section>
 
       {/* ── Dynamic ───────────────────────────────────────────────────── */}
-      <Section title="Dynamic" defaultOpen={false}>
+      <Section title="Dynamic" {...sectionProps("Dynamic", false)}>
         <Field label="dynamic_mapping_kw" htmlFor="act-dyn-kw" layout="horizontal">
           <Input
             id="act-dyn-kw"

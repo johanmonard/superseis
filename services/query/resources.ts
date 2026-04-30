@@ -151,6 +151,33 @@ export function useDeleteResource() {
 }
 
 /**
+ * Rename a resource entry by slug. The slug stays stable so existing
+ * routes / sidebar links keep working — only the displayed `name` changes.
+ */
+export function useRenameResource() {
+  const { update, getLive, projectId } = useStore();
+
+  const mutate = React.useCallback(
+    (slug: string, newName: string) => {
+      if (!projectId) return;
+      const trimmed = newName.trim();
+      if (!trimmed) return;
+      const live = getLive();
+      if (!live.items.some((r) => r.slug === slug)) return;
+      update({
+        ...live,
+        items: live.items.map((r) =>
+          r.slug === slug ? { ...r, name: trimmed } : r,
+        ),
+      });
+    },
+    [projectId, update, getLive],
+  );
+
+  return { mutate } as const;
+}
+
+/**
  * Update the `parameters` blob on a single resource. Mirror of
  * `useUpdateActivityParameters` — see the activities file for context.
  */

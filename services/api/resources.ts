@@ -4,6 +4,8 @@
  * the `resources` section.
  */
 
+import type { ActivitySequenceDef } from "./activities";
+
 export type MotionMode = "MOVE" | "TRAV" | "WORK";
 
 export interface ResourceRandShapeEntry {
@@ -12,6 +14,10 @@ export interface ResourceRandShapeEntry {
   high: string;
 }
 
+/** Legacy per-resource sequence shape. Kept so older saved data can be
+ *  migrated into the new per-(Grid option, Partition) scenario buckets,
+ *  which use the activity sequence shape so the form mirrors the
+ *  activity's resource-level partitioning section exactly. */
 export interface ResourceSequenceDef {
   id: string;
   label: string;
@@ -35,6 +41,20 @@ export interface ResourceTimeMapDef {
   mapping: Record<string, string>;
 }
 
+export interface ResourceWorkingTimeEntry {
+  id: string;
+  from: string;
+  to: string;
+  returnToBase: boolean;
+}
+
+/** Sequencing data scoped to a (Grid Option, Partition) pair — same idea
+ *  as `ActivityScenarioBucket`, minus the activity-level master design /
+ *  base strips (those don't apply to a single resource). */
+export interface ResourceScenarioBucket {
+  sequences: ActivitySequenceDef[];
+}
+
 /** Mirror of the local-state shape inside `resource-parameters.tsx`. */
 export interface ResourceParameters {
   designation: string;
@@ -45,7 +65,10 @@ export interface ResourceParameters {
   mtbd: string;
   btbBuffer: string;
   randShape: Record<MotionMode, ResourceRandShapeEntry>;
-  sequences: ResourceSequenceDef[];
+  designOption: string;
+  sequenceRegioning: string;
+  /** Per-(Grid option, Partition) buckets — see `ResourceScenarioBucket`. */
+  scenarios: Record<string, ResourceScenarioBucket>;
   campMapper: string;
   campMappingEntries: ResourceCampMappingEntry[];
   campStart: string;
@@ -53,6 +76,7 @@ export interface ResourceParameters {
   workMapping: Record<string, string>;
   timeMapMove: ResourceTimeMapDef;
   timeMapTrav: ResourceTimeMapDef;
+  workingTime: ResourceWorkingTimeEntry[];
 }
 
 export type Resource = {

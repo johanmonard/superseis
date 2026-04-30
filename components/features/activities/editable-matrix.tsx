@@ -1,6 +1,11 @@
 "use client";
 
 import * as React from "react";
+
+import {
+  UnitValueControl,
+  WORK_TIME_UNITS,
+} from "@/components/features/resources/resource-parameters";
 import { cn } from "@/lib/utils";
 
 export function EditableMatrix({
@@ -22,16 +27,23 @@ export function EditableMatrix({
   };
 
   return (
-    <div className={cn("overflow-x-auto", className)}>
-      <table className="w-full text-xs">
+    <div className={cn("app-scrollbar overflow-x-auto", className)}>
+      <table
+        className={cn(
+          "app-table",
+          "!table-fixed w-full",
+          "[&_thead_th]:!bg-transparent",
+          "[&_tbody_tr]:!bg-transparent",
+          "[&_tbody_tr:hover]:!bg-transparent",
+          "[&_thead_th]:overflow-hidden",
+          "[&_tbody_td]:overflow-hidden",
+        )}
+      >
         <thead>
           <tr>
-            <th className="pb-1 pr-1 text-left font-medium text-[var(--color-text-muted)]" />
+            <th />
             {labels.map((col) => (
-              <th
-                key={col}
-                className="pb-1 px-1 text-center font-medium text-[var(--color-text-muted)]"
-              >
+              <th key={col} className="truncate text-center" title={col}>
                 {col}
               </th>
             ))}
@@ -40,23 +52,34 @@ export function EditableMatrix({
         <tbody>
           {labels.map((row) => (
             <tr key={row}>
-              <td className="py-1 pr-1 text-[var(--color-text-secondary)]">{row}</td>
-              {labels.map((col) => (
-                <td key={col} className="py-1 px-1">
-                  {row === col ? (
-                    <div className="flex h-[var(--control-height-md)] items-center justify-center text-[var(--color-text-muted)]">
-                      &mdash;
-                    </div>
-                  ) : (
-                    <input
-                      type="number"
-                      value={value[row]?.[col] ?? ""}
-                      onChange={(e) => handleChange(row, col, e.target.value)}
-                      className="h-[var(--control-height-md)] w-full min-w-[3rem] rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] px-1 text-center text-xs text-[var(--color-text-primary)] outline-none focus:ring-2 focus:ring-[var(--color-focus-ring)]"
+              <th
+                scope="row"
+                className="font-normal text-[var(--color-text-primary)]"
+              >
+                {row}
+              </th>
+              {labels.map((col) => {
+                const raw = value[row]?.[col] ?? "";
+                const filled = raw.trim().length > 0 && raw.trim() !== "0";
+                return (
+                  <td
+                    key={col}
+                    className={cn(
+                      "text-center",
+                      filled &&
+                        "[&_input]:!bg-[color-mix(in_srgb,var(--color-accent)_22%,transparent)]",
+                    )}
+                  >
+                    <UnitValueControl
+                      value={raw}
+                      units={WORK_TIME_UNITS}
+                      defaultUnit="s"
+                      ariaLabel={`Slip time from ${row} to ${col}`}
+                      onChange={(v) => handleChange(row, col, v)}
                     />
-                  )}
-                </td>
-              ))}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>
